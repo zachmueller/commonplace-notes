@@ -224,6 +224,164 @@ function testHastUtilToHtml() {
     console.log(html);
 }
 
+// Testing absolute URL
+import isAbsoluteUrl from 'is-absolute-url';
+
+function testIsAbsoluteUrl() {
+    const absoluteUrl = 'https://example.com/page';
+    const relativeUrl = 'path/to/page';
+    const rootRelativeUrl = '/path/to/page';
+
+    console.log('Is absolute URL:', isAbsoluteUrl(absoluteUrl));
+    console.log('Is relative URL:', isAbsoluteUrl(relativeUrl));
+    console.log('Is root-relative URL:', isAbsoluteUrl(rootRelativeUrl));
+}
+
+// Testing preact
+import { h as preactH } from 'preact';
+import renderToString from 'preact-render-to-string';
+
+function testPreactRenderToString() {
+    // Define a simple Preact component
+    const MyComponent = ({ name }: { name: string }) => preactH('div', null, `Hello, ${name}!`);
+
+    // Render the component to a string
+    const result = renderToString(preactH(MyComponent, { name: 'World' }));
+
+    console.log('Preact render to string result:', result);
+}
+
+// Testing Mathjax
+import rehypeMathjax from "rehype-mathjax/svg.js";
+
+async function testRehypeMathjax() {
+	const processor = unified()
+		.use(remarkParse)
+		.use(remarkMath)
+		.use(remarkRehype)
+		.use(rehypeMathjax)
+		.use(rehypeStringify);
+
+	const result = await processor.process('$E = mc^2$');
+	console.log('Rehype MathJax result:');
+	console.log(result.toString());
+}
+
+// Testing mermaid
+import mermaid from 'mermaid';
+
+function testMermaid() {
+    const diagram = `
+    graph TD
+    A[Client] --> B[Load Balancer]
+    B --> C[Server01]
+    B --> D[Server02]
+    `;
+
+    mermaid.initialize({ startOnLoad: false });
+
+    mermaid.render('mermaid-diagram', diagram).then(({ svg }) => {
+        console.log('Mermaid rendered SVG:');
+        console.log(svg);
+    }).catch(error => {
+        console.error('Mermaid rendering error:', error);
+    });
+}
+
+// Testing mdast to hast
+import { toHast } from 'mdast-util-to-hast';
+
+function testMdastUtilToHast() {
+    // Create a simple object that resembles an mdast structure
+    const mdastLike = {
+        type: 'root',
+        children: [
+            {
+                type: 'heading',
+                depth: 1,
+                children: [{ type: 'text', value: 'Hello, mdast!' }]
+            },
+            {
+                type: 'paragraph',
+                children: [{ type: 'text', value: 'This is a paragraph.' }]
+            }
+        ]
+    };
+
+    // Convert mdast-like object to hast
+    const hast = toHast(mdastLike as any);
+
+    console.log('mdast to hast result:');
+    console.log(JSON.stringify(hast, null, 2));
+}
+
+// Testing unist visit
+import { visit } from 'unist-util-visit';
+
+function testUnistUtilVisit() {
+	// Create a simple Markdown AST
+	const tree = {
+		type: 'root',
+		children: [
+			{ type: 'heading', depth: 1, children: [{ type: 'text', value: 'Title' }] },
+			{ type: 'paragraph', children: [{ type: 'text', value: 'This is a paragraph.' }] },
+			{ type: 'heading', depth: 2, children: [{ type: 'text', value: 'Subtitle' }] },
+		]
+	};
+
+	// Use visit to find all headings
+	const headings: any[] = [];
+	visit(tree, 'heading', (node) => {
+		headings.push(node);
+	});
+
+	console.log('Unist-util-visit result:');
+	console.log('Number of headings found:', headings.length);
+	headings.forEach((heading, index) => {
+		console.log(`Heading ${index + 1}: Depth ${heading.depth}, Text: ${heading.children[0].value}`);
+	});
+}
+
+// Testing vFile
+import { VFile } from 'vfile';
+import { reporter } from 'vfile-reporter';
+
+async function testVFile() {
+    try {
+		console.log('Starting VFile test');
+
+		console.log('VFile:', VFile);
+		console.log('reporter:', reporter);
+
+		const file = new VFile({
+			path: 'example.md',
+			contents: '# Hello\n\nThis is a test file.'
+		});
+		console.log('VFile created');
+
+		file.message('This is an info message');
+		file.info('Another info message');
+
+		// Instead of calling fail(), which throws an error, let's add it as a message
+		file.message(new Error('This is an error message'));
+
+		console.log('Messages added to VFile');
+
+		console.log('VFile contents:', file.toString());
+
+		console.log('VFile report:');
+		console.log(reporter(file));
+
+		console.log('VFile test completed');
+	} catch (error) {
+		console.error('Error in testVFile:', error);
+		console.error('Error name:', error.name);
+		console.error('Error message:', error.message);
+		console.error('Error stack:', error.stack);
+    }
+}
+
+// END OF TESTING ---------------------------- ----------------------------
 
 interface MyPluginSettings {
 	mySetting: string;
@@ -252,6 +410,13 @@ export default class MyPlugin extends Plugin {
 		testYaml();
 		testHastUtilToString();
 		testHastUtilToHtml();
+		testIsAbsoluteUrl();
+		testPreactRenderToString();
+		testRehypeMathjax();
+		testMermaid();
+		testMdastUtilToHast();
+		testUnistUtilVisit();
+		await testVFile();
 	}
 
 	onunload() {
