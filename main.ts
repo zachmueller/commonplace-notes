@@ -1,6 +1,229 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
-// Remember to rename these classes and interfaces!
+// Testing unified
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkRehype from 'remark-rehype';
+import rehypeStringify from 'rehype-stringify';
+
+async function testUnified() {
+	const processor = unified()
+		.use(remarkParse)
+		.use(remarkRehype)
+		.use(rehypeStringify);
+
+	const result = await processor.process('# Hello World');
+	console.log(result.toString());
+}
+
+// Testing gray-matter
+import matter from 'gray-matter';
+
+function testGrayMatter() {
+	const file = '---\ntitle: Test\n---\nContent here';
+	const result = matter(file);
+	console.log(result);
+}
+
+// Testing JSX
+import { Element } from 'hast';
+import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
+import { jsx, jsxs, Fragment } from 'preact/jsx-runtime';
+
+function testHastToJsx() {
+  const hast: Element = {
+    type: 'element',
+    tagName: 'div',
+    properties: { className: 'test' },
+    children: [{ type: 'text', value: 'Hello' }]
+  };
+  
+  const result = toJsxRuntime(hast, { Fragment, jsx, jsxs });
+  console.log(result);
+}
+
+// Testing rehype
+import rehypeRaw from 'rehype-raw';
+
+async function testRehypeRaw() {
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypeRaw)
+    .use(rehypeStringify);
+
+  const result = await processor.process('# Hello\n\n<div>Raw HTML</div>');
+  console.log(result.toString());
+}
+
+// Testing rehype for slugs
+import rehypeSlug from 'rehype-slug';
+
+async function testRehypeSlug() {
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkRehype)
+    .use(rehypeSlug)
+    .use(rehypeStringify);
+
+  const result = await processor.process('# Hello World');
+  console.log(result.toString());
+}
+
+// Testing rehype for linking headings
+import rehypeAutolinkHeadings from 'rehype-autolink-headings';
+
+async function testRehypeAutolinkHeadings() {
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkRehype)
+    .use(rehypeSlug)
+    .use(rehypeAutolinkHeadings)
+    .use(rehypeStringify);
+
+  const result = await processor.process('# Hello World');
+  console.log(result.toString());
+}
+
+// Testing LaTeX
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+
+async function testRemarkMath() {
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkMath)
+    .use(remarkRehype)
+    .use(rehypeKatex)
+    .use(rehypeStringify);
+
+  const result = await processor.process('$E = mc^2$');
+  console.log(result.toString());
+}
+
+// Testing micromorph
+import { diff, patch } from 'micromorph';
+
+function testMicromorph() {
+    const oldHtml = '<div><p>Hello</p></div>';
+    const newHtml = '<div><p>Hello, World!</p></div>';
+    
+    // Create temporary containers
+    const oldContainer = document.createElement('div');
+    const newContainer = document.createElement('div');
+    oldContainer.innerHTML = oldHtml;
+    newContainer.innerHTML = newHtml;
+    
+    // Generate the patch
+    const patchObj = diff(oldContainer, newContainer);
+    
+    if (patchObj) {
+        // Apply the patch
+        patch(oldContainer, patchObj).then(() => {
+            console.log('Micromorph result:', oldContainer.innerHTML);
+        });
+    } else {
+        console.log('No differences found');
+    }
+}
+
+// Testing GitHub slugger
+import GithubSlugger from 'github-slugger';
+
+function testGithubSlugger() {
+	const slugger = new GithubSlugger();
+    const slug1 = slugger.slug('Hello World');
+    const slug2 = slugger.slug('Hello World'); // Should be different
+    
+    console.log('Slugs:', slug1, slug2);
+}
+
+// Testing Flexsearch
+import FlexSearch from 'flexsearch';
+
+function testFlexsearch() {
+    const index = new FlexSearch.Document<{id: number, title: string, content: string}>({
+        document: {
+            id: 'id',
+            index: ['title', 'content']
+        }
+    });
+
+    index.add(1, { id: 1, title: 'Hello', content: 'World' });
+    index.add(2, { id: 2, title: 'Goodbye', content: 'World' });
+
+    const results = index.search('world');
+    console.log('Flexsearch results:', results);
+}
+
+// Testing d3
+import * as d3 from 'd3';
+
+function testD3() {
+    const data = [1, 2, 3, 4, 5];
+    const sum = d3.sum(data);
+    const max = d3.max(data);
+    
+    console.log('D3 results:', { sum, max });
+}
+
+// Testing yaml parser
+import yaml from 'js-yaml';
+
+function testYaml() {
+    const yamlString = `
+    title: My Document
+    tags:
+      - tag1
+      - tag2
+    `;
+    
+    const parsed = yaml.load(yamlString);
+    console.log('YAML parsed:', parsed);
+}
+
+// Testing hast util to string
+import { toString } from 'hast-util-to-string';
+import { h } from 'hastscript';
+
+function testHastUtilToString() {
+    // Create a simple HAST tree
+    const tree = h('div', [
+        h('h1', 'Hello'),
+        h('p', 'This is a paragraph'),
+        h('ul', [
+            h('li', 'Item 1'),
+            h('li', 'Item 2')
+        ])
+    ]);
+
+    // Convert the tree to a string
+    const result = toString(tree);
+
+    console.log('HAST to string result:', result);
+}
+
+// Testing hast util to html
+import { toHtml } from 'hast-util-to-html';
+
+function testHastUtilToHtml() {
+    // Create a simple HAST tree
+    const tree = h('div', { class: 'container' }, [
+        h('h1', 'Hello, HAST!'),
+        h('p', 'This is a paragraph with a ', h('a', { href: 'https://example.com' }, 'link')),
+        h('ul', [
+            h('li', 'Item 1'),
+            h('li', 'Item 2')
+        ])
+    ]);
+
+    // Convert the tree to HTML
+    const html = toHtml(tree);
+
+    console.log('HAST to HTML result:');
+    console.log(html);
+}
+
 
 interface MyPluginSettings {
 	mySetting: string;
@@ -15,67 +238,20 @@ export default class MyPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		await testUnified();
+		testGrayMatter();
+		testHastToJsx();
+		testRehypeRaw();
+		testRehypeSlug();
+		testRehypeAutolinkHeadings();
+		testRemarkMath();
+		testMicromorph();
+		testGithubSlugger();
+		testFlexsearch();
+		testD3();
+		testYaml();
+		testHastUtilToString();
+		testHastUtilToHtml();
 	}
 
 	onunload() {
@@ -88,22 +264,6 @@ export default class MyPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }
 
