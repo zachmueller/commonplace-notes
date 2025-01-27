@@ -1,11 +1,13 @@
-import { Plugin } from 'unified'
-import { Node } from 'unist'
-import { visit } from 'unist-util-visit'
-import { PathUtils } from './utils/path'
-import { Link, Text, Parent } from 'mdast'
+import { Plugin } from 'unified';
+import { Node } from 'unist';
+import { visit } from 'unist-util-visit';
+import { PathUtils } from './utils/path';
+import { Link, Text, Parent } from 'mdast';
+import path from 'path';
 
 interface ObsidianLinksOptions {
-  baseUrl: string;
+  //baseUrl: string;
+  currentSlug: string;
   resolveInternalLinks: (linkText: string) => {
     slug: string;
     displayText?: string;
@@ -37,10 +39,13 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
         const resolved = options.resolveInternalLinks(linkText);
 
         if (resolved) {
-          // Create link node
+		  // Calculate relative path
+          const relativePath = createRelativePath(options.currentSlug, resolved.slug);
+          
+		  // Create link node
           children.push({
             type: 'link',
-            url: `${options.baseUrl}/${resolved.slug}`,
+            url: relativePath,
             children: [{
               type: 'text',
               value: resolved.displayText || linkText,
@@ -70,5 +75,26 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
     });
   };
 };
+
+// Helper function to create relative paths
+function createRelativePath(fromSlug: string, toSlug: string): string {
+  // Convert slugs to directory-like paths
+  const fromParts = fromSlug.split('/');
+  const toParts = toSlug.split('/');
+  
+  // Remove the filename part from fromParts
+  fromParts.pop();
+  
+  // Calculate the relative path
+  const relativePath = path.relative(
+    fromParts.join('/'),
+    toParts.join('/')
+  );
+  
+  // Ensure the path starts with ./ or ../
+  return relativePath.startsWith('.')
+    ? relativePath + '.html'
+    : './' + relativePath + '.html';
+}
 
 export default remarkObsidianLinks;

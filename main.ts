@@ -4,16 +4,12 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
 import { PathUtils } from './utils/path';
-import { LinkProcessor } from './LinkProcessor';
 import remarkObsidianLinks from './remarkObsidianLinks';
 
 export default class CommonplaceNotesPlugin extends Plugin {
-  private linkProcessor: LinkProcessor;
-
   async onload() {
     console.log('Loading CommonplaceNotesPlugin');
-	this.linkProcessor = new LinkProcessor(this.app);
-
+	
     this.addCommand({
       id: 'convert-note-to-html',
       name: 'Convert current note to HTML',
@@ -49,9 +45,6 @@ export default class CommonplaceNotesPlugin extends Plugin {
       const cache = this.app.metadataCache.getFileCache(file);
       const content = await this.app.vault.read(file);
 	  
-      // Get link data
-      const linkData = this.linkProcessor.getLinkData(file);
-	  
       // Generate slug for the current file
       const slug = PathUtils.slugifyFilePath(file.path);
       console.log(`Generated slug: ${slug}`);
@@ -83,12 +76,6 @@ export default class CommonplaceNotesPlugin extends Plugin {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${file.basename}</title>
     <meta name="slug" content="${slug}">
-    <script>
-      window.pageData = ${JSON.stringify({
-        slug,
-        links: linkData
-      }, null, 2)};
-    </script>
 </head>
 <body data-slug="${slug}">
 ${html}
@@ -104,45 +91,34 @@ ${html}
       console.error('HTML conversion error:', error);
     }
   }
-/*
-  async markdownToHtml(markdown: string): Promise<string> {
+
+  async markdownToHtml(markdown: string, currentFile: TFile): Promise<string> {
+    const currentSlug = PathUtils.slugifyFilePath(currentFile.path);
+    
     const processor = unified()
       .use(remarkParse)
+      .use(remarkObsidianLinks, {
+        currentSlug,
+        resolveInternalLinks: (linkText: string) => {
+          const [link, alias] = linkText.split('|');
+          const targetFile = this.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
+          
+          if (targetFile) {
+            return {
+              slug: PathUtils.slugifyFilePath(targetFile.path),
+              displayText: alias || link
+            };
+          }
+          
+          return null;
+        }
+      })
       .use(remarkRehype, { allowDangerousHtml: true })
       .use(rehypeStringify);
     
     const result = await processor.process(markdown);
     return result.toString();
   }
-*/
-async markdownToHtml(markdown: string, currentFile: TFile): Promise<string> {
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkObsidianLinks, {
-      baseUrl: '', // Or your desired base URL, e.g., 'http://example.com'
-      resolveInternalLinks: (linkText: string) => {
-        // Split link text and alias if present
-        const [link, alias] = linkText.split('|');
-        
-        // Use Obsidian's link resolution
-        const targetFile = this.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
-        
-        if (targetFile) {
-          return {
-            slug: PathUtils.slugifyFilePath(targetFile.path),
-            displayText: alias || link
-          };
-        }
-        
-        return null;
-      }
-    })
-    .use(remarkRehype, { allowDangerousHtml: true })
-    .use(rehypeStringify);
-  
-  const result = await processor.process(markdown);
-  return result.toString();
-}
 
   onunload() {
     console.log('Unloading CommonplaceNotesPlugin');
