@@ -1,3 +1,5 @@
+import path from 'path';
+
 export class PathUtils {
   static sluggify(s: string): string {
     return s
@@ -56,5 +58,26 @@ export class PathUtils {
     
     let slug = PathUtils.stripSlashes(trimSuffix(fp, "index"), true)
     return slug.length === 0 ? "/" : slug
+  }
+  
+  // Helper function to create relative paths
+  static createRelativePath(fromSlug: string, toSlug: string): string {
+    // Convert slugs to directory-like paths
+    const fromParts = fromSlug.split('/');
+    const toParts = toSlug.split('/');
+    
+    // Remove the filename part from fromParts
+    fromParts.pop();
+    
+    // Calculate the relative path
+    const relativePath = path.relative(
+      fromParts.join('/'),
+      toParts.join('/')
+    );
+    
+    // Ensure the path starts with ./ or ../
+    return relativePath.startsWith('.')
+      ? relativePath + '.html'
+      : './' + relativePath + '.html';
   }
 }

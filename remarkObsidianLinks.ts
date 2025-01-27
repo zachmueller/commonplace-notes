@@ -3,7 +3,6 @@ import { Node } from 'unist';
 import { visit } from 'unist-util-visit';
 import { PathUtils } from './utils/path';
 import { Link, Text, Parent } from 'mdast';
-import path from 'path';
 
 interface ObsidianLinksOptions {
   //baseUrl: string;
@@ -40,7 +39,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 
         if (resolved) {
 		  // Calculate relative path
-          const relativePath = createRelativePath(options.currentSlug, resolved.slug);
+          const relativePath = PathUtils.createRelativePath(options.currentSlug, resolved.slug);
           
 		  // Create link node
           children.push({
@@ -75,26 +74,5 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
     });
   };
 };
-
-// Helper function to create relative paths
-function createRelativePath(fromSlug: string, toSlug: string): string {
-  // Convert slugs to directory-like paths
-  const fromParts = fromSlug.split('/');
-  const toParts = toSlug.split('/');
-  
-  // Remove the filename part from fromParts
-  fromParts.pop();
-  
-  // Calculate the relative path
-  const relativePath = path.relative(
-    fromParts.join('/'),
-    toParts.join('/')
-  );
-  
-  // Ensure the path starts with ./ or ../
-  return relativePath.startsWith('.')
-    ? relativePath + '.html'
-    : './' + relativePath + '.html';
-}
 
 export default remarkObsidianLinks;

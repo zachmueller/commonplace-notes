@@ -31,6 +31,55 @@ export default class CommonplaceNotesPlugin extends Plugin {
       }
     }
   }
+  
+private getBacklinksHtml(currentFile: TFile): string {
+  // Get resolved links from metadata cache
+  const resolvedLinks = this.app.metadataCache.resolvedLinks;
+  const backlinks = new Set<string>();
+
+  // Find all files that link to the current file
+  Object.entries(resolvedLinks).forEach(([sourcePath, links]) => {
+    if (links[currentFile.path]) {
+      backlinks.add(sourcePath);
+    }
+  });
+  
+  if (backlinks.size === 0) {
+    return ''; // Return empty string if no backlinks
+  }
+
+  // Convert backlinks to HTML
+  const backlinksHtml = Array.from(backlinks)
+    .map(filePath => {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) return null;
+      
+      // Generate slug for the linking file
+      const linkingFileSlug = PathUtils.slugifyFilePath(file.path);
+      // Generate relative path from current file to linking file
+      const relativePath = PathUtils.createRelativePath(
+        PathUtils.slugifyFilePath(currentFile.path),
+        linkingFileSlug
+      );
+      
+      return `<li><a href="${relativePath}">${file.basename}</a></li>`;
+    })
+    .filter((link): link is string => link !== null) // Type guard to filter out null values
+    .join('\n');
+
+  if (!backlinksHtml) {
+    return '';
+  }
+
+  return `
+<hr>
+<div class="backlinks">
+  <h2>Backlinks</h2>
+  <ul>
+    ${backlinksHtml}
+  </ul>
+</div>`;
+}
 
   async convertCurrentNote() {
     const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -60,6 +109,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
       //const html = await this.markdownToHtml(contentWithoutFrontmatter);
 	  const html = await this.markdownToHtml(contentWithoutFrontmatter, file);
       
+      // Get backlinks HTML
+      const backlinksHtml = this.getBacklinksHtml(file);
+	  console.log(backlinksHtml);
+      
 	  // Create the output directory if it doesn't exist
       const outputDir = '.obsidian/plugins/commonplace-notes/html-export';
       await this.ensureDirectory(outputDir);
@@ -76,9 +129,24 @@ export default class CommonplaceNotesPlugin extends Plugin {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${file.basename}</title>
     <meta name="slug" content="${slug}">
+    <style>
+      .backlinks {
+        margin-top: 2rem;
+        padding-top: 1rem;
+      }
+      .backlinks h2 {
+        font-size: 1.2rem;
+        margin-bottom: 0.5rem;
+      }
+      .backlinks ul {
+        margin: 0;
+        padding-left: 1.5rem;
+      }
+    </style>
 </head>
 <body data-slug="${slug}">
 ${html}
+${backlinksHtml}
 </body>
 </html>`;
       
