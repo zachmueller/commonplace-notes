@@ -1,26 +1,13 @@
-import { 
-  Plugin, 
-  MarkdownView, 
-  Notice, 
-  App, 
-  TFile
-} from 'obsidian';
+import { Plugin, MarkdownView, Notice, App, TFile } from 'obsidian';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
+import { PathUtils } from './utils/path';
 
-export default class QuartzPlugin extends Plugin {
+export default class CommonplaceNotesPlugin extends Plugin {
   async onload() {
-    console.log('Loading QuartzPlugin');
-
-    this.addRibbonIcon(
-      'document',
-      'Convert to HTML',
-      async (evt: MouseEvent) => {
-        await this.convertCurrentNote();
-      }
-    );
+    console.log('Loading CommonplaceNotesPlugin');
 
     this.addCommand({
       id: 'convert-note-to-html',
@@ -57,6 +44,10 @@ export default class QuartzPlugin extends Plugin {
       const cache = this.app.metadataCache.getFileCache(file);
       const content = await this.app.vault.read(file);
       
+      // Generate slug for the current file
+      const slug = PathUtils.slugifyFilePath(file.path);
+      console.log(`Generated slug: ${slug}`);
+      
 	  // Remove frontmatter if it exists
       let contentWithoutFrontmatter = content;
       if (cache?.frontmatter && cache.frontmatterPosition) {
@@ -72,7 +63,7 @@ export default class QuartzPlugin extends Plugin {
       await this.ensureDirectory(outputDir);
 	  
 	  // Generate output filename (same as input but with .html extension)
-      const outputFilename = file.basename + '.html';
+      const outputFilename = slug + '.html';
       const outputPath = `${outputDir}/${outputFilename}`;
       
 	  // Create a basic HTML document structure
@@ -82,8 +73,9 @@ export default class QuartzPlugin extends Plugin {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${file.basename}</title>
+    <meta name="slug" content="${slug}">
 </head>
-<body>
+<body data-slug="${slug}">
 ${html}
 </body>
 </html>`;
@@ -109,6 +101,6 @@ ${html}
   }
 
   onunload() {
-    console.log('Unloading QuartzPlugin');
+    console.log('Unloading CommonplaceNotesPlugin');
   }
 }
