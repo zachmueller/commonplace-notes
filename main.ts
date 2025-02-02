@@ -1,459 +1,103 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-
-// Testing unified
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkRehype from 'remark-rehype';
-import rehypeStringify from 'rehype-stringify';
-
-async function testUnified() {
-	const processor = unified()
-		.use(remarkParse)
-		.use(remarkRehype)
-		.use(rehypeStringify);
-
-	const result = await processor.process('# Hello World');
-	console.log(result.toString());
-}
-
-// Testing gray-matter
-import matter from 'gray-matter';
-
-function testGrayMatter() {
-	const file = '---\ntitle: Test\n---\nContent here';
-	const result = matter(file);
-	console.log(result);
-}
-
-// Testing JSX
-import { Element } from 'hast';
-import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
-import { jsx, jsxs, Fragment } from 'preact/jsx-runtime';
-
-function testHastToJsx() {
-  const hast: Element = {
-    type: 'element',
-    tagName: 'div',
-    properties: { className: 'test' },
-    children: [{ type: 'text', value: 'Hello' }]
-  };
-  
-  const result = toJsxRuntime(hast, { Fragment, jsx, jsxs });
-  console.log(result);
-}
-
-// Testing rehype
-import rehypeRaw from 'rehype-raw';
-
-async function testRehypeRaw() {
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkRehype, { allowDangerousHtml: true })
-    .use(rehypeRaw)
-    .use(rehypeStringify);
-
-  const result = await processor.process('# Hello\n\n<div>Raw HTML</div>');
-  console.log(result.toString());
-}
-
-// Testing rehype for slugs
-import rehypeSlug from 'rehype-slug';
-
-async function testRehypeSlug() {
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkRehype)
-    .use(rehypeSlug)
-    .use(rehypeStringify);
-
-  const result = await processor.process('# Hello World');
-  console.log(result.toString());
-}
-
-// Testing rehype for linking headings
-import rehypeAutolinkHeadings from 'rehype-autolink-headings';
-
-async function testRehypeAutolinkHeadings() {
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkRehype)
-    .use(rehypeSlug)
-    .use(rehypeAutolinkHeadings)
-    .use(rehypeStringify);
-
-  const result = await processor.process('# Hello World');
-  console.log(result.toString());
-}
-
-// Testing LaTeX
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-
-async function testRemarkMath() {
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkMath)
-    .use(remarkRehype)
-    .use(rehypeKatex)
-    .use(rehypeStringify);
-
-  const result = await processor.process('$E = mc^2$');
-  console.log(result.toString());
-}
-
-// Testing micromorph
-import { diff, patch } from 'micromorph';
-
-function testMicromorph() {
-    const oldHtml = '<div><p>Hello</p></div>';
-    const newHtml = '<div><p>Hello, World!</p></div>';
-    
-    // Create temporary containers
-    const oldContainer = document.createElement('div');
-    const newContainer = document.createElement('div');
-    oldContainer.innerHTML = oldHtml;
-    newContainer.innerHTML = newHtml;
-    
-    // Generate the patch
-    const patchObj = diff(oldContainer, newContainer);
-    
-    if (patchObj) {
-        // Apply the patch
-        patch(oldContainer, patchObj).then(() => {
-            console.log('Micromorph result:', oldContainer.innerHTML);
-        });
-    } else {
-        console.log('No differences found');
-    }
-}
-
-// Testing GitHub slugger
-import GithubSlugger from 'github-slugger';
-
-function testGithubSlugger() {
-	const slugger = new GithubSlugger();
-    const slug1 = slugger.slug('Hello World');
-    const slug2 = slugger.slug('Hello World'); // Should be different
-    
-    console.log('Slugs:', slug1, slug2);
-}
-
-// Testing Flexsearch
-import FlexSearch from 'flexsearch';
-
-function testFlexsearch() {
-    const index = new FlexSearch.Document<{id: number, title: string, content: string}>({
-        document: {
-            id: 'id',
-            index: ['title', 'content']
-        }
-    });
-
-    index.add(1, { id: 1, title: 'Hello', content: 'World' });
-    index.add(2, { id: 2, title: 'Goodbye', content: 'World' });
-
-    const results = index.search('world');
-    console.log('Flexsearch results:', results);
-}
-
-// Testing d3
-import * as d3 from 'd3';
-
-function testD3() {
-    const data = [1, 2, 3, 4, 5];
-    const sum = d3.sum(data);
-    const max = d3.max(data);
-    
-    console.log('D3 results:', { sum, max });
-}
-
-// Testing yaml parser
-import yaml from 'js-yaml';
-
-function testYaml() {
-    const yamlString = `
-    title: My Document
-    tags:
-      - tag1
-      - tag2
-    `;
-    
-    const parsed = yaml.load(yamlString);
-    console.log('YAML parsed:', parsed);
-}
-
-// Testing hast util to string
-import { toString } from 'hast-util-to-string';
-import { h } from 'hastscript';
-
-function testHastUtilToString() {
-    // Create a simple HAST tree
-    const tree = h('div', [
-        h('h1', 'Hello'),
-        h('p', 'This is a paragraph'),
-        h('ul', [
-            h('li', 'Item 1'),
-            h('li', 'Item 2')
-        ])
-    ]);
-
-    // Convert the tree to a string
-    const result = toString(tree);
-
-    console.log('HAST to string result:', result);
-}
-
-// Testing hast util to html
-import { toHtml } from 'hast-util-to-html';
-
-function testHastUtilToHtml() {
-    // Create a simple HAST tree
-    const tree = h('div', { class: 'container' }, [
-        h('h1', 'Hello, HAST!'),
-        h('p', 'This is a paragraph with a ', h('a', { href: 'https://example.com' }, 'link')),
-        h('ul', [
-            h('li', 'Item 1'),
-            h('li', 'Item 2')
-        ])
-    ]);
-
-    // Convert the tree to HTML
-    const html = toHtml(tree);
-
-    console.log('HAST to HTML result:');
-    console.log(html);
-}
-
-// Testing absolute URL
-import isAbsoluteUrl from 'is-absolute-url';
-
-function testIsAbsoluteUrl() {
-    const absoluteUrl = 'https://example.com/page';
-    const relativeUrl = 'path/to/page';
-    const rootRelativeUrl = '/path/to/page';
-
-    console.log('Is absolute URL:', isAbsoluteUrl(absoluteUrl));
-    console.log('Is relative URL:', isAbsoluteUrl(relativeUrl));
-    console.log('Is root-relative URL:', isAbsoluteUrl(rootRelativeUrl));
-}
-
-// Testing preact
-import { h as preactH } from 'preact';
-import renderToString from 'preact-render-to-string';
-
-function testPreactRenderToString() {
-    // Define a simple Preact component
-    const MyComponent = ({ name }: { name: string }) => preactH('div', null, `Hello, ${name}!`);
-
-    // Render the component to a string
-    const result = renderToString(preactH(MyComponent, { name: 'World' }));
-
-    console.log('Preact render to string result:', result);
-}
-
-// Testing Mathjax
-import rehypeMathjax from "rehype-mathjax/svg.js";
-
-async function testRehypeMathjax() {
-	const processor = unified()
-		.use(remarkParse)
-		.use(remarkMath)
-		.use(remarkRehype)
-		.use(rehypeMathjax)
-		.use(rehypeStringify);
-
-	const result = await processor.process('$E = mc^2$');
-	console.log('Rehype MathJax result:');
-	console.log(result.toString());
-}
-
-// Testing mermaid
-import mermaid from 'mermaid';
-
-function testMermaid() {
-    const diagram = `
-    graph TD
-    A[Client] --> B[Load Balancer]
-    B --> C[Server01]
-    B --> D[Server02]
-    `;
-
-    mermaid.initialize({ startOnLoad: false });
-
-    mermaid.render('mermaid-diagram', diagram).then(({ svg }) => {
-        console.log('Mermaid rendered SVG:');
-        console.log(svg);
-    }).catch(error => {
-        console.error('Mermaid rendering error:', error);
-    });
-}
-
-// Testing mdast to hast
-import { toHast } from 'mdast-util-to-hast';
-
-function testMdastUtilToHast() {
-    // Create a simple object that resembles an mdast structure
-    const mdastLike = {
-        type: 'root',
-        children: [
-            {
-                type: 'heading',
-                depth: 1,
-                children: [{ type: 'text', value: 'Hello, mdast!' }]
-            },
-            {
-                type: 'paragraph',
-                children: [{ type: 'text', value: 'This is a paragraph.' }]
-            }
-        ]
-    };
-
-    // Convert mdast-like object to hast
-    const hast = toHast(mdastLike as any);
-
-    console.log('mdast to hast result:');
-    console.log(JSON.stringify(hast, null, 2));
-}
-
-// Testing unist visit
-import { visit } from 'unist-util-visit';
-
-function testUnistUtilVisit() {
-	// Create a simple Markdown AST
-	const tree = {
-		type: 'root',
-		children: [
-			{ type: 'heading', depth: 1, children: [{ type: 'text', value: 'Title' }] },
-			{ type: 'paragraph', children: [{ type: 'text', value: 'This is a paragraph.' }] },
-			{ type: 'heading', depth: 2, children: [{ type: 'text', value: 'Subtitle' }] },
-		]
-	};
-
-	// Use visit to find all headings
-	const headings: any[] = [];
-	visit(tree, 'heading', (node) => {
-		headings.push(node);
-	});
-
-	console.log('Unist-util-visit result:');
-	console.log('Number of headings found:', headings.length);
-	headings.forEach((heading, index) => {
-		console.log(`Heading ${index + 1}: Depth ${heading.depth}, Text: ${heading.children[0].value}`);
-	});
-}
-
-// Testing vFile
-import { VFile } from 'vfile';
-import { reporter } from 'vfile-reporter';
-
-async function testVFile() {
-    try {
-		console.log('Starting VFile test');
-
-		console.log('VFile:', VFile);
-		console.log('reporter:', reporter);
-
-		const file = new VFile({
-			path: 'example.md',
-			contents: '# Hello\n\nThis is a test file.'
+import { Plugin, TFile, WorkspaceLeaf, FileView } from 'obsidian';
+
+export default class CommonPlaceNotesPlugin extends Plugin {
+    async onload() {
+        console.log('CommonPlaceNotesPlugin: Loading plugin');
+
+		// Update all open file titles on startup
+		this.app.workspace.onLayoutReady(() => {
+			console.log('CommonPlaceNotesPlugin: Layout ready, updating all open files');
+			this.app.workspace.getLeavesOfType('markdown').forEach(leaf => {
+				if (leaf.view instanceof FileView) {
+					const file = leaf.view.file;
+					if (file instanceof TFile) {
+						console.log('CommonPlaceNotesPlugin: updating initial view', file.path);
+						this.updateTitlesForFile(file);
+					}
+				}
+			});
 		});
-		console.log('VFile created');
 
-		file.message('This is an info message');
-		file.info('Another info message');
+        // Patch the file title display
+        this.registerEvent(
+            this.app.workspace.on('file-open', (file: TFile | null) => {
+                console.log('CommonPlaceNotesPlugin: file-open event triggered', file?.path);
+                if (file instanceof TFile) {
+                    this.updateTitlesForFile(file);
+                }
+            })
+        );
 
-		// Instead of calling fail(), which throws an error, let's add it as a message
-		file.message(new Error('This is an error message'));
+        // Update upon edits made to frontmatter properties
+        this.registerEvent(
+            this.app.metadataCache.on('resolved', () => {
+                console.log('CommonPlaceNotesPlugin: metadata resolved event');
+                const activeFile = this.app.workspace.getActiveFile();
+                console.log('CommonPlaceNotesPlugin: active file:', activeFile?.path);
+                if (activeFile) {
+                    const metadata = this.app.metadataCache.getFileCache(activeFile);
+                    console.log('CommonPlaceNotesPlugin: resolved metadata:', metadata?.frontmatter);
+                    this.updateTitlesForFile(activeFile);
+                }
+            })
+        );
 
-		console.log('Messages added to VFile');
-
-		console.log('VFile contents:', file.toString());
-
-		console.log('VFile report:');
-		console.log(reporter(file));
-
-		console.log('VFile test completed');
-	} catch (error) {
-		console.error('Error in testVFile:', error);
-		console.error('Error name:', error.name);
-		console.error('Error message:', error.message);
-		console.error('Error stack:', error.stack);
+        // Register for layout changes
+        this.registerLayoutEvents();
     }
-}
 
-// END OF TESTING ---------------------------- ----------------------------
+    private updateTitlesForFile(file: TFile) {
+        const metadata = this.app.metadataCache.getFileCache(file);
+        const customTitle = metadata?.frontmatter?.title;
+		// fall back to using the basename when the custom title doesn't exist
+		const displayTitle = customTitle || file.basename;
 
-interface MyPluginSettings {
-	mySetting: string;
-}
+        console.log('CommonPlaceNotesPlugin: updating titles for file', file.path);
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+        // Find all leaves containing this file
+        this.app.workspace.getLeavesOfType('markdown').forEach(leaf => {
+            if (leaf.view instanceof FileView && leaf.view.file?.path === file.path) {
+                console.log('CommonPlaceNotesPlugin: updating leaf for file', file.path);
+                
+                // Update view header title
+                const viewHeader = leaf.view.containerEl.querySelector('.view-header-title');
+                if (viewHeader instanceof HTMLElement) {
+                    console.log('CommonPlaceNotesPlugin: updating view header from', viewHeader.textContent, 'to', displayTitle);
+                    viewHeader.textContent = displayTitle;
+                }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+                // Update inline title
+                const inlineTitle = leaf.view.containerEl.querySelector('.inline-title');
+                if (inlineTitle instanceof HTMLElement) {
+                    console.log('CommonPlaceNotesPlugin: updating inline title from', inlineTitle.textContent, 'to', displayTitle);
+                    inlineTitle.textContent = displayTitle;
+                }
 
-	async onload() {
-		await this.loadSettings();
-		await testUnified();
-		testGrayMatter();
-		testHastToJsx();
-		testRehypeRaw();
-		testRehypeSlug();
-		testRehypeAutolinkHeadings();
-		testRemarkMath();
-		testMicromorph();
-		testGithubSlugger();
-		testFlexsearch();
-		testD3();
-		testYaml();
-		testHastUtilToString();
-		testHastUtilToHtml();
-		testIsAbsoluteUrl();
-		testPreactRenderToString();
-		testRehypeMathjax();
-		testMermaid();
-		testMdastUtilToHast();
-		testUnistUtilVisit();
-		await testVFile();
-	}
+                // Update tab header
+				const tabHeaders = document.querySelectorAll(
+					`.workspace-tab-header[aria-label="${file.basename}"] .workspace-tab-header-inner-title`
+				);
+				console.log(tabHeaders);
+				tabHeaders.forEach(element => {
+					if (element instanceof HTMLElement) {
+						const currentText = element.textContent;
+						console.log('CommonPlaceNotesPlugin: updating inline title from', currentText, 'to', displayTitle);
+						element.textContent = displayTitle;
+					}
+				});
+            }
+        });
+    }
 
-	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+    private registerLayoutEvents() {
+        this.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                console.log('CommonPlaceNotesPlugin: layout-change event');
+                const activeFile = this.app.workspace.getActiveFile();
+                if (activeFile) {
+                    this.updateTitlesForFile(activeFile);
+                }
+            })
+        );
+    }
 }
