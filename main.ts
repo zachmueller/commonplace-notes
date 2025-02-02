@@ -87,6 +87,34 @@ export default class CommonPlaceNotesPlugin extends Plugin {
 				});
             }
         });
+
+		// Inject the custom title into the alias cache if it exists and differs from basename
+		if (customTitle && customTitle !== file.basename) {
+			// Get the current cache
+			console.log(`Modifying the cache for ${displayTitle} (${file.basename})`);
+			const currentCache = this.app.metadataCache.getCache(file.path);
+			console.log(currentCache);
+
+			if (currentCache) {
+				// Create or update the frontmatter aliases array
+				const aliases = currentCache.frontmatter?.aliases || [];
+				if (Array.isArray(aliases)) {
+					// Add the custom title if it's not already in aliases
+					if (!aliases.includes(customTitle)) {
+						aliases.push(customTitle);
+
+						// Update the cache with the new aliases
+						currentCache.frontmatter = {
+							...(currentCache.frontmatter || {}),
+							aliases: aliases
+						};
+
+						// Force a cache update
+						this.app.metadataCache.trigger("changed", file);
+					}
+				}
+			}
+		}
     }
 
     private registerLayoutEvents() {
