@@ -114,7 +114,8 @@ private getBacklinksHtml(currentFile: TFile): string {
 	  console.log(backlinksHtml);
       
 	  // Create the output directory if it doesn't exist
-      const outputDir = '.obsidian/plugins/commonplace-notes/html-export';
+	  const pluginDir = this.manifest.dir;
+      const outputDir = `${pluginDir}/html-export`;
       await this.ensureDirectory(outputDir);
 	  
 	  // Generate output filename (same as input but with .html extension)

@@ -1,6 +1,6 @@
 {
-	"id": "commonplace-notes",
-	"name": "Commonplace Notes",
+	"id": "commonplace-notes-publisher",
+	"name": "Commonplace Notes Publisher",
 	"version": "0.1.0",
 	"minAppVersion": "1.0.0",
 	"description": "Testing stuff out",
