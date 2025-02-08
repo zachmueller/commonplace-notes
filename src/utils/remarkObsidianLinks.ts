@@ -1,7 +1,7 @@
 import { Plugin } from 'unified';
 import { Node } from 'unist';
 import { visit } from 'unist-util-visit';
-import { PathUtils } from './utils/path';
+import { PathUtils } from './path';
 import { Link, Text, Parent } from 'mdast';
 
 interface ObsidianLinksOptions {

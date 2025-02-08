@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
 import { PathUtils } from './utils/path';
-import remarkObsidianLinks from './remarkObsidianLinks';
+import remarkObsidianLinks from './utils/remarkObsidianLinks';
 
 export default class CommonplaceNotesPlugin extends Plugin {
   async onload() {
