@@ -7,7 +7,6 @@ import { PathUtils } from './utils/path';
 import remarkObsidianLinks from './utils/remarkObsidianLinks';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import * as path from 'path';
 
 const execAsync = promisify(exec);
@@ -20,6 +19,18 @@ interface CommonplaceNotesPublisherSettings {
     region: string;
 }
 
+interface BacklinkInfo {
+	slug: string;
+	title: string;
+}
+
+interface NoteOutputJson {
+	slug: string;
+	title: string;
+	content: string;
+	backlinks: BacklinkInfo[];
+}
+
 const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
 	awsAccountId: '123456789012',
 	awsProfile: 'notes',
@@ -30,11 +41,18 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
 
 export default class CommonplaceNotesPublisherPlugin extends Plugin {
 	settings: CommonplaceNotesPublisherSettings;
-	private s3Client: S3Client | null = null;
 	
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new CommonplaceNotesPublisherSettingTab(this.app, this));
+
+		this.addCommand({
+			id: 'testing-stuff',
+			name: 'Testing stuff',
+			callback: async () => {
+				await this.test();
+			}
+		});
 
 		this.addCommand({
 			id: 'convert-note-to-html',
@@ -56,10 +74,17 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 			id: 'publish-note',
 			name: 'Publish note to S3',
 			callback: async () => {
-				await this.pushData();
+				await this.pushLocalJsonsToS3();
 			}
 		});
 	}
+
+	private test() {
+		//console.log(this.getBacklinks());
+	}
+
+
+
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -100,7 +125,7 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 		}
 	}
 
-	private async pushData() {
+	private async pushLocalJsonsToS3() {
 		const basePath = (this.app.vault.adapter as any).basePath;
 		const localJsonDirectory = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes-publisher', 'notes');
 		const sourcePathEscaped = `"${path.resolve(localJsonDirectory)}"`;
@@ -123,72 +148,41 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 
 
 
-
-
-
-
-
-
-	// Helper method to ensure directory exists
-	private async ensureDirectory(path: string): Promise<void> {
-		const dirs = path.split('/');
-		let currentPath = '';
-		
-		for (const dir of dirs) {
-			currentPath += dir + '/';
-			if (!(await this.app.vault.adapter.exists(currentPath))) {
-				await this.app.vault.adapter.mkdir(currentPath);
-			}
-		}
-	}
-
-	private getBacklinksHtml(currentFile: TFile): string {
+	private getBacklinks(targetFile: TFile) {
 		// Get resolved links from metadata cache
 		const resolvedLinks = this.app.metadataCache.resolvedLinks;
-		const backlinks = new Set<string>();
+		console.log(resolvedLinks);
+		const backlinks: BacklinkInfo[] = [];
 
 		// Find all files that link to the current file
 		Object.entries(resolvedLinks).forEach(([sourcePath, links]) => {
-			if (links[currentFile.path]) {
-				backlinks.add(sourcePath);
+			if (links[targetFile.path]) {
+				console.log(`Found path: ${sourcePath}`);
+				const file = this.app.vault.getAbstractFileByPath(sourcePath);
+				if (file instanceof TFile) {
+					backlinks.push({
+						slug: PathUtils.slugifyFilePath(file.path),
+						title: file.basename
+					});
+				}
 			}
 		});
+		console.log(backlinks);
+		console.log(JSON.stringify(backlinks));
+		return backlinks;
+	}
+
+
+
+
+	private async ensureDirectory(targetPath: string): Promise<void> {
+		// Normalize the path to handle different path separators
+		const normalizedPath = targetPath.replace(/\\/g, '/');
+		const dirPath = path.dirname(normalizedPath);
 		
-		if (backlinks.size === 0) {
-			return ''; // Return empty string if no backlinks
+		if (!(await this.app.vault.adapter.exists(dirPath))) {
+			await this.app.vault.adapter.mkdir(dirPath);
 		}
-
-		// Convert backlinks to HTML
-		const backlinksHtml = Array.from(backlinks)
-			.map(filePath => {
-				const file = this.app.vault.getAbstractFileByPath(filePath);
-				if (!(file instanceof TFile)) return null;
-				
-				// Generate slug for the linking file
-				const linkingFileSlug = PathUtils.slugifyFilePath(file.path);
-				// Generate relative path from current file to linking file
-				const relativePath = PathUtils.createRelativePath(
-					PathUtils.slugifyFilePath(currentFile.path),
-					linkingFileSlug
-				);
-				
-				return `<li><a href="${relativePath}">${file.basename}</a></li>`;
-			})
-			.filter((link): link is string => link !== null) // Type guard to filter out null values
-			.join('\n');
-
-		if (!backlinksHtml) {
-			return '';
-		}
-
-	return `
-<hr>
-<div class="backlinks">
-	<h2>Backlinks</h2>
-	<ul>
-		${backlinksHtml}
-	</ul>
-</div>`;
 	}
 
 	async convertCurrentNote() {
@@ -203,74 +197,54 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 			const file = activeView.file;
 			const cache = this.app.metadataCache.getFileCache(file);
 			const content = await this.app.vault.read(file);
-		
+
 			// Generate slug for the current file
 			const slug = PathUtils.slugifyFilePath(file.path);
 			console.log(`Generated slug: ${slug}`);
-			
-		// Remove frontmatter if it exists
+
+			// Remove frontmatter if it exists
 			let contentWithoutFrontmatter = content;
 			if (cache?.frontmatter && cache.frontmatterPosition) {
 				const frontmatterEnd = cache.frontmatterPosition.end.offset;
 				contentWithoutFrontmatter = content.slice(frontmatterEnd).trim();
 			}
+
+			// Convert to HTML
+			const html = await this.markdownToHtml(contentWithoutFrontmatter, file);
+
+			// Get backlinks
+			const backlinks = this.getBacklinks(file);
 			
-		// Convert to HTML
-			//const html = await this.markdownToHtml(contentWithoutFrontmatter);
-		const html = await this.markdownToHtml(contentWithoutFrontmatter, file);
-			
-			// Get backlinks HTML
-			const backlinksHtml = this.getBacklinksHtml(file);
-		console.log(backlinksHtml);
-			
-		// Create the output directory if it doesn't exist
-		const pluginDir = this.manifest.dir;
-			const outputDir = `${pluginDir}/html-export`;
+
+			// Create the output directory if it doesn't exist
+			const pluginDir = this.manifest.dir;
+			const outputDir = `${pluginDir}/notes`;
 			await this.ensureDirectory(outputDir);
-		
-		// Generate output filename (same as input but with .html extension)
-			const outputFilename = slug + '.html';
+
+			// Generate output filename (same as input but with .html extension)
+			const outputFilename = slug + '.json';
 			const outputPath = `${outputDir}/${outputFilename}`;
-			
-		// Create a basic HTML document structure
-			const fullHtml = `<!DOCTYPE html>
-<html lang="en">
-<head>
-		<meta charset="UTF-8">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<title>${file.basename}</title>
-		<meta name="slug" content="${slug}">
-		<style>
-			.backlinks {
-				margin-top: 2rem;
-				padding-top: 1rem;
-			}
-			.backlinks h2 {
-				font-size: 1.2rem;
-				margin-bottom: 0.5rem;
-			}
-			.backlinks ul {
-				margin: 0;
-				padding-left: 1.5rem;
-			}
-		</style>
-</head>
-<body data-slug="${slug}">
-${html}
-${backlinksHtml}
-</body>
-</html>`;
-			
-		// Save the file
-			await this.app.vault.adapter.write(outputPath, fullHtml);
-		
-			new Notice(`HTML file saved to ${outputPath}`);
+
+			// Craft a JSON to write
+			const output: NoteOutputJson = {
+				slug: slug,
+				title: file.basename,
+				content: html,
+				backlinks: backlinks
+			};
+
+			// Save the file
+			await this.app.vault.adapter.write(outputPath, JSON.stringify(output));
+
+			new Notice(`Note output saved to ${outputPath}`);
 		} catch (error) {
-			new Notice(`Error converting to HTML: ${error.message}`);
-			console.error('HTML conversion error:', error);
+			new Notice(`Error converting note: ${error.message}`);
+			console.error('Note conversion error:', error);
 		}
 	}
 
+
+// TODO::switch out linking behavior to follow the new style in the JSON-backed setup::
 	async markdownToHtml(markdown: string, currentFile: TFile): Promise<string> {
 		const currentSlug = PathUtils.slugifyFilePath(currentFile.path);
 		
