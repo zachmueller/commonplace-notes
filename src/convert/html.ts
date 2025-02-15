@@ -7,7 +7,7 @@ import CommonplaceNotesPublisherPlugin from '../main';
 import { PathUtils } from '../utils/path';
 import { generateUID } from '../utils/uid';
 import { FrontmatterManager } from '../utils/frontmatter';
-import remarkObsidianLinks from '../utils/remarkObsidianLinks';
+import remarkObsidianLinks, { ResolvedNoteInfo } from '../utils/remarkObsidianLinks';
 
 interface BacklinkInfo {
 	uid: string;
@@ -114,21 +114,26 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 }
 
 export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, markdown: string, currentFile: TFile): Promise<string> {
-	const currentSlug = PathUtils.slugifyFilePath(currentFile.path);
-	
 	const processor = unified()
 		.use(remarkParse)
 		.use(remarkObsidianLinks, {
-			currentSlug,
-			resolveInternalLinks: (linkText: string) => {
+			frontmatterManager: plugin.frontmatterManager,
+			resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
 				const [link, alias] = linkText.split('|');
 				const targetFile = plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
 				
-				if (targetFile) {
-					return {
-						slug: PathUtils.slugifyFilePath(targetFile.path),
-						displayText: alias || link
-					};
+				if (targetFile instanceof TFile) {
+					try {
+						const uid = await plugin.frontmatterManager.getNoteUID(targetFile);
+						return {
+							uid,
+							title: targetFile.basename,
+							displayText: alias || link
+						};
+					} catch (error) {
+						console.error(`Failed to get UID for file ${targetFile.path}:`, error);
+						return null;
+					}
 				}
 				
 				return null;

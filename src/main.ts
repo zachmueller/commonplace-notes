@@ -2,6 +2,7 @@ import { Plugin, MarkdownView, Notice, App, TFile } from 'obsidian';
 import { execAsync } from './utils/shell';
 import { CommonplaceNotesPublisherSettingTab } from './settings';
 import { PathUtils } from './utils/path';
+import { FrontmatterManager } from './utils/frontmatter';
 import { pushLocalJsonsToS3 } from './publish/awsUpload';
 import { getBacklinks, convertCurrentNote, markdownToHtml } from './convert/html';
 import { refreshCredentials } from './publish/awsCredentials';
@@ -17,10 +18,13 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
 
 export default class CommonplaceNotesPublisherPlugin extends Plugin {
 	settings: CommonplaceNotesPublisherSettings;
+	frontmatterManager: FrontmatterManager;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new CommonplaceNotesPublisherSettingTab(this.app, this));
+
+		this.frontmatterManager = new FrontmatterManager(this.app);
 
 		this.addCommand({
 			id: 'testing-stuff',
