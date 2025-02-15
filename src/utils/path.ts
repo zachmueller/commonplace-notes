@@ -1,4 +1,5 @@
 import path from 'path';
+import CommonplaceNotesPublisherPlugin from '../main';
 
 export class PathUtils {
 	static sluggify(s: string): string {
@@ -74,5 +75,15 @@ export class PathUtils {
 		return relativePath.startsWith('.')
 			? relativePath + '.html'
 			: './' + relativePath + '.html';
+	}
+}
+
+export async function ensureDirectory(plugin: CommonplaceNotesPublisherPlugin, targetPath: string): Promise<void> {
+	// Normalize the path to handle different path separators
+	const normalizedPath = targetPath.replace(/\\/g, '/');
+	const dirPath = path.dirname(normalizedPath);
+	
+	if (!(await plugin.app.vault.adapter.exists(dirPath))) {
+		await plugin.app.vault.adapter.mkdir(dirPath);
 	}
 }

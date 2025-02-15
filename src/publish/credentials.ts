@@ -1,0 +1,1 @@
+// generalize from awsCredentials.ts
