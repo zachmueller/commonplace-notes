@@ -5,6 +5,7 @@ import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPublisherPlugin from '../main';
 import { PathUtils } from '../utils/path';
+import { generateUID } from '../utils/uid';
 import remarkObsidianLinks from '../utils/remarkObsidianLinks';
 
 interface BacklinkInfo {

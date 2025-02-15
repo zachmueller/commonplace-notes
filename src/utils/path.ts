@@ -78,11 +78,6 @@ export class PathUtils {
 			: './' + relativePath + '.html';
 	}
 
-	static getFrontmatter(plugin: CommonplaceNotesPublisherPlugin, file: TFile): any {
-		const fileCache = plugin.app.metadataCache.getCache(file.path);
-		return fileCache?.frontmatter;
-	}
-
 	static async ensureDirectory(plugin: CommonplaceNotesPublisherPlugin, targetPath: string): Promise<void> {
 		// Normalize the path to handle different path separators
 		const normalizedPath = targetPath.replace(/\\/g, '/');
