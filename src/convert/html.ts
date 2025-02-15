@@ -65,6 +65,8 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 
 	try {
 		const file = activeView.file;
+		const fm = new FrontmatterManager(plugin.app);
+		const uid = await fm.getNoteUID(file);
 		const cache = plugin.app.metadataCache.getFileCache(file);
 		const content = await plugin.app.vault.read(file);
 
@@ -92,7 +94,7 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 		await PathUtils.ensureDirectory(plugin, outputDir);
 
 		// Generate output filename (same as input but with .html extension)
-		const outputFilename = slug + '.json';
+		const outputFilename = `${uid}.json`;
 		const outputPath = `${outputDir}/${outputFilename}`;
 
 		// Craft a JSON to write

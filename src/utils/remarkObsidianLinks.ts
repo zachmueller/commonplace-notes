@@ -46,7 +46,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					if (resolved) {
 						children.push({
 							type: 'link',
-							url: `#${resolved.uid}`,
+							url: `#${encodeURIComponent(resolved.uid)}`,
 							children: [{ type: 'text', value: resolved.displayText || resolved.title }]
 						});
 					} else {
