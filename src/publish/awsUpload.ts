@@ -4,11 +4,9 @@ import { execAsync } from '../utils/shell';
 import CommonplaceNotesPublisherPlugin from '../main';
 
 export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPublisherPlugin) {
-	// swap out with plugin.manifest.dir
 	const basePath = (plugin.app.vault.adapter as any).basePath;
 	const localJsonDirectory = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes-publisher', 'notes');
 	const sourcePathEscaped = `"${path.resolve(localJsonDirectory)}"`;
-	console.log(sourcePathEscaped);
 
 	const s3Path = `s3://${plugin.settings.bucketName}/notes/`;
 	const options = {
