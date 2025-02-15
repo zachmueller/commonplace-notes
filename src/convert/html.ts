@@ -6,9 +6,11 @@ import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPublisherPlugin from '../main';
 import { PathUtils } from '../utils/path';
 import { generateUID } from '../utils/uid';
+import { FrontmatterManager } from '../utils/frontmatter';
 import remarkObsidianLinks from '../utils/remarkObsidianLinks';
 
 interface BacklinkInfo {
+	uid: string;
 	slug: string;
 	title: string;
 }
@@ -20,28 +22,37 @@ interface NoteOutputJson {
 	backlinks: BacklinkInfo[];
 }
 
-export function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile) {
+export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile): Promise<BacklinkInfo[]> {
 	// Get resolved links from metadata cache
 	const resolvedLinks = plugin.app.metadataCache.resolvedLinks;
 	console.log(resolvedLinks);
 	const backlinks: BacklinkInfo[] = [];
 
 	// Find all files that link to the current file
-	Object.entries(resolvedLinks).forEach(([sourcePath, links]) => {
+	const promises = Object.entries(resolvedLinks).map(async ([sourcePath, links]) => {
 		if (links[targetFile.path]) {
 			console.log(`Found path: ${sourcePath}`);
 			const file = plugin.app.vault.getAbstractFileByPath(sourcePath);
 			if (file instanceof TFile) {
-				backlinks.push({
+				const fm = new FrontmatterManager(plugin.app);
+				const uid = await fm.getNoteUID(file);
+				return {
+					uid: uid,
 					slug: PathUtils.slugifyFilePath(file.path),
 					title: file.basename
-				});
+				};
 			}
 		}
+		return null;
 	});
-	console.log(backlinks);
-	console.log(JSON.stringify(backlinks));
-	return backlinks;
+
+	// Wait for all promises to resolve and filter out null values
+	const results = await Promise.all(promises);
+	const filteredResults = results.filter((result): result is BacklinkInfo => result !== null);
+
+	console.log(filteredResults);
+	console.log(JSON.stringify(filteredResults));
+	return filteredResults;
 }
 
 export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin) {
@@ -72,7 +83,7 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 		const html = await markdownToHtml(plugin, contentWithoutFrontmatter, file);
 
 		// Get backlinks
-		const backlinks = getBacklinks(plugin, file);
+		const backlinks = await getBacklinks(plugin, file);
 		
 
 		// Create the output directory if it doesn't exist

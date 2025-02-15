@@ -1,4 +1,5 @@
 import { TFile, App } from 'obsidian';
+import { generateUID } from './uid';
 import CommonplaceNotesPublisherPlugin from '../main';
 
 export class FrontmatterManager {
@@ -9,9 +10,31 @@ export class FrontmatterManager {
         this.app = app;
     }
 
-	static getFrontmatter(plugin: CommonplaceNotesPublisherPlugin, file: TFile): any {
-		const fileCache = plugin.app.metadataCache.getCache(file.path);
+	getFrontmatter(file: TFile): any {
+		const fileCache = this.app.metadataCache.getCache(file.path);
 		return fileCache?.frontmatter;
+	}
+
+	async getNoteUID(file: TFile): Promise<string> {
+		try {
+			let fm = this.getFrontmatter(file);
+			if (!fm) {
+				fm = {};
+			}
+
+			if (!fm.uid) {
+				const newUID = generateUID();
+				this.add(file, {uid: newUID});
+				await this.process();
+
+				return newUID;
+			}
+
+			return fm.uid;
+		} catch (error) {
+			console.error('Error getting or setting note UID:', error);
+			throw error;
+		}
 	}
 
     add(file: TFile, updates: Record<string, any>) {
