@@ -16,6 +16,7 @@ interface BacklinkInfo {
 }
 
 interface NoteOutputJson {
+	uid: string;
 	slug: string;
 	title: string;
 	content: string;
@@ -99,6 +100,7 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 
 		// Craft a JSON to write
 		const output: NoteOutputJson = {
+			uid: uid,
 			slug: slug,
 			title: file.basename,
 			content: html,
