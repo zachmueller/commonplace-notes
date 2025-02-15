@@ -1,3 +1,4 @@
+import { Notice } from 'obsidian';
 import * as path from 'path';
 import { execAsync } from '../utils/shell';
 import CommonplaceNotesPublisherPlugin from '../main';
@@ -15,10 +16,12 @@ export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPublisherPlugin
 	};
 
 	try {
-		const command = `aws s3 cp ${sourcePathEscaped} ${s3Path} --recursive --profile ${this.settings.awsProfile}`;
+		new Notice('Uploading notes from local to S3...');
+		const command = `aws s3 cp ${sourcePathEscaped} ${s3Path} --recursive --profile ${plugin.settings.awsProfile}`;
 		console.log('Executing command:', command);
 
 		const { stdout, stderr } = await execAsync(command, options);
+		new Notice('Successfully uploaded notes to S3!');
 		console.log('Output:', stdout);
 		if (stderr) console.error('Errors:', stderr);
 	} catch (error) {

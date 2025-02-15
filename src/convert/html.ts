@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPublisherPlugin from '../main';
-import { PathUtils, ensureDirectory } from '../utils/path';
+import { PathUtils } from '../utils/path';
 import remarkObsidianLinks from '../utils/remarkObsidianLinks';
 
 interface BacklinkInfo {
@@ -77,7 +77,7 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 		// Create the output directory if it doesn't exist
 		const pluginDir = plugin.manifest.dir;
 		const outputDir = `${pluginDir}/notes`;
-		await ensureDirectory(plugin, outputDir);
+		await PathUtils.ensureDirectory(plugin, outputDir);
 
 		// Generate output filename (same as input but with .html extension)
 		const outputFilename = slug + '.json';

@@ -56,5 +56,16 @@ export class CommonplaceNotesPublisherSettingTab extends PluginSettingTab {
                     this.plugin.settings.region = value;
                     await this.plugin.saveSettings();
                 }));
+
+		new Setting(containerEl)
+			.setName('Credential Refresh Commands')
+			.setDesc('Enter the commands to refresh AWS credentials (one per line). You can use ${awsAccountId} and ${awsProfile} as variables.')
+			.addTextArea(text => text
+				.setPlaceholder('aws sso login --profile notes')
+				.setValue(this.plugin.settings.credentialRefreshCommands)
+				.onChange(async (value) => {
+					this.plugin.settings.credentialRefreshCommands = value;
+					await this.plugin.saveSettings();
+				}));
     }
 }

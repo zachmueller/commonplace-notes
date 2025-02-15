@@ -10,9 +10,9 @@ import { CommonplaceNotesPublisherSettings } from './types';
 const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
 	awsAccountId: '123456789012',
 	awsProfile: 'notes',
-	awsRole: 'Admin',
 	bucketName: 'my-bucket',
-	region: 'us-east-1'
+	region: 'us-east-1',
+	credentialRefreshCommands: ''
 };
 
 export default class CommonplaceNotesPublisherPlugin extends Plugin {
@@ -42,7 +42,7 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 			id: 'refresh-credentials',
 			name: 'Refresh AWS credentials',
 			callback: async () => {
-				await refreshCredentials();
+				await refreshCredentials(this);
 			}
 		});
 
