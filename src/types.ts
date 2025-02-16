@@ -1,12 +1,11 @@
 export interface CommonplaceNotesPublisherSettings {
     publishingProfiles: PublishingProfile[];
-    defaultProfileId?: string;
 }
 
 export interface PublishingProfile {
     name: string;
     id: string;
-    lastFullPublishTimestamp?: string;
+    lastFullPublishTimestamp: number;
     excludedDirectories: string[];
     baseUrl: string;
     isPublic: boolean;

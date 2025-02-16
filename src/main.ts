@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
+		lastFullPublishTimestamp: 0,
         excludedDirectories: ['private/'],
         baseUrl: '',
         isPublic: false,
@@ -25,8 +26,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
             cloudFrontInvalidationScheme: 'individual',
             credentialRefreshCommands: ''
         }
-    }],
-    defaultProfileId: 'default'
+    }]
 };
 
 export default class CommonplaceNotesPublisherPlugin extends Plugin {

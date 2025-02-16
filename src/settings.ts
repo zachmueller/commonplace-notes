@@ -35,6 +35,17 @@ export class CommonplaceNotesPublisherSettingTab extends PluginSettingTab {
 		const profileContainer = containerEl.createDiv();
 		profileContainer.createEl('h3', {text: profile.name});
 
+		// Add last publish timestamp info
+		const lastUpdated = profile.lastFullPublishTimestamp ? new Date(profile.lastFullPublishTimestamp).toLocaleString() : 'n/a';
+		const timestampDiv = profileContainer.createEl('div', {
+			cls: 'profile-last-publish',
+			text: `Last full publish: ${lastUpdated}`
+		});
+		// Add simple styling
+		timestampDiv.style.fontSize = '0.8em';
+		timestampDiv.style.color = 'var(--text-muted)';
+		timestampDiv.style.marginBottom = '1em';
+
 		// container for header and delete button
 		const headerContainer = profileContainer.createDiv({
 			cls: 'profile-header'
@@ -235,6 +246,7 @@ export class CommonplaceNotesPublisherSettingTab extends PluginSettingTab {
 		const newProfile: PublishingProfile = {
 			name: 'New profile',
 			id: `profile-${Date.now()}`,
+			lastFullPublishTimestamp: 0,
 			excludedDirectories: [],
 			baseUrl: '',
 			isPublic: false,
