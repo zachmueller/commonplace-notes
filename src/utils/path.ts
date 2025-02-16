@@ -87,4 +87,19 @@ export class PathUtils {
 			await plugin.app.vault.adapter.mkdir(dirPath);
 		}
 	}
+
+	async function deleteFilesInDirectory(plugin: CommonplaceNotesPublisherPlugin, directory: string) {
+		try {
+			const adapter = plugin.app.vault.adapter;
+			const files = await adapter.list(directory);
+
+			for (const file of files.files) {
+				await adapter.remove(file);
+				console.log(`Deleted: ${file}`);
+			}
+		} catch (error) {
+			console.error(`Error deleting files in ${directory}:`, error);
+			throw error;
+		}
+	}
 }
