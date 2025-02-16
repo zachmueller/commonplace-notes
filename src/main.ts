@@ -9,11 +9,23 @@ import { refreshCredentials } from './publish/awsCredentials';
 import { CommonplaceNotesPublisherSettings } from './types';
 
 const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
-	awsAccountId: '123456789012',
-	awsProfile: 'notes',
-	bucketName: 'my-bucket',
-	region: 'us-east-1',
-	credentialRefreshCommands: ''
+    publishingProfiles: [{
+        name: 'Default AWS Profile',
+        id: 'default',
+        excludedDirectories: ['private/'],
+        baseUrl: '',
+        isPublic: false,
+        publishMechanism: 'AWS CLI',
+        awsSettings: {
+            awsAccountId: '123456789012',
+            awsProfile: 'notes',
+            bucketName: 'my-bucket',
+            region: 'us-east-1',
+            cloudFrontInvalidationScheme: 'individual',
+            credentialRefreshCommands: ''
+        }
+    }],
+    defaultProfileId: 'default'
 };
 
 export default class CommonplaceNotesPublisherPlugin extends Plugin {
@@ -46,7 +58,8 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 			id: 'refresh-credentials',
 			name: 'Refresh AWS credentials',
 			callback: async () => {
-				await refreshCredentials(this);
+				// TODO::update this to prompt user for the profile::
+				await refreshCredentials(this, this.settings.publishingProfiles[0].id);
 			}
 		});
 
@@ -54,7 +67,8 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 			id: 'publish-note',
 			name: 'Publish note to S3',
 			callback: async () => {
-				await pushLocalJsonsToS3(this);
+				// TODO::update this to extract the profile from the note itself::
+				await pushLocalJsonsToS3(this, this.settings.publishingProfiles[0].id);
 			}
 		});
 	}

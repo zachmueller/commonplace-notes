@@ -1,32 +1,43 @@
 import { Notice } from 'obsidian';
 import { execAsync } from '../utils/shell';
 import type CommonplaceNotesPublisherPlugin from '../main';
+import type { PublishingProfile } from '../types';
 
-export async function refreshCredentials(plugin: CommonplaceNotesPublisherPlugin) {
-	try {
-		new Notice('Refreshing AWS credentials');
+export async function refreshCredentials(plugin: CommonplaceNotesPublisherPlugin, profileId: string) {
+    try {
+        const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+        if (!profile) {
+            throw new Error('No valid publishing profile found');
+        }
 
-		const commands = plugin.settings.credentialRefreshCommands
-			.split('\n')
-			.filter(cmd => cmd.trim().length > 0)
-			.map(cmd => {
-				// Replace variables in the command
-				return cmd
-					.replace('${awsAccountId}', plugin.settings.awsAccountId)
-					.replace('${awsProfile}', plugin.settings.awsProfile);
-			});
+        if (profile.publishMechanism !== 'AWS CLI' || !profile.awsSettings) {
+            throw new Error('Selected profile is not configured for AWS');
+			// TODO::generalize credentials handling and build a better flow around this::
+        }
 
-		for (const command of commands) {
-			new Notice(`Executing: ${command}`);
-			await execAsync(command);
-		}
+        new Notice('Refreshing AWS credentials');
 
-		new Notice('Successfully refreshed AWS credentials');
-	} catch (error) {
-		console.error('Failed to refresh credentials:', error);
-		new Notice('Failed to refresh credentials: ' + error.message);
-		throw error;
-	}
+        const commands = profile.awsSettings.credentialRefreshCommands
+            .split('\n')
+            .filter((cmd: string) => cmd.trim().length > 0)
+            .map((cmd: string) => {
+                // Replace variables in the command
+                return cmd
+                    .replace('${awsAccountId}', profile.awsSettings?.awsAccountId || '')
+                    .replace('${awsProfile}', profile.awsSettings?.awsProfile || '');
+            });
+
+        for (const command of commands) {
+            new Notice(`Executing: ${command}`);
+            await execAsync(command);
+        }
+
+        new Notice('Successfully refreshed AWS credentials');
+    } catch (error) {
+        console.error('Failed to refresh credentials:', error);
+        new Notice('Failed to refresh credentials: ' + (error as Error).message);
+        throw error;
+    }
 }
 
 export async function checkAwsCredentials() {

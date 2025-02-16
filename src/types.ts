@@ -1,7 +1,32 @@
 export interface CommonplaceNotesPublisherSettings {
+    publishingProfiles: PublishingProfile[];
+    defaultProfileId?: string;
+}
+
+export interface PublishingProfile {
+    name: string;
+    id: string;
+    lastFullPublishTimestamp?: string;
+    excludedDirectories: string[];
+    baseUrl: string;
+    isPublic: boolean;
+    publishMechanism: 'AWS CLI' | 'Local';
+    awsSettings?: AWSProfileSettings;
+    localSettings?: LocalProfileSettings;
+}
+
+export interface AWSProfileSettings {
     awsAccountId: string;
     awsProfile: string;
-    bucketName: string;
     region: string;
-	credentialRefreshCommands: string;
+    bucketName: string;
+    cloudFrontInvalidationScheme: 'individual' | 'connected' | 'sinceLast' | 'all' | 'manual';
+    credentialRefreshCommands: string;
 }
+
+export interface LocalProfileSettings {
+    // TBD: Add local publishing settings when implemented
+    outputPath: string;
+}
+
+export type CloudFrontInvalidationScheme = 'individual' | 'connected' | 'sinceLast' | 'all' | 'manual';
