@@ -17,24 +17,42 @@ export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPublisherPlugin
         return;
     }
 
+	// TODO::extract this directory setup into the main plugin class for standard access pattern::
     const basePath = (plugin.app.vault.adapter as any).basePath;
-    const localJsonDirectory = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes-publisher', 'notes');
-    const sourcePathEscaped = `"${path.resolve(localJsonDirectory)}"`;
+	const notesDir = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes-publisher', 'notes');
+	const notesPath = `"${path.resolve(notesDir)}"`;
+    const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/notes/`;
+	
+	// craft path for mapping files
+	const mappingDir = path.join(basePath, plugin.mappingManager.mappingDir);
+	const mappingPath = `"${mappingDir}"`;
+	const mappingS3Prefix = `s3://${profile.awsSettings.bucketName}/static/mapping/`;
 
-    const s3Path = `s3://${profile.awsSettings.bucketName}/notes/`;
-    const options = {
+	// standard options to send to the shell
+	const options = {
         cwd: (plugin.app.vault.adapter as any).basePath
     };
 
     try {
-        new Notice('Uploading notes from local to S3...');
-        const command = `aws s3 cp ${sourcePathEscaped} ${s3Path} --recursive --profile ${profile.awsSettings.awsProfile}`;
-        console.log('Executing command:', command);
+        // Upload notes
+		new Notice('Uploading notes from local to S3...');
+        const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
+        console.log('Executing command:', cmdNotes);
 
-        const { stdout, stderr } = await execAsync(command, options);
-        new Notice('Successfully uploaded notes to S3!');
-        console.log('Output:', stdout);
-        if (stderr) console.error('Errors:', stderr);
+        const { stdout: stdoutNotes, stderr: stderrNotes } = await execAsync(cmdNotes, options);
+        new Notice('Successfully uploaded notes to S3');
+        console.log('Notes upload output:', stdoutNotes);
+        if (stderrNotes) console.error('Errors:', stderrNotes);
+		
+		// Upload mapping files
+		new Notice('Uploading mappings from local to S3...');
+        const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
+        console.log('Executing command:', cmdMapping);
+
+        const { stdout: stdoutMapping, stderr: stderrMapping } = await execAsync(cmdMapping, options);
+        new Notice('Mapping files successfully uploaded to S3');
+        console.log('Mappings upload output:', stdoutMapping);
+        if (stderrMapping) console.error('Errors:', stderrMapping);
     } catch (error) {
         console.error('Error executing AWS command:', error);
     }

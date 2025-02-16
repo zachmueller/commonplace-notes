@@ -82,7 +82,7 @@ export class PathUtils {
 		// Normalize the path to handle different path separators
 		const normalizedPath = targetPath.replace(/\\/g, '/');
 		const dirPath = path.dirname(normalizedPath);
-		
+
 		if (!(await plugin.app.vault.adapter.exists(dirPath))) {
 			await plugin.app.vault.adapter.mkdir(dirPath);
 		}

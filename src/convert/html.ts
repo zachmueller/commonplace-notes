@@ -24,6 +24,7 @@ interface NoteOutputJson {
 	hash: string;
 	lastUpdated: number;
 	raw: string;
+	priorHash: string | null;
 }
 
 export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile): Promise<BacklinkInfo[]> {
@@ -96,23 +97,34 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 			content = content.slice(frontmatterEnd).trim();
 		}
 
+		// Calculate new hash
+		const newHash = await getSHA1Hash(`${uid}::${content}`);
+		//const hash = await getSHA1Hash(`${uid}::${content}`);
+
+		// Get prior hash from frontmatter
+		//const priorHash = plugin.mappingManager.getPriorHash(uid);
+		let priorHash = fm.getFrontmatterValue(file, 'cpn-prior-hash');
+
+		// Only update the prior hash in frontmatter if the hash has changed
+		if (!priorHash || priorHash !== newHash) {
+			await fm.add(file, {'cpn-prior-hash': newHash});
+			await fm.process();
+		}
+
+		// Handle cases where prior hash was previously null
+		if (priorHash === newHash) {
+			priorHash = null;
+		}
+
 		// Convert to HTML
 		const html = await markdownToHtml(plugin, content, file);
 
-		// Capture hash
-		const hash = await getSHA1Hash(`${uid}::${content}`);
+		// Update mappings
+		plugin.mappingManager.updateMappings(slug, uid, newHash);
+		await plugin.mappingManager.saveMappings();
 
 		// Get backlinks
 		const backlinks = await getBacklinks(plugin, file);
-
-		// Create the output directory if it doesn't exist
-		const pluginDir = plugin.manifest.dir;
-		const outputDir = `${pluginDir}/notes`;
-		await PathUtils.ensureDirectory(plugin, outputDir);
-
-		// Generate output filename (same as input but with .html extension)
-		const outputFilename = `${hash}.json`;
-		const outputPath = `${outputDir}/${outputFilename}`;
 
 		// Craft a JSON to write
 		const output: NoteOutputJson = {
@@ -121,12 +133,16 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 			title: file.basename,
 			content: html,
 			backlinks: backlinks,
-			hash: hash,
+			hash: newHash,
 			lastUpdated: updatedTimestamp,
-			raw: content
+			raw: content,
+			priorHash: priorHash || null
 		};
 
-		// Save the file
+		// Generate output file
+		const outputDir = `${plugin.manifest.dir}/notes`;
+		await PathUtils.ensureDirectory(plugin, outputDir);
+		const outputPath = `${outputDir}/${newHash}.json`;
 		await plugin.app.vault.adapter.write(outputPath, JSON.stringify(output));
 
 		new Notice(`Note output saved to ${outputPath}`);

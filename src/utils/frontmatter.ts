@@ -15,22 +15,21 @@ export class FrontmatterManager {
 		return fileCache?.frontmatter;
 	}
 
+	getFrontmatterValue(file: TFile, key: string): any {
+		const fm = this.getFrontmatter(file);
+		return fm ? fm[key] : null;
+	}
+
 	async getNoteUID(file: TFile): Promise<string> {
 		try {
-			let fm = this.getFrontmatter(file);
-			if (!fm) {
-				fm = {};
-			}
-
-			if (!fm.uid) {
+			const existingUID = this.getFrontmatterValue(file, 'uid');
+			if (!existingUID) {
 				const newUID = generateUID();
 				this.add(file, {uid: newUID});
 				await this.process();
-
 				return newUID;
 			}
-
-			return fm.uid;
+			return existingUID;
 		} catch (error) {
 			console.error('Error getting or setting note UID:', error);
 			throw error;

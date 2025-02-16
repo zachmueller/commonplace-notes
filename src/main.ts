@@ -7,6 +7,7 @@ import { pushLocalJsonsToS3 } from './publish/awsUpload';
 import { getBacklinks, convertCurrentNote, markdownToHtml } from './convert/html';
 import { refreshCredentials } from './publish/awsCredentials';
 import { CommonplaceNotesPublisherSettings } from './types';
+import { MappingManager } from './utils/mappings';
 
 const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
     publishingProfiles: [{
@@ -31,12 +32,17 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
 export default class CommonplaceNotesPublisherPlugin extends Plugin {
 	settings: CommonplaceNotesPublisherSettings;
 	frontmatterManager: FrontmatterManager;
+	mappingManager: MappingManager;
 
 	async onload() {
+		// Initialize settings
 		await this.loadSettings();
 		this.addSettingTab(new CommonplaceNotesPublisherSettingTab(this.app, this));
 
+		// Initialize classes
 		this.frontmatterManager = new FrontmatterManager(this.app);
+		this.mappingManager = new MappingManager(this);
+		await this.mappingManager.loadMappings();
 
 		this.addCommand({
 			id: 'testing-stuff',
