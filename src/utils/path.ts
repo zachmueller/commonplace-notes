@@ -88,7 +88,7 @@ export class PathUtils {
 		}
 	}
 
-	async function deleteFilesInDirectory(plugin: CommonplaceNotesPublisherPlugin, directory: string) {
+	async deleteFilesInDirectory(plugin: CommonplaceNotesPublisherPlugin, directory: string) {
 		try {
 			const adapter = plugin.app.vault.adapter;
 			const files = await adapter.list(directory);
