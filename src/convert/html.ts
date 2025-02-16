@@ -21,6 +21,9 @@ interface NoteOutputJson {
 	title: string;
 	content: string;
 	backlinks: BacklinkInfo[];
+	hash: string;
+	lastUpdated: number;
+	raw: string;
 }
 
 export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile): Promise<BacklinkInfo[]> {
@@ -56,6 +59,14 @@ export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targ
 	return filteredResults;
 }
 
+export async function getSHA1Hash(content: string): Promise<string> {
+	const msgUint8 = new TextEncoder().encode(content);
+	const hashBuffer = await crypto.subtle.digest('SHA-1', msgUint8);
+	const hashArray = Array.from(new Uint8Array(hashBuffer));
+	const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+	return hashHex;
+}
+
 export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin) {
 	const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 	
@@ -65,29 +76,34 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 	}
 
 	try {
+		// Capture last updated timestamp ahead of any possible other modifications
 		const file = activeView.file;
+		const updatedTimestamp = file.stat.mtime;
+
+		// Capture UID of the note
 		const fm = new FrontmatterManager(plugin.app);
 		const uid = await fm.getNoteUID(file);
 		const cache = plugin.app.metadataCache.getFileCache(file);
-		const content = await plugin.app.vault.read(file);
 
 		// Generate slug for the current file
 		const slug = PathUtils.slugifyFilePath(file.path);
 		console.log(`Generated slug: ${slug}`);
 
 		// Remove frontmatter if it exists
-		let contentWithoutFrontmatter = content;
+		let content = await plugin.app.vault.read(file);
 		if (cache?.frontmatter && cache.frontmatterPosition) {
 			const frontmatterEnd = cache.frontmatterPosition.end.offset;
-			contentWithoutFrontmatter = content.slice(frontmatterEnd).trim();
+			content = content.slice(frontmatterEnd).trim();
 		}
 
 		// Convert to HTML
-		const html = await markdownToHtml(plugin, contentWithoutFrontmatter, file);
+		const html = await markdownToHtml(plugin, content, file);
+
+		// Capture hash
+		const hash = await getSHA1Hash(`${uid}::${content}`);
 
 		// Get backlinks
 		const backlinks = await getBacklinks(plugin, file);
-		
 
 		// Create the output directory if it doesn't exist
 		const pluginDir = plugin.manifest.dir;
@@ -95,7 +111,7 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 		await PathUtils.ensureDirectory(plugin, outputDir);
 
 		// Generate output filename (same as input but with .html extension)
-		const outputFilename = `${uid}.json`;
+		const outputFilename = `${hash}.json`;
 		const outputPath = `${outputDir}/${outputFilename}`;
 
 		// Craft a JSON to write
@@ -104,7 +120,10 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 			slug: slug,
 			title: file.basename,
 			content: html,
-			backlinks: backlinks
+			backlinks: backlinks,
+			hash: hash,
+			lastUpdated: updatedTimestamp,
+			raw: content
 		};
 
 		// Save the file
