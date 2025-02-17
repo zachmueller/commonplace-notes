@@ -143,7 +143,7 @@ export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, ma
 				const [link, alias] = linkText.split('|');
 				const targetFile = plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
 
-				if (targetFile instanceof TFile) {
+				if (targetFile instanceof TFile && targetFile.extension === 'md') {
 					try {
 						const uid = await plugin.frontmatterManager.getNoteUID(targetFile);
 						const contexts = await plugin.publisher.getPublishContextsForFile(targetFile);

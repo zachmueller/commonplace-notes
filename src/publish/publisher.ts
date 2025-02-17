@@ -180,7 +180,7 @@ export class Publisher {
 			return files;
 		}
 
-		const allFiles = this.plugin.app.vault.getFiles();
+		const allFiles = this.plugin.app.vault.getMarkdownFiles();
 		for (const file of allFiles) {
 			if (file.extension === 'md' && !this.isFileExcluded(file, profile)) {
 				const contexts = await this.getPublishContextsForFile(file);
