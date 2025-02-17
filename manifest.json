@@ -1,9 +1,9 @@
 {
-	"id": "commonplace-notes-publisher",
-	"name": "Commonplace Notes Publisher",
+	"id": "commonplace-notes",
+	"name": "Commonplace Notes",
 	"version": "0.1.0",
 	"minAppVersion": "1.0.0",
-	"description": "Testing stuff out",
+	"description": "Publish your notes with sliding panes and link to others notes",
 	"author": "Zach Mueller",
 	"authorUrl": "https://notes.zach.nz",
 	"fundingUrl": "https://buymeacoffee.com/zachmueller",
