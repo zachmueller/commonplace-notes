@@ -27,37 +27,17 @@ interface NoteOutputJson {
 	priorHash: string | null;
 }
 
-export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile): Promise<BacklinkInfo[]> {
-	// Get resolved links from metadata cache
-	const resolvedLinks = plugin.app.metadataCache.resolvedLinks;
-	console.log(resolvedLinks);
-	const backlinks: BacklinkInfo[] = [];
+export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile, profileId: string): Promise<BacklinkInfo[]> {
+	const connections = await plugin.publisher.getConnectedNotes(targetFile, profileId);
 
-	// Find all files that link to the current file
-	const promises = Object.entries(resolvedLinks).map(async ([sourcePath, links]) => {
-		if (links[targetFile.path]) {
-			console.log(`Found path: ${sourcePath}`);
-			const file = plugin.app.vault.getAbstractFileByPath(sourcePath);
-			if (file instanceof TFile) {
-				const fm = new FrontmatterManager(plugin.app);
-				const uid = await fm.getNoteUID(file);
-				return {
-					uid: uid,
-					slug: PathUtils.slugifyFilePath(file.path),
-					title: file.basename
-				};
-			}
-		}
-		return null;
-	});
-
-	// Wait for all promises to resolve and filter out null values
-	const results = await Promise.all(promises);
-	const filteredResults = results.filter((result): result is BacklinkInfo => result !== null);
-
-	console.log(filteredResults);
-	console.log(JSON.stringify(filteredResults));
-	return filteredResults;
+	// Filter to only include backlinks
+	return connections
+		.filter(connection => connection.isBacklink)
+		.map(connection => ({
+			uid: connection.uid,
+			slug: connection.slug,
+			title: connection.title
+		}));
 }
 
 export async function getSHA1Hash(content: string): Promise<string> {
@@ -118,7 +98,7 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin,
 		await plugin.mappingManager.saveMappings();
 
 		// Get backlinks
-		const backlinks = await getBacklinks(plugin, file);
+		const backlinks = await getBacklinks(plugin, file, profileId);
 
 		// Craft a JSON to write
 		const output: NoteOutputJson = {

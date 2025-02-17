@@ -1,3 +1,5 @@
+import { TFile } from 'obsidian';
+
 export interface CommonplaceNotesPublisherSettings {
     publishingProfiles: PublishingProfile[];
 }
@@ -30,3 +32,12 @@ export interface LocalProfileSettings {
 }
 
 export type CloudFrontInvalidationScheme = 'individual' | 'connected' | 'sinceLast' | 'all' | 'manual';
+
+export interface NoteConnection {
+    file: TFile;
+    isBacklink: boolean;
+    isOutgoingLink: boolean;
+    uid: string;
+    slug: string;
+    title: string;
+}

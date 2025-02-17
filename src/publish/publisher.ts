@@ -1,6 +1,6 @@
 import { Notice, TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPublisherPlugin from '../main';
-import { PublishingProfile } from '../types';
+import { PublishingProfile, NoteConnection } from '../types';
 import { convertNotetoJSON } from '../convert/html';
 import { pushLocalJsonsToS3 } from './awsUpload';
 import { PathUtils } from '../utils/path';
@@ -70,35 +70,71 @@ export class Publisher {
 		});
 	}
 
+	public isFileExcluded(file: TFile, profile: PublishingProfile): boolean {
+		const filePath = file.path;
+		return profile.excludedDirectories.some(dir => 
+			filePath.startsWith(dir) || filePath.includes('/' + dir + '/')
+		);
+	}
+
 	// TODO::extend this to allow for no filtering by profileId::
-	async getConnectedNotes(file: TFile, profileId: string): Promise<TFile[]> {
+	async getConnectedNotes(file: TFile, profileId: string): Promise<NoteConnection[]> {
 		const resolvedLinks = this.plugin.app.metadataCache.resolvedLinks;
-		const connected = new Set<string>();
+		const connections = new Map<string, NoteConnection>();
+		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
-		// Add outgoing links
+		if (!profile) {
+			console.error(`No profile found with id ${profileId}`);
+			return [];
+		}
+
+		// Process outgoing links
 		const outgoing = resolvedLinks[file.path] || {};
-		Object.keys(outgoing).forEach(path => connected.add(path));
-
-		// Add incoming links (backlinks)
-		Object.entries(resolvedLinks).forEach(([sourcePath, links]) => {
-			if (links[file.path]) {
-				connected.add(sourcePath);
-			}
-		});
-
-		// Convert paths to files and filter for publishing context
-		const connectedFiles: TFile[] = [];
-		for (const path of connected) {
+		for (const path of Object.keys(outgoing)) {
 			const connectedFile = this.plugin.app.vault.getAbstractFileByPath(path);
-			if (connectedFile instanceof TFile) {
+			if (connectedFile instanceof TFile && !this.isFileExcluded(connectedFile, profile)) {
 				const contexts = await this.getPublishContextsForFile(connectedFile);
 				if (contexts.includes(profileId)) {
-					connectedFiles.push(connectedFile);
+					const uid = await this.plugin.frontmatterManager.getNoteUID(connectedFile);
+					connections.set(path, {
+						file: connectedFile,
+						isBacklink: false,
+						isOutgoingLink: true,
+						uid,
+						slug: PathUtils.slugifyFilePath(connectedFile.path),
+						title: connectedFile.basename
+					});
 				}
 			}
 		}
 
-		return connectedFiles;
+		// Process incoming links (backlinks)
+		for (const [sourcePath, links] of Object.entries(resolvedLinks)) {
+			if (links[file.path]) {
+				const connectedFile = this.plugin.app.vault.getAbstractFileByPath(sourcePath);
+				if (connectedFile instanceof TFile && !this.isFileExcluded(connectedFile, profile)) {
+					const contexts = await this.getPublishContextsForFile(connectedFile);
+					if (contexts.includes(profileId)) {
+						const uid = await this.plugin.frontmatterManager.getNoteUID(connectedFile);
+						if (connections.has(sourcePath)) {
+							// Update existing connection to mark it as both incoming and outgoing
+							connections.get(sourcePath)!.isBacklink = true;
+						} else {
+							connections.set(sourcePath, {
+								file: connectedFile,
+								isBacklink: true,
+								isOutgoingLink: false,
+								uid,
+								slug: PathUtils.slugifyFilePath(connectedFile.path),
+								title: connectedFile.basename
+							});
+						}
+					}
+				}
+			}
+		}
+
+		return Array.from(connections.values());
 	}
 
 	async publishNotes(files: TFile[], profile: PublishingProfile, updatePublishTimestamp: boolean = false) {
@@ -137,10 +173,16 @@ export class Publisher {
 
 	async getAllPublishableNotes(profileId: string): Promise<TFile[]> {
 		const files: TFile[] = [];
+		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
+
+		if (!profile) {
+			console.error(`No profile found with id ${profileId}`);
+			return files;
+		}
 
 		const allFiles = this.plugin.app.vault.getFiles();
 		for (const file of allFiles) {
-			if (file.extension === 'md') {
+			if (file.extension === 'md' && !this.isFileExcluded(file, profile)) {
 				const contexts = await this.getPublishContextsForFile(file);
 				if (contexts.includes(profileId)) {
 					files.push(file);
@@ -171,6 +213,11 @@ export class Publisher {
 		const profile = await this.promptForProfile(contexts);
 		if (!profile) return;
 
+		if (this.isFileExcluded(file, profile)) {
+			console.log(`Note ${file.path} is in an excluded directory and cannot be published`);
+			return;
+		}
+
 		await this.publishNotes([file], profile);
 	}
 
@@ -184,10 +231,16 @@ export class Publisher {
 		const profile = await this.promptForProfile(contexts);
 		if (!profile) return;
 
-		const connectedNotes = await this.getConnectedNotes(file, profile.id);
-		connectedNotes.push(file); // Include the active note
+		if (this.isFileExcluded(file, profile)) {
+			new Notice('This note is in an excluded directory and cannot be published');
+			return;
+		}
 
-		await this.publishNotes(connectedNotes, profile);
+		const connections = await this.getConnectedNotes(file, profile.id);
+		const connectedFiles = connections.map(conn => conn.file);
+		connectedFiles.push(file); // Include the active note
+
+		await this.publishNotes(connectedFiles, profile);
 	}
 
 	async publishUpdates() {
