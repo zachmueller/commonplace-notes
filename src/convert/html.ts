@@ -173,7 +173,7 @@ export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, ma
 			}
 		})
 		.use(remarkRehype, { allowDangerousHtml: true })
-		.use(rehypeStringify);
+		.use(rehypeStringify, { allowDangerousHtml: true });
 
 	const result = await processor.process(markdown);
 	return result.toString();

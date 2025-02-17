@@ -1,6 +1,6 @@
 import { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
-import { Link, Text, Parent } from 'mdast';
+import { Link, Text, Parent, HTML } from 'mdast';
 import { TFile } from 'obsidian';
 import { FrontmatterManager } from '../utils/frontmatter';
 
@@ -21,7 +21,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 		const replacements: Array<{
 			index: number;
 			parent: Parent;
-			nodes: (Text | Link)[];
+			nodes: (Text | Link | HTML)[];
 		}> = [];
 
 		visit(tree, 'text', (node: Text, index, parent: Parent | null) => {
@@ -31,7 +31,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 			if (matches.length === 0) return;
 
 			promises.push((async () => {
-				const children: (Text | Link)[] = [];
+				const children: (Text | Link | HTML)[] = [];
 				let lastIndex = 0;
 
 				for (const match of matches) {
@@ -41,16 +41,27 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					}
 
 					const [fullMatch, linkText] = match;
+					const [link, alias] = linkText.split('|');
+
+					// Parse out heading if it exists
+					const [notePath, heading] = link.split('#');
+
+					const displayText = alias || heading || notePath;
 					const resolved = await options.resolveInternalLinks(linkText);
 
 					if (resolved) {
+						// For resolved/published notes
 						children.push({
 							type: 'link',
 							url: `#u=${encodeURIComponent(resolved.uid)}`,
 							children: [{ type: 'text', value: resolved.displayText || resolved.title }]
 						});
 					} else {
-						children.push({ type: 'text', value: fullMatch });
+						// For unresolved/unpublished notes
+						children.push({
+							type: 'html',
+							value: `<span class="unpublished-link">${displayText}</span>`
+						});
 					}
 
 					lastIndex = match.index! + fullMatch.length;
