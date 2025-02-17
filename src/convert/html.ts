@@ -68,7 +68,7 @@ export async function getSHA1Hash(content: string): Promise<string> {
 	return hashHex;
 }
 
-export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin, file: TFile) {
+export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin, file: TFile, profileId: string) {
 	try {
 		// Capture last updated timestamp ahead of any possible other modifications
 		const updatedTimestamp = file.stat.mtime;
@@ -111,7 +111,7 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin,
 		//   this more robust::
 
 		// Convert to HTML
-		const html = await markdownToHtml(plugin, content, file);
+		const html = await markdownToHtml(plugin, content, file, profileId);
 
 		// Update mappings
 		plugin.mappingManager.updateMappings(slug, uid, newHash);
@@ -146,7 +146,7 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin,
 	}
 }
 
-export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, markdown: string, currentFile: TFile): Promise<string> {
+export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, markdown: string, currentFile: TFile, profileId: string): Promise<string> {
 	const processor = unified()
 		.use(remarkParse)
 		.use(remarkObsidianLinks, {
@@ -158,11 +158,20 @@ export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, ma
 				if (targetFile instanceof TFile) {
 					try {
 						const uid = await plugin.frontmatterManager.getNoteUID(targetFile);
-						return {
-							uid,
-							title: targetFile.basename,
-							displayText: alias || link
-						};
+						const contexts = await plugin.publisher.getPublishContextsForFile(targetFile);
+
+						// Check if the target file is included in the current profile
+						if (contexts.includes(profileId)) {
+							return {
+								uid,
+								title: targetFile.basename,
+								displayText: alias || link,
+								published: true
+							};
+						} else {
+							// Return null if the target file is not in the current profile
+							return null;
+						}
 					} catch (error) {
 						console.error(`Failed to get UID for file ${targetFile.path}:`, error);
 						return null;

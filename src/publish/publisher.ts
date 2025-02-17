@@ -105,7 +105,7 @@ export class Publisher {
 		try {
 			// Convert all notes
 			for (const file of files) {
-				await convertNotetoJSON(this.plugin, file);
+				await convertNotetoJSON(this.plugin, file, profile.id);
 			}
 
 			// Upload to destination

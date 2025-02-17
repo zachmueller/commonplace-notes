@@ -8,6 +8,7 @@ export interface ResolvedNoteInfo {
 	uid: string;
 	title: string;
 	displayText?: string;
+	published: boolean;
 }
 
 export interface ObsidianLinksOptions {
@@ -50,14 +51,22 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					const resolved = await options.resolveInternalLinks(linkText);
 
 					if (resolved) {
-						// For resolved/published notes
-						children.push({
-							type: 'link',
-							url: `#u=${encodeURIComponent(resolved.uid)}`,
-							children: [{ type: 'text', value: resolved.displayText || resolved.title }]
-						});
+						if (resolved.published) {
+							// For resolved and published notes
+							children.push({
+								type: 'link',
+								url: `#u=${encodeURIComponent(resolved.uid)}`,
+								children: [{ type: 'text', value: resolved.displayText || resolved.title }]
+							});
+						} else {
+							// For resolved but unpublished notes
+							children.push({
+								type: 'html',
+								value: `<span class="unpublished-link">${displayText}</span>`
+							});
+						}
 					} else {
-						// For unresolved/unpublished notes
+						// For unresolved notes (same as before)
 						children.push({
 							type: 'html',
 							value: `<span class="unpublished-link">${displayText}</span>`
