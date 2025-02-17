@@ -4,10 +4,10 @@ import { CommonplaceNotesPublisherSettingTab } from './settings';
 import { PathUtils } from './utils/path';
 import { FrontmatterManager } from './utils/frontmatter';
 import { pushLocalJsonsToS3 } from './publish/awsUpload';
-import { getBacklinks, convertCurrentNote, markdownToHtml } from './convert/html';
 import { refreshCredentials } from './publish/awsCredentials';
 import { CommonplaceNotesPublisherSettings } from './types';
 import { MappingManager } from './utils/mappings';
+import { Publisher } from './publish/publisher';
 
 const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
     publishingProfiles: [{
@@ -33,6 +33,7 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 	settings: CommonplaceNotesPublisherSettings;
 	frontmatterManager: FrontmatterManager;
 	mappingManager: MappingManager;
+	publisher: Publisher;
 
 	async onload() {
 		// Initialize settings
@@ -43,22 +44,7 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 		this.frontmatterManager = new FrontmatterManager(this.app);
 		this.mappingManager = new MappingManager(this);
 		await this.mappingManager.loadMappings();
-
-		this.addCommand({
-			id: 'testing-stuff',
-			name: 'Testing stuff',
-			callback: async () => {
-				await this.test();
-			}
-		});
-
-		this.addCommand({
-			id: 'convert-note-to-html',
-			name: 'Convert current note to HTML',
-			callback: async () => {
-				await convertCurrentNote(this);
-			}
-		});
+		this.publisher = new Publisher(this);
 
 		this.addCommand({
 			id: 'refresh-credentials',
@@ -70,17 +56,46 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'publish-note',
-			name: 'Publish note to S3',
-			callback: async () => {
-				// TODO::update this to extract the profile from the note itself::
-				await pushLocalJsonsToS3(this, this.settings.publishingProfiles[0].id);
+			id: 'publish-current-note',
+			name: 'Publish current note',
+			checkCallback: (checking: boolean) => {
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!activeView?.file) return false;
+				if (checking) return true;
+				
+				this.publisher.publishSingle(activeView.file);
+				return true;
 			}
 		});
-	}
 
-	private test() {
-		//console.log(getBacklinks());
+		this.addCommand({
+			id: 'publish-connected-notes',
+			name: 'Publish active and connected notes',
+			checkCallback: (checking: boolean) => {
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!activeView?.file) return false;
+				if (checking) return true;
+				
+				this.publisher.publishConnected(activeView.file);
+				return true;
+			}
+		});
+
+		this.addCommand({
+			id: 'publish-updates',
+			name: 'Publish updates since last full publish',
+			callback: async () => {
+				await this.publisher.publishUpdates();
+			}
+		});
+
+		this.addCommand({
+			id: 'publish-all',
+			name: 'Publish all notes',
+			callback: async () => {
+				await this.publisher.publishAll();
+			}
+		});
 	}
 
 	async loadSettings() {

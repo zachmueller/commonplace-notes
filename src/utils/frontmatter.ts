@@ -22,10 +22,10 @@ export class FrontmatterManager {
 
 	async getNoteUID(file: TFile): Promise<string> {
 		try {
-			const existingUID = this.getFrontmatterValue(file, 'uid');
+			const existingUID = this.getFrontmatterValue(file, 'cpn-uid');
 			if (!existingUID) {
 				const newUID = generateUID();
-				this.add(file, {uid: newUID});
+				this.add(file, {"cpn-uid": newUID});
 				await this.process();
 				return newUID;
 			}

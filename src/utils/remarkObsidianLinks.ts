@@ -26,7 +26,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 
 		visit(tree, 'text', (node: Text, index, parent: Parent | null) => {
 			if (!parent) return;
-			
+
 			const matches = Array.from(node.value.matchAll(/\[\[(.*?)\]\]/g));
 			if (matches.length === 0) return;
 

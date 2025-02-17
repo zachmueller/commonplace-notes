@@ -68,17 +68,9 @@ export async function getSHA1Hash(content: string): Promise<string> {
 	return hashHex;
 }
 
-export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin) {
-	const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
-	
-	if (!activeView?.file) {
-		new Notice('No active markdown file');
-		return;
-	}
-
+export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin, file: TFile) {
 	try {
 		// Capture last updated timestamp ahead of any possible other modifications
-		const file = activeView.file;
 		const updatedTimestamp = file.stat.mtime;
 
 		// Capture UID of the note
@@ -99,10 +91,8 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 
 		// Calculate new hash
 		const newHash = await getSHA1Hash(`${uid}::${content}`);
-		//const hash = await getSHA1Hash(`${uid}::${content}`);
 
 		// Get prior hash from frontmatter
-		//const priorHash = plugin.mappingManager.getPriorHash(uid);
 		let priorHash = fm.getFrontmatterValue(file, 'cpn-prior-hash');
 
 		// Only update the prior hash in frontmatter if the hash has changed
@@ -115,6 +105,10 @@ export async function convertCurrentNote(plugin: CommonplaceNotesPublisherPlugin
 		if (priorHash === newHash) {
 			priorHash = null;
 		}
+		// TODO::still remaining edge cases here where it might erroneously 
+		//   result in priorHash being null from consecutive publishings.
+		//   Need to continue deep diving to sort out proper logic to make
+		//   this more robust::
 
 		// Convert to HTML
 		const html = await markdownToHtml(plugin, content, file);
@@ -160,7 +154,7 @@ export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, ma
 			resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
 				const [link, alias] = linkText.split('|');
 				const targetFile = plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
-				
+
 				if (targetFile instanceof TFile) {
 					try {
 						const uid = await plugin.frontmatterManager.getNoteUID(targetFile);
@@ -174,13 +168,13 @@ export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, ma
 						return null;
 					}
 				}
-				
+
 				return null;
 			}
 		})
 		.use(remarkRehype, { allowDangerousHtml: true })
 		.use(rehypeStringify);
-	
+
 	const result = await processor.process(markdown);
 	return result.toString();
 }

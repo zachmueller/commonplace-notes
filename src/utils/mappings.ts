@@ -24,7 +24,7 @@ export class MappingManager {
 	async loadMappings() {
 		try {
 			await PathUtils.ensureDirectory(this.plugin, this.mappingDir);
-			
+
 			const slugToUidPath = `${this.mappingDir}/slug-to-uid.json`;
 			const uidToHashPath = `${this.mappingDir}/uid-to-hash.json`;
 
@@ -45,17 +45,12 @@ export class MappingManager {
 			console.error('Error loading mappings:', error);
 			throw error;
 		}
-
-
-		console.log(this.mappingData);
-
-
 	}
 
 	async saveMappings() {
 		try {
 			await PathUtils.ensureDirectory(this.plugin, this.mappingDir);
-			
+
 			await this.plugin.app.vault.adapter.write(
 				`${this.mappingDir}/slug-to-uid.json`,
 				JSON.stringify(this.mappingData.slugToUid)

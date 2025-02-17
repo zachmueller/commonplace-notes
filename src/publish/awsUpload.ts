@@ -22,7 +22,7 @@ export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPublisherPlugin
 	const notesDir = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes-publisher', 'notes');
 	const notesPath = `"${path.resolve(notesDir)}"`;
     const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/notes/`;
-	
+
 	// craft path for mapping files
 	const mappingDir = path.join(basePath, plugin.mappingManager.mappingDir);
 	const mappingPath = `"${mappingDir}"`;
@@ -43,7 +43,7 @@ export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPublisherPlugin
         new Notice('Successfully uploaded notes to S3');
         console.log('Notes upload output:', stdoutNotes);
         if (stderrNotes) console.error('Errors:', stderrNotes);
-		
+
 		// Upload mapping files
 		new Notice('Uploading mappings from local to S3...');
         const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
