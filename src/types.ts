@@ -8,6 +8,7 @@ export interface PublishingProfile {
     lastFullPublishTimestamp: number;
     excludedDirectories: string[];
     baseUrl: string;
+	homeNotePath: string;
     isPublic: boolean;
     publishMechanism: 'AWS CLI' | 'Local';
     awsSettings?: AWSProfileSettings;

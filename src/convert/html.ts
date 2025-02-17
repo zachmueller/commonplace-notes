@@ -139,6 +139,14 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin,
 		const outputPath = `${outputDir}/${newHash}.json`;
 		await plugin.app.vault.adapter.write(outputPath, JSON.stringify(output));
 
+		// Check if this is the home page for the current profile
+		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+		if (profile && profile.homeNotePath === file.path) {
+			const indexPath = `${outputDir}/index.json`;
+			await plugin.app.vault.adapter.write(indexPath, JSON.stringify(output));
+			new Notice(`Home page saved to ${indexPath}`);
+		}
+
 		new Notice(`Note output saved to ${outputPath}`);
 	} catch (error) {
 		new Notice(`Error converting note: ${error.message}`);

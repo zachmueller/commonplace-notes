@@ -125,6 +125,17 @@ export class CommonplaceNotesPublisherSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(profileContainer)
+			.setName('Home Page')
+			.setDesc('Path to the note that should serve as the home page')
+			.addText(text => text
+				.setPlaceholder('path/to/home-page.md')
+				.setValue(profile.homeNotePath || '')
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].homeNotePath = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(profileContainer)
 			.setName('Excluded directories')
 			.setDesc('One directory per line (e.g., private/)')
 			.addTextArea(text => text
@@ -249,6 +260,7 @@ export class CommonplaceNotesPublisherSettingTab extends PluginSettingTab {
 			lastFullPublishTimestamp: 0,
 			excludedDirectories: [],
 			baseUrl: '',
+			homeNotePath: '',
 			isPublic: false,
 			publishMechanism: 'AWS CLI',
 			awsSettings: {

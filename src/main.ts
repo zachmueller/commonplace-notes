@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
 		lastFullPublishTimestamp: 0,
         excludedDirectories: ['private/'],
         baseUrl: '',
+		homeNotePath: '',
         isPublic: false,
         publishMechanism: 'AWS CLI',
         awsSettings: {
