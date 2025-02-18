@@ -1,6 +1,6 @@
 import path from 'path';
 import { PathUtils } from '../utils/path';
-import CommonplaceNotesPublisherPlugin from '../main';
+import CommonplaceNotesPlugin from '../main';
 
 interface MappingData {
 	slugToUid: Record<string, string>;
@@ -8,11 +8,11 @@ interface MappingData {
 }
 
 export class MappingManager {
-	private plugin: CommonplaceNotesPublisherPlugin;
+	private plugin: CommonplaceNotesPlugin;
 	private mappingData: MappingData;
 	public mappingDir: string;
 
-	constructor(plugin: CommonplaceNotesPublisherPlugin) {
+	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
 		this.mappingDir = `${plugin.manifest.dir}/mapping`;
 		this.mappingData = {

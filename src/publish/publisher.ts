@@ -1,5 +1,5 @@
 import { Notice, TFile, SuggestModal, App } from 'obsidian';
-import CommonplaceNotesPublisherPlugin from '../main';
+import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection } from '../types';
 import { convertNotetoJSON } from '../convert/html';
 import { pushLocalJsonsToS3 } from './awsUpload';
@@ -31,9 +31,9 @@ class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 }
 
 export class Publisher {
-	private plugin: CommonplaceNotesPublisherPlugin;
+	private plugin: CommonplaceNotesPlugin;
 
-	constructor(plugin: CommonplaceNotesPublisherPlugin) {
+	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
 	}
 

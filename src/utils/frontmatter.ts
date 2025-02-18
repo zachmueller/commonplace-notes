@@ -1,6 +1,6 @@
 import { TFile, App } from 'obsidian';
 import { generateUID } from './uid';
-import CommonplaceNotesPublisherPlugin from '../main';
+import CommonplaceNotesPlugin from '../main';
 
 export class FrontmatterManager {
     private queue: Map<string, Record<string, any>> = new Map();

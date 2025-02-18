@@ -1,11 +1,11 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
-import CommonplaceNotesPublisherPlugin from './main';
+import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, AWSProfileSettings } from './types';
 
-export class CommonplaceNotesPublisherSettingTab extends PluginSettingTab {
-    plugin: CommonplaceNotesPublisherPlugin;
+export class CommonplaceNotesSettingTab extends PluginSettingTab {
+    plugin: CommonplaceNotesPlugin;
 
-    constructor(app: App, plugin: CommonplaceNotesPublisherPlugin) {
+    constructor(app: App, plugin: CommonplaceNotesPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }

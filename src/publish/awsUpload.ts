@@ -1,9 +1,9 @@
 import { Notice } from 'obsidian';
 import * as path from 'path';
 import { execAsync } from '../utils/shell';
-import CommonplaceNotesPublisherPlugin from '../main';
+import CommonplaceNotesPlugin from '../main';
 
-export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPublisherPlugin, profileId: string) {
+export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPlugin, profileId: string) {
     // Get the active profile
     const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 

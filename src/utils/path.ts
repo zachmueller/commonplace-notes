@@ -1,6 +1,6 @@
 import { TFile } from 'obsidian';
 import path from 'path';
-import CommonplaceNotesPublisherPlugin from '../main';
+import CommonplaceNotesPlugin from '../main';
 
 export class PathUtils {
 	static sluggify(s: string): string {
@@ -78,7 +78,7 @@ export class PathUtils {
 			: './' + relativePath + '.html';
 	}
 
-	static async ensureDirectory(plugin: CommonplaceNotesPublisherPlugin, targetPath: string): Promise<void> {
+	static async ensureDirectory(plugin: CommonplaceNotesPlugin, targetPath: string): Promise<void> {
 		// Normalize the path to handle different path separators
 		const normalizedPath = targetPath.replace(/\\/g, '/');
 		const dirPath = path.dirname(normalizedPath);
@@ -88,7 +88,7 @@ export class PathUtils {
 		}
 	}
 
-	async deleteFilesInDirectory(plugin: CommonplaceNotesPublisherPlugin, directory: string) {
+	async deleteFilesInDirectory(plugin: CommonplaceNotesPlugin, directory: string) {
 		try {
 			const adapter = plugin.app.vault.adapter;
 			const files = await adapter.list(directory);

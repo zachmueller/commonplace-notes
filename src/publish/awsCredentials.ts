@@ -1,9 +1,9 @@
 import { Notice } from 'obsidian';
 import { execAsync } from '../utils/shell';
-import type CommonplaceNotesPublisherPlugin from '../main';
+import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 
-export async function refreshCredentials(plugin: CommonplaceNotesPublisherPlugin, profileId: string) {
+export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profileId: string) {
     try {
         const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
         if (!profile) {

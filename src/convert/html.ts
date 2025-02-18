@@ -3,7 +3,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeStringify from 'rehype-stringify';
-import CommonplaceNotesPublisherPlugin from '../main';
+import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from '../utils/path';
 import { generateUID } from '../utils/uid';
 import { FrontmatterManager } from '../utils/frontmatter';
@@ -27,7 +27,7 @@ interface NoteOutputJson {
 	priorHash: string | null;
 }
 
-export async function getBacklinks(plugin: CommonplaceNotesPublisherPlugin, targetFile: TFile, profileId: string): Promise<BacklinkInfo[]> {
+export async function getBacklinks(plugin: CommonplaceNotesPlugin, targetFile: TFile, profileId: string): Promise<BacklinkInfo[]> {
 	const connections = await plugin.publisher.getConnectedNotes(targetFile, profileId);
 
 	// Filter to only include backlinks
@@ -48,7 +48,7 @@ export async function getSHA1Hash(content: string): Promise<string> {
 	return hashHex;
 }
 
-export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin, file: TFile, profileId: string) {
+export async function convertNotetoJSON(plugin: CommonplaceNotesPlugin, file: TFile, profileId: string) {
 	try {
 		// Capture last updated timestamp ahead of any possible other modifications
 		const updatedTimestamp = file.stat.mtime;
@@ -135,7 +135,7 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin,
 	}
 }
 
-export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, markdown: string, currentFile: TFile, profileId: string): Promise<string> {
+export async function markdownToHtml(plugin: CommonplaceNotesPlugin, markdown: string, currentFile: TFile, profileId: string): Promise<string> {
 	const processor = unified()
 		.use(remarkParse)
 		.use(remarkObsidianLinks, {

@@ -1,6 +1,6 @@
 import { TFile } from 'obsidian';
 
-export interface CommonplaceNotesPublisherSettings {
+export interface CommonplaceNotesSettings {
     publishingProfiles: PublishingProfile[];
 }
 

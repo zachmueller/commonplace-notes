@@ -1,15 +1,15 @@
 import { Plugin, MarkdownView, Notice, App, TFile } from 'obsidian';
 import { execAsync } from './utils/shell';
-import { CommonplaceNotesPublisherSettingTab } from './settings';
+import { CommonplaceNotesSettingTab } from './settings';
 import { PathUtils } from './utils/path';
 import { FrontmatterManager } from './utils/frontmatter';
 import { pushLocalJsonsToS3 } from './publish/awsUpload';
 import { refreshCredentials } from './publish/awsCredentials';
-import { CommonplaceNotesPublisherSettings } from './types';
+import { CommonplaceNotesSettings } from './types';
 import { MappingManager } from './utils/mappings';
 import { Publisher } from './publish/publisher';
 
-const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
+const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -30,8 +30,8 @@ const DEFAULT_SETTINGS: CommonplaceNotesPublisherSettings = {
     }]
 };
 
-export default class CommonplaceNotesPublisherPlugin extends Plugin {
-	settings: CommonplaceNotesPublisherSettings;
+export default class CommonplaceNotesPlugin extends Plugin {
+	settings: CommonplaceNotesSettings;
 	frontmatterManager: FrontmatterManager;
 	mappingManager: MappingManager;
 	publisher: Publisher;
@@ -39,7 +39,7 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 	async onload() {
 		// Initialize settings
 		await this.loadSettings();
-		this.addSettingTab(new CommonplaceNotesPublisherSettingTab(this.app, this));
+		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
 
 		// Initialize classes
 		this.frontmatterManager = new FrontmatterManager(this.app);
@@ -108,6 +108,6 @@ export default class CommonplaceNotesPublisherPlugin extends Plugin {
 	}
 
 	onunload() {
-		console.log('Unloading CommonplaceNotesPublisherPlugin');
+		console.log('Unloading CommonplaceNotesPlugin');
 	}
 }
