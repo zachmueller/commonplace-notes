@@ -20,16 +20,32 @@ export class FrontmatterManager {
 		return fm ? fm[key] : null;
 	}
 
-	async getNoteUID(file: TFile): Promise<string> {
+	hasFrontmatter(file: TFile): boolean {
+		return this.getFrontmatter(file) !== undefined;
+	}
+
+	async getNoteUID(file: TFile): Promise<string | null> {
 		try {
+			// First check if there's any frontmatter at all
+			if (!this.hasFrontmatter(file)) {
+				return null;
+			}
+
 			const existingUID = this.getFrontmatterValue(file, 'cpn-uid');
-			if (!existingUID) {
+			if (existingUID) {
+				return existingUID;
+			}
+
+			// Only add new UID if cpn-publish-contexts contains a value
+			const publishContexts = this.getFrontmatterValue(file, 'cpn-publish-contexts');
+			if (Array.isArray(publishContexts) && publishContexts.length > 0) {
 				const newUID = generateUID();
 				this.add(file, {"cpn-uid": newUID});
 				await this.process();
 				return newUID;
 			}
-			return existingUID;
+
+			return null;
 		} catch (error) {
 			console.error('Error getting or setting note UID:', error);
 			throw error;

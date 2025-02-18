@@ -56,6 +56,7 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPublisherPlugin,
 		// Capture UID of the note
 		const fm = new FrontmatterManager(plugin.app);
 		const uid = await fm.getNoteUID(file);
+		if (uid === null) return;
 		const cache = plugin.app.metadataCache.getFileCache(file);
 
 		// Generate slug for the current file
@@ -146,6 +147,7 @@ export async function markdownToHtml(plugin: CommonplaceNotesPublisherPlugin, ma
 				if (targetFile instanceof TFile && targetFile.extension === 'md') {
 					try {
 						const uid = await plugin.frontmatterManager.getNoteUID(targetFile);
+						if (uid === null) return null;
 						const contexts = await plugin.publisher.getPublishContextsForFile(targetFile);
 
 						// Check if the target file is included in the current profile

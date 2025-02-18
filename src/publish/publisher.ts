@@ -96,6 +96,7 @@ export class Publisher {
 				const contexts = await this.getPublishContextsForFile(connectedFile);
 				if (contexts.includes(profileId)) {
 					const uid = await this.plugin.frontmatterManager.getNoteUID(connectedFile);
+					if (uid === null) continue;
 					connections.set(path, {
 						file: connectedFile,
 						isBacklink: false,
@@ -116,6 +117,7 @@ export class Publisher {
 					const contexts = await this.getPublishContextsForFile(connectedFile);
 					if (contexts.includes(profileId)) {
 						const uid = await this.plugin.frontmatterManager.getNoteUID(connectedFile);
+						if (uid === null) continue;
 						if (connections.has(sourcePath)) {
 							// Update existing connection to mark it as both incoming and outgoing
 							connections.get(sourcePath)!.isBacklink = true;
