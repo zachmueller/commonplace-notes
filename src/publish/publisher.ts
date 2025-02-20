@@ -148,7 +148,10 @@ export class Publisher {
 
 			// Upload to destination
 			if (profile.publishMechanism === 'AWS CLI') {
-				await pushLocalJsonsToS3(this.plugin, profile.id);
+				const awsUpload = await pushLocalJsonsToS3(this.plugin, profile.id);
+				// TODO::instead should prompt user whether to delete local copies of processed notes::
+				// (for now just stopping here to not delete anything)
+				if (!awsUpload) return;
 			} else {
 				// Handle local publishing when implemented
 			}
