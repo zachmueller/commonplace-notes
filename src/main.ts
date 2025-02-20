@@ -52,7 +52,11 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			name: 'Refresh AWS credentials',
 			callback: async () => {
 				// TODO::update this to prompt user for the profile::
-				await refreshCredentials(this, this.settings.publishingProfiles[0].id);
+				const profile = await this.publisher.promptForProfile();
+				if (!profile) {
+					throw new Error('No valid profile selected');
+				}
+				await refreshCredentials(this, profile.id);
 			}
 		});
 
