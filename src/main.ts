@@ -101,6 +101,48 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				await this.publisher.publishAll();
 			}
 		});
+
+		this.addCommand({
+			id: 'copy-active-note-published-url',
+			name: 'Copy link to current note URL',
+			callback: async () => {
+				// check that file is active
+				const file = this.app.workspace.getActiveFile();
+				if (!file) {
+					new Notice('No active file');
+					return;
+				}
+
+				// check publishing contexts
+				const contexts = await this.publisher.getPublishContextsForFile(file);
+				if (contexts.length === 0) {
+					new Notice('No publishing contexts defined for this note');
+					return;
+				}
+
+				// prompt to select profile, if needed
+				const profile = await this.publisher.promptForProfile(contexts);
+				if (!profile) return;
+
+				// check for baseUrl setting
+				if (!profile.baseUrl) {
+					new Notice(`No baseUrl defined for profile ${profile.id}`);
+					return;
+				}
+
+				// craft URL
+				const uid = await this.frontmatterManager.getNoteUID(file);
+				const base = profile.baseUrl.replace(/\/?$/, '/');
+				const url = `${base}#u=${uid}`;
+				try {
+					await navigator.clipboard.writeText(url);
+					new Notice('Note URL copied');
+				} catch (error) {
+					console.error('Error copying note URL:', error);
+					throw new Error('Error copying note URL, check console');
+				}
+			}
+		});
 	}
 
 	async loadSettings() {
