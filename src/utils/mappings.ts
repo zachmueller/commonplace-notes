@@ -9,37 +9,27 @@ interface MappingData {
 
 export class MappingManager {
 	private plugin: CommonplaceNotesPlugin;
-	private mappingData: MappingData;
+	private mappingData: Record<string, MappingData>;
 	public mappingDir: string;
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
 		this.mappingDir = `${plugin.manifest.dir}/mapping`;
-		this.mappingData = {
-			slugToUid: {},
-			uidToHash: {}
-		};
+		this.mappingData = {};
+	}
+
+	private getProfileMappingDir(profileId: string): string {
+		return `${this.mappingDir}/${profileId}`;
 	}
 
 	async loadMappings() {
 		try {
+			// Ensure base mapping directory exists
 			await PathUtils.ensureDirectory(this.plugin, this.mappingDir);
 
-			const slugToUidPath = `${this.mappingDir}/slug-to-uid.json`;
-			const uidToHashPath = `${this.mappingDir}/uid-to-hash.json`;
-
-			try {
-				const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
-				this.mappingData.slugToUid = JSON.parse(slugToUidContent);
-			} catch (e) {
-				this.mappingData.slugToUid = {};
-			}
-
-			try {
-				const uidToHashContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
-				this.mappingData.uidToHash = JSON.parse(uidToHashContent);
-			} catch (e) {
-				this.mappingData.uidToHash = {};
+			// Load mappings for each profile
+			for (const profile of this.plugin.settings.publishingProfiles) {
+				await this.loadProfileMappings(profile.id);
 			}
 		} catch (error) {
 			console.error('Error loading mappings:', error);
@@ -47,31 +37,78 @@ export class MappingManager {
 		}
 	}
 
+	private async loadProfileMappings(profileId: string) {
+		const profileDir = this.getProfileMappingDir(profileId);
+		await PathUtils.ensureDirectory(this.plugin, profileDir);
+
+		const slugToUidPath = `${profileDir}/slug-to-uid.json`;
+		const uidToHashPath = `${profileDir}/uid-to-hash.json`;
+
+		try {
+			const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
+			const uidToHashContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
+
+			this.mappingData[profileId] = {
+				slugToUid: JSON.parse(slugToUidContent),
+				uidToHash: JSON.parse(uidToHashContent)
+			};
+		} catch (e) {
+			// Initialize empty mappings if files don't exist
+			this.mappingData[profileId] = {
+				slugToUid: {},
+				uidToHash: {}
+			};
+		}
+	}
+
 	async saveMappings() {
 		try {
-			await PathUtils.ensureDirectory(this.plugin, this.mappingDir);
-
-			await this.plugin.app.vault.adapter.write(
-				`${this.mappingDir}/slug-to-uid.json`,
-				JSON.stringify(this.mappingData.slugToUid)
-			);
-
-			await this.plugin.app.vault.adapter.write(
-				`${this.mappingDir}/uid-to-hash.json`,
-				JSON.stringify(this.mappingData.uidToHash)
-			);
+			// Save mappings for each profile
+			for (const profileId of Object.keys(this.mappingData)) {
+				await this.saveProfileMappings(profileId);
+			}
 		} catch (error) {
 			console.error('Error saving mappings:', error);
 			throw error;
 		}
 	}
 
-	updateMappings(slug: string, uid: string, hash: string) {
-		this.mappingData.slugToUid[slug] = uid;
-		this.mappingData.uidToHash[uid] = hash;
+	private async saveProfileMappings(profileId: string) {
+		const profileDir = this.getProfileMappingDir(profileId);
+		await PathUtils.ensureDirectory(this.plugin, profileDir);
+
+		const data = this.mappingData[profileId];
+		if (!data) return;
+
+		await this.plugin.app.vault.adapter.write(
+			`${profileDir}/slug-to-uid.json`,
+			JSON.stringify(data.slugToUid)
+		);
+
+		await this.plugin.app.vault.adapter.write(
+			`${profileDir}/uid-to-hash.json`,
+			JSON.stringify(data.uidToHash)
+		);
 	}
 
-	getPriorHash(uid: string): string | null {
-		return this.mappingData.uidToHash[uid] || null;
+	updateMappings(profileId: string, slug: string, uid: string, hash: string) {
+		// Initialize profile mappings if they don't exist
+		if (!this.mappingData[profileId]) {
+			this.mappingData[profileId] = {
+				slugToUid: {},
+				uidToHash: {}
+			};
+		}
+
+		this.mappingData[profileId].slugToUid[slug] = uid;
+		this.mappingData[profileId].uidToHash[uid] = hash;
+	}
+
+	getPriorHash(profileId: string, uid: string): string | null {
+		return this.mappingData[profileId]?.uidToHash[uid] || null;
+	}
+
+	getUidFromSlug(profileId: string, slug: string): string | null {
+		return this.mappingData[profileId]?.slugToUid[slug] || null;
 	}
 }

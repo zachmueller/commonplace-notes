@@ -95,7 +95,7 @@ export async function convertNotetoJSON(plugin: CommonplaceNotesPlugin, file: TF
 		const html = await markdownToHtml(plugin, content, file, profileId);
 
 		// Update mappings
-		plugin.mappingManager.updateMappings(slug, uid, newHash);
+		plugin.mappingManager.updateMappings(profileId, slug, uid, newHash);
 		await plugin.mappingManager.saveMappings();
 
 		// Get backlinks

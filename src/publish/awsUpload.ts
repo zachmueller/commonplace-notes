@@ -19,19 +19,19 @@ export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPlugin, profile
 		// TODO::extract this directory setup into the main plugin class for standard access pattern::
 		const basePath = (plugin.app.vault.adapter as any).basePath;
 		const notesDir = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes', 'notes');
-		const mappingDir = path.join(basePath, plugin.mappingManager.mappingDir);
+		const profileMappingDir = path.join(basePath, plugin.mappingManager.mappingDir, profileId);
 
 		// Verify directories exist before attempting upload
 		if (!plugin.app.vault.adapter.exists(notesDir)) {
 			throw new Error(`Notes directory does not exist: ${notesDir}`);
 		}
-		if (!plugin.app.vault.adapter.exists(mappingDir)) {
-			throw new Error(`Mapping directory does not exist: ${mappingDir}`);
+		if (!plugin.app.vault.adapter.exists(profileMappingDir)) {
+			throw new Error(`Mapping directory does not exist: ${profileMappingDir}`);
 		}
 
 		const notesPath = `"${path.resolve(notesDir)}"`;
 		const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/notes/`;
-		const mappingPath = `"${mappingDir}"`;
+		const mappingPath = `"${profileMappingDir}"`;
 		const mappingS3Prefix = `s3://${profile.awsSettings.bucketName}/static/mapping/`;
 
 		// standard options to send to the shell
