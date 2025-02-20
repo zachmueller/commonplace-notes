@@ -236,6 +236,19 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('CloudFront Distribution ID')
+			.setDesc('The ID of your CloudFront distribution for cache invalidation')
+			.addText(text => text
+				.setPlaceholder('E1234ABCDEF5GH')
+				.setValue(profile.awsSettings?.cloudFrontDistributionId || '')
+				.onChange(async (value) => {
+					if (profile.awsSettings) {
+						profile.awsSettings.cloudFrontDistributionId = value;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		new Setting(containerEl)
 			.setName('Credential refresh commands')
 			.setDesc('Enter the commands to refresh AWS credentials (one per line). You can use ${awsAccountId} and ${awsProfile} as variables.')
 			.addTextArea(text => text

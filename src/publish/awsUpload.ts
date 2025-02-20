@@ -3,7 +3,11 @@ import * as path from 'path';
 import { execAsync } from '../utils/shell';
 import CommonplaceNotesPlugin from '../main';
 
-export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPlugin, profileId: string): Promise<boolean> {
+export async function pushLocalJsonsToS3(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+	triggerCloudFrontInvalidation: boolean = false
+): Promise<boolean> {
     try {
 		// Get the active profile
 		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
@@ -66,10 +70,43 @@ export async function pushLocalJsonsToS3(plugin: CommonplaceNotesPlugin, profile
         console.log('Mappings upload output:', stdoutMapping);
         new Notice('Mapping files successfully uploaded to S3');
 
+		// Trigger CloudFront cache invalidation if configured to
+		if (triggerCloudFrontInvalidation) {
+			await createCloudFrontInvalidation(plugin, profileId);
+		}
+
 		return true;
     } catch (error) {
         console.error('Error executing AWS command:', error);
 		new Notice(`Upload failed: ${error.message}`);
 		return false;
     }
+}
+
+async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, profileId: string): Promise<boolean> {
+	try {
+		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+		if (!profile?.awsSettings?.cloudFrontDistributionId) {
+			console.log('No CloudFront distribution ID configured, skipping invalidation');
+			return false;
+		}
+
+		const cmd = `aws cloudfront create-invalidation --distribution-id ${profile.awsSettings.cloudFrontDistributionId} --paths "/*" --profile ${profile.awsSettings.awsProfile}`;
+		
+		new Notice('Creating CloudFront invalidation...');
+		const { stdout, stderr } = await execAsync(cmd);
+		
+		if (stderr) {
+			console.error('CloudFront invalidation error:', stderr);
+			throw new Error(stderr);
+		}
+
+		console.log('CloudFront invalidation created:', stdout);
+		new Notice('CloudFront invalidation created successfully');
+		return true;
+	} catch (error) {
+		console.error('Failed to create CloudFront invalidation:', error);
+		new Notice('Failed to create CloudFront invalidation: ' + error.message);
+		return false;
+	}
 }

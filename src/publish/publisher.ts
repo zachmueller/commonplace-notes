@@ -1,6 +1,6 @@
 import { Notice, TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
-import { PublishingProfile, NoteConnection } from '../types';
+import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
 import { convertNotetoJSON } from '../convert/html';
 import { pushLocalJsonsToS3 } from './awsUpload';
 import { PathUtils } from '../utils/path';
@@ -139,7 +139,12 @@ export class Publisher {
 		return Array.from(connections.values());
 	}
 
-	async publishNotes(files: TFile[], profile: PublishingProfile, updatePublishTimestamp: boolean = false) {
+	async publishNotes(
+		files: TFile[],
+		profile: PublishingProfile,
+		updatePublishTimestamp: boolean = false,
+		triggerCloudFrontInvalidation: boolean = false
+	) {
 		try {
 			// Convert all notes
 			for (const file of files) {
@@ -148,10 +153,13 @@ export class Publisher {
 
 			// Upload to destination
 			if (profile.publishMechanism === 'AWS CLI') {
-				const awsUpload = await pushLocalJsonsToS3(this.plugin, profile.id);
+				const awsUpload = await pushLocalJsonsToS3(this.plugin, profile.id, triggerCloudFrontInvalidation);
 				// TODO::instead should prompt user whether to delete local copies of processed notes::
 				// (for now just stopping here to not delete anything)
-				if (!awsUpload) return;
+				if (!awsUpload) {
+					new Notice('Local note JSON files not deleted due to upload failure, you may need to clear out the directory or try uploading again.');
+					return;
+				}
 			} else {
 				// Handle local publishing when implemented
 			}
@@ -208,6 +216,29 @@ export class Publisher {
 		);
 	}
 
+	private shouldInvalidateCloudFront(profile: PublishingProfile, publishType: CloudFrontInvalidationScheme): boolean {
+		if (!profile.awsSettings?.cloudFrontDistributionId) return false;
+		if (profile.awsSettings.cloudFrontInvalidationScheme === 'manual') return false;
+		
+		// Define hierarchy of publish types
+		const hierarchyLevels = {
+			'individual': 1,
+			'connected': 2,
+			'sinceLast': 3,
+			'all': 4,
+			'manual': 5,
+		};
+
+		// Get the level of the current publish type
+		const currentLevel = hierarchyLevels[publishType];
+		
+		// Get the level set in the profile settings
+		const configuredLevel = hierarchyLevels[profile.awsSettings.cloudFrontInvalidationScheme];
+
+		// Return true if the current publish level is at or above the configured level
+		return currentLevel >= configuredLevel;
+	}
+
 	async publishSingle(file: TFile) {
 		const contexts = await this.getPublishContextsForFile(file);
 		if (contexts.length === 0) {
@@ -223,7 +254,8 @@ export class Publisher {
 			return;
 		}
 
-		await this.publishNotes([file], profile);
+		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'individual');
+		await this.publishNotes([file], profile, false, triggerInvalidation);
 	}
 
 	async publishConnected(file: TFile) {
@@ -245,7 +277,8 @@ export class Publisher {
 		const connectedFiles = connections.map(conn => conn.file);
 		connectedFiles.push(file); // Include the active note
 
-		await this.publishNotes(connectedFiles, profile);
+		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'connected');
+		await this.publishNotes(connectedFiles, profile, false, triggerInvalidation);
 	}
 
 	async publishUpdates() {
@@ -258,7 +291,8 @@ export class Publisher {
 			return;
 		}
 
-		await this.publishNotes(updatedNotes, profile, true);
+		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'sinceLast');
+		await this.publishNotes(updatedNotes, profile, true, triggerInvalidation);
 	}
 
 	async publishAll() {
@@ -271,6 +305,7 @@ export class Publisher {
 			return;
 		}
 
-		await this.publishNotes(allNotes, profile, true);
+		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'all');
+		await this.publishNotes(allNotes, profile, true, triggerInvalidation);
 	}
 }
