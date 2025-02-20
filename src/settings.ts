@@ -87,6 +87,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.publishingProfiles[index].name = value;
 					await this.plugin.saveSettings();
+				})
+				.inputEl.addEventListener('blur', async () => {
 					// Refresh display to update name
 					this.display();
 				}));
