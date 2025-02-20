@@ -29,6 +29,11 @@ export class MappingManager {
 
 			// Load mappings for each profile
 			for (const profile of this.plugin.settings.publishingProfiles) {
+				const profileDir = this.getProfileMappingDir(profile.id);
+				
+				// Ensure profile directory exists
+				await PathUtils.ensureDirectory(this.plugin, profileDir);
+				
 				await this.loadProfileMappings(profile.id);
 			}
 		} catch (error) {
@@ -53,11 +58,12 @@ export class MappingManager {
 				uidToHash: JSON.parse(uidToHashContent)
 			};
 		} catch (e) {
-			// Initialize empty mappings if files don't exist
+			// Initialize empty mappings and create files
 			this.mappingData[profileId] = {
 				slugToUid: {},
 				uidToHash: {}
 			};
+			await this.saveProfileMappings(profileId);
 		}
 	}
 

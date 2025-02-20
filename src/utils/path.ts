@@ -81,10 +81,26 @@ export class PathUtils {
 	static async ensureDirectory(plugin: CommonplaceNotesPlugin, targetPath: string): Promise<void> {
 		// Normalize the path to handle different path separators
 		const normalizedPath = targetPath.replace(/\\/g, '/');
-		const dirPath = path.dirname(normalizedPath);
 
-		if (!(await plugin.app.vault.adapter.exists(dirPath))) {
-			await plugin.app.vault.adapter.mkdir(dirPath);
+		// Split the path into parts
+		const parts = normalizedPath.split('/');
+		let currentPath = '';
+
+		// Recursively create each directory in the path
+		for (const part of parts) {
+			if (part) {  // Skip empty parts
+				currentPath += (currentPath ? '/' : '') + part;
+				if (!(await plugin.app.vault.adapter.exists(currentPath))) {
+					try {
+						await plugin.app.vault.adapter.mkdir(currentPath);
+					} catch (error) {
+						// Ignore errors if directory already exists
+						if (error.code !== 'EEXIST') {
+							throw error;
+						}
+					}
+				}
+			}
 		}
 	}
 
