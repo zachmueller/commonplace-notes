@@ -132,8 +132,12 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 				// craft URL
 				const uid = await this.frontmatterManager.getNoteUID(file);
+				if (!uid) {
+					new Notice(`Did not find UID for note '${file.basename}'`);
+					return;
+				}
 				const base = profile.baseUrl.replace(/\/?$/, '/');
-				const url = `${base}#u=${uid}`;
+				const url = `${base}#u=${encodeURIComponent(uid)}`;
 				try {
 					await navigator.clipboard.writeText(url);
 					new Notice('Note URL copied');
