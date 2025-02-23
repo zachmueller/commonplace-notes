@@ -138,6 +138,16 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(profileContainer)
+			.setName('Include site-wide content search')
+			.setDesc('Choose whether to upload central content index data set to enable search on your published notes')
+			.addToggle(toggle => toggle
+				.setValue(profile.publishContentIndex ?? false)
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].publishContentIndex = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(profileContainer)
 			.setName('Excluded directories')
 			.setDesc('One directory per line (e.g., private/)')
 			.addTextArea(text => text
@@ -277,6 +287,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			baseUrl: '',
 			homeNotePath: '',
 			isPublic: false,
+			publishContentIndex:true,
 			publishMechanism: 'AWS CLI',
 			awsSettings: {
 				awsAccountId: '',

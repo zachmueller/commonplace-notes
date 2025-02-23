@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
         baseUrl: '',
 		homeNotePath: '',
         isPublic: false,
+		publishContentIndex: true,
         publishMechanism: 'AWS CLI',
         awsSettings: {
             awsAccountId: '123456789012',
@@ -154,6 +155,31 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	async rebuildContentIndex(): Promise<void> {
+		/*
+		Access this in the Obsidian console via:
+const cpn = app.plugins.plugins['commonplace-notes'];
+cpn.rebuildContentIndex();
+		*/
+		// Process each note
+		const profile = await this.publisher.promptForProfile();
+		if (!profile) return;
+		const files = await this.publisher.getAllPublishableNotes(profile.id);
+		for (const file of files) {
+			if (profile.publishContentIndex) {
+				const uid = await this.frontmatterManager.getNoteUID(file);
+				if (uid) {
+					console.log(`Processing ${file.basename}`);
+					await this.publisher.contentIndexManager.queueUpdate(profile.id, file, uid);
+				}
+			}
+		}
+
+		// apply queued updates
+		await this.publisher.contentIndexManager.applyQueuedUpdates(profile.id);
+		new Notice(`Reprocessed contentIndex.json for profile ${profile.id}`);
 	}
 
 	onunload() {

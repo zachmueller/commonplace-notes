@@ -4,6 +4,7 @@ import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from 
 import { convertNotetoJSON } from '../convert/html';
 import { pushLocalJsonsToS3 } from './awsUpload';
 import { PathUtils } from '../utils/path';
+import { ContentIndexManager } from '../utils/contentIndex';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	profiles: PublishingProfile[];
@@ -32,9 +33,15 @@ class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 
 export class Publisher {
 	private plugin: CommonplaceNotesPlugin;
+	public contentIndexManager: ContentIndexManager;
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
+		this.contentIndexManager = new ContentIndexManager(plugin);
+	}
+
+	public getContentIndexPath(profileId: string): string {
+		return this.contentIndexManager.getContentIndexPath(profileId);
 	}
 
 	async getPublishContextsForFile(file: TFile): Promise<string[]> {
@@ -146,10 +153,19 @@ export class Publisher {
 		triggerCloudFrontInvalidation: boolean = false
 	) {
 		try {
-			// Convert all notes
+			// Process each note
 			for (const file of files) {
+				if (profile.publishContentIndex) {
+					const uid = await this.plugin.frontmatterManager.getNoteUID(file);
+					if (uid) {
+						await this.contentIndexManager.queueUpdate(profile.id, file, uid);
+					}
+				}
 				await convertNotetoJSON(this.plugin, file, profile.id);
 			}
+
+			// Apply queued content index updates
+			await this.contentIndexManager.applyQueuedUpdates(profile.id);
 
 			// Upload to destination
 			if (profile.publishMechanism === 'AWS CLI') {

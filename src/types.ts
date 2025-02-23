@@ -12,6 +12,7 @@ export interface PublishingProfile {
     baseUrl: string;
 	homeNotePath: string;
     isPublic: boolean;
+	publishContentIndex: boolean;
     publishMechanism: 'AWS CLI' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;

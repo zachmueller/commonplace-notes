@@ -70,6 +70,28 @@ export async function pushLocalJsonsToS3(
         console.log('Mappings upload output:', stdoutMapping);
         new Notice('Mapping files successfully uploaded to S3');
 
+		if (profile.publishContentIndex) {
+			new Notice('Uploading content index from local to S3...');
+
+			// Add content index path to upload
+			const contentIndexPath = path.join(
+				basePath,
+				plugin.publisher.getContentIndexPath(profileId)
+			);
+			const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/static/content/`;
+
+			// Upload content index
+			const cmdContentIndex = `aws s3 cp "${contentIndexPath}" ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
+			console.log('Executing command:', cmdContentIndex);
+
+			const { stdout: stdoutContentIndex, stderr: stderrContentIndex } = 
+				await execAsync(cmdContentIndex, options);
+			if (stderrContentIndex) {
+				console.log(`stdout from aws command: ${stdoutContentIndex}`);
+				throw new Error(`Content index upload failed: ${stderrContentIndex}`);
+			}
+		}
+
 		// Trigger CloudFront cache invalidation if configured to
 		if (triggerCloudFrontInvalidation) {
 			await createCloudFrontInvalidation(plugin, profileId);
