@@ -149,6 +149,7 @@ export class Publisher {
 			for (const file of files) {
 				await this.plugin.noteManager.queueNote(file, profile.id);
 			}
+			new Notice(`${files.length} notes processed`);
 
 			// Commit all queued notes to staging
 			await this.plugin.noteManager.commitPendingNotes(profile.id);
