@@ -305,7 +305,7 @@ export class Publisher {
 		if (!profile) return;
 
 		if (this.isFileExcluded(file, profile)) {
-			Logger.info(`Note ${file.path} is in an excluded directory and cannot be published`);
+			Logger.debug(`Note ${file.path} is in an excluded directory and cannot be published`);
 			return;
 		}
 

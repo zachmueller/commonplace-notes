@@ -37,7 +37,9 @@ export class MappingManager {
 		const uidToHashPath = `${mappingDir}/uid-to-hash.json`;
 
 		try {
+			Logger.debug(`Loading mapping from ${slugToUidPath}`);
 			const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
+			Logger.debug(`Loading mapping from ${uidToHashPath}`);
 			const uidToHashContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
 
 			this.mappingData[profileId] = {
@@ -46,6 +48,7 @@ export class MappingManager {
 			};
 		} catch (e) {
 			// Initialize empty mappings and create files
+			Logger.warn(`Failed to load mappings for profile ${profileId}, falling back to empty mapping`);
 			this.mappingData[profileId] = {
 				slugToUid: {},
 				uidToHash: {}
@@ -67,6 +70,7 @@ export class MappingManager {
 	}
 
 	private async saveProfileMappings(profileId: string) {
+		Logger.debug(`Saving mappings for profile ${profileId} to file`);
 		const mappingDir = this.plugin.profileManager.getMappingDir(profileId);
 		await PathUtils.ensureDirectory(this.plugin, mappingDir);
 

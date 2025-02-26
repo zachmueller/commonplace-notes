@@ -36,9 +36,7 @@ export async function pushLocalJsonsToS3(
 			throw new Error(`Mapping directory does not exist: ${mappingDir}`);
 		}
 
-		Logger.info(stagedNotesDir);
 		const notesPath = `"${path.resolve(path.join(basePath, stagedNotesDir))}"`;
-		Logger.info(path.resolve(stagedNotesDir));
 		// Add prefix to S3 paths if configured
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 		const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}notes/`;
@@ -51,28 +49,28 @@ export async function pushLocalJsonsToS3(
 		// Upload notes
 		new Notice('Uploading notes from local to S3...');
 		const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-		Logger.info('Executing command:', cmdNotes);
+		Logger.debug('Executing command:', cmdNotes);
 
 		const { stdout: stdoutNotes, stderr: stderrNotes } = await execAsync(cmdNotes, options);
 		if (stderrNotes) {
 			// TODO::generalize aws CLI calls to standardize error handling::
-			Logger.info(`stdout from aws command: ${stdoutNotes}`);
+			Logger.debug(`stdout from aws command: ${stdoutNotes}`);
 			throw new Error(`Notes upload failed: ${stderrNotes}`);
 		}
-		Logger.info('Notes upload output:', stdoutNotes);
+		Logger.debug('Notes upload output:', stdoutNotes);
 		new Notice('Successfully uploaded notes to S3');
 
 		// Upload mapping files
 		new Notice('Uploading mappings from local to S3...');
 		const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-		Logger.info('Executing command:', cmdMapping);
+		Logger.debug('Executing command:', cmdMapping);
 
 		const { stdout: stdoutMapping, stderr: stderrMapping } = await execAsync(cmdMapping, options);
 		if (stderrMapping) {
-			Logger.info(`stdout from aws command: ${stdoutMapping}`);
+			Logger.debug(`stdout from aws command: ${stdoutMapping}`);
 			throw new Error(`Mapping upload failed: ${stderrMapping}`);
 		}
-		Logger.info('Mappings upload output:', stdoutMapping);
+		Logger.debug('Mappings upload output:', stdoutMapping);
 		new Notice('Mapping files successfully uploaded to S3');
 
 		// Upload content index if enabled
@@ -85,12 +83,12 @@ export async function pushLocalJsonsToS3(
 			} else {
 				const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/content/`;
 				const cmdContentIndex = `aws s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
-				Logger.info('Executing command:', cmdContentIndex);
+				Logger.debug('Executing command:', cmdContentIndex);
 
 				const { stdout: stdoutContentIndex, stderr: stderrContentIndex } = 
 					await execAsync(cmdContentIndex, options);
 				if (stderrContentIndex) {
-					Logger.info(`stdout from aws command: ${stdoutContentIndex}`);
+					Logger.debug(`stdout from aws command: ${stdoutContentIndex}`);
 					throw new Error(`Content index upload failed: ${stderrContentIndex}`);
 				}
 				new Notice('Content index successfully uploaded to S3');
@@ -114,7 +112,7 @@ async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, prof
 	try {
 		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 		if (!profile?.awsSettings?.cloudFrontDistributionId) {
-			Logger.info('No CloudFront distribution ID configured, skipping invalidation');
+			Logger.debug('No CloudFront distribution ID configured, skipping invalidation');
 			return false;
 		}
 
@@ -128,7 +126,7 @@ async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, prof
 			throw new Error(stderr);
 		}
 
-		Logger.info('CloudFront invalidation created:', stdout);
+		Logger.debug('CloudFront invalidation created:', stdout);
 		new Notice('CloudFront invalidation created successfully');
 		return true;
 	} catch (error) {

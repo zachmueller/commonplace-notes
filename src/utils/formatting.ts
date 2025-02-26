@@ -9,6 +9,7 @@ export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
 		}
 
 		// Get the cached file metadata
+		Logger.debug(`Converting ${file.basename} to plaintext`);
 		const markdown = await this.app.vault.read(file);
 		const cache = this.app.metadataCache.getFileCache(file);
 

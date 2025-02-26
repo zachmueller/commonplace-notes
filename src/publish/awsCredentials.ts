@@ -29,6 +29,7 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
             });
 
         for (const command of commands) {
+			Logger.debug(`Executing: ${command}`);
             new Notice(`Executing: ${command}`);
             await execAsync(command);
         }
@@ -41,9 +42,16 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
     }
 }
 
-export async function checkAwsCredentials() {
+export async function checkAwsCredentials(plugin: CommonplaceNotesPlugin, profileId: string) {
     try {
-        const { stdout } = await execAsync('aws sts get-caller-identity --output json');
+        const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+        if (!profile) {
+            throw new Error('No valid publishing profile found');
+        }
+
+        const cmd = `aws sts get-caller-identity --output json --profile ${profile.awsSettings?.awsProfile}`;
+		Logger.debug(`Executing: ${cmd}`);
+		const { stdout } = await execAsync(cmd);
         return JSON.parse(stdout);
     } catch (error) {
         Logger.error('Failed to check AWS credentials:', error);

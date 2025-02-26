@@ -46,6 +46,7 @@ export class ContentIndexManager {
 	async queueUpdate(profileId: string, file: TFile, uid: string) {
 		try {
 			// Get plaintext content
+			Logger.debug(`Queuing contentIndex update for file ${file.basename} (${uid}) under profile ${profileId}`);
 			let content;
 			try {
 				content = await convertMarkdownToPlaintext(file);
@@ -89,6 +90,7 @@ export class ContentIndexManager {
 
 			// Apply all queued updates
 			for (const [uid, entry] of updates) {
+				Logger.debug(`Commiting contextIndex entry for ${uid}`);
 				index[uid] = entry;
 			}
 

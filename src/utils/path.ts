@@ -112,7 +112,7 @@ export class PathUtils {
 
 			for (const file of files.files) {
 				await adapter.remove(file);
-				Logger.info(`Deleted: ${file}`);
+				Logger.debug(`Deleted: ${file}`);
 			}
 		} catch (error) {
 			Logger.error(`Error deleting files in ${directory}:`, error);

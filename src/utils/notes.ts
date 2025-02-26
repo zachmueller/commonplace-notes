@@ -16,7 +16,7 @@ interface NoteState {
 	slug: string;
 	title: string;
 	content: string;  // HTML content
-	raw: string;      // Raw Markdown content
+	raw: string;      // Raw Markdown
 	lastModified: number;
 }
 
@@ -116,7 +116,7 @@ export class NoteManager {
             const content = await this.markdownToHtml(raw, file, profileId);
 
             // Calculate hash using raw content
-            const currentHash = await this.getSHA1Hash(`${uid}::${raw}`);
+            const currentHash = await this.getSHA1Hash(`${uid}::${file.basename}::${raw}`);
             const priorHash = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-prior-hash');
 
             // Update prior hash in frontmatter if needed
