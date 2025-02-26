@@ -146,10 +146,14 @@ export class Publisher {
 		triggerCloudFrontInvalidation: boolean = false
 	) {
 		try {
+			// Load existing mappings for profile
+			this.plugin.mappingManager.loadProfileMappings(profile.id);
+
 			// Queue all notes for processing
 			for (const file of files) {
 				await this.plugin.noteManager.queueNote(file, profile.id);
 			}
+			Logger.debug(`${files.length} notes processed`);
 			new Notice(`${files.length} notes processed`);
 
 			// Commit all queued notes to staging

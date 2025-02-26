@@ -29,7 +29,7 @@ export class MappingManager {
 		}
 	}
 
-	private async loadProfileMappings(profileId: string) {
+	async loadProfileMappings(profileId: string) {
 		const mappingDir = this.plugin.profileManager.getMappingDir(profileId);
 		await PathUtils.ensureDirectory(this.plugin, mappingDir);
 
@@ -46,6 +46,8 @@ export class MappingManager {
 				slugToUid: JSON.parse(slugToUidContent),
 				uidToHash: JSON.parse(uidToHashContent)
 			};
+			Logger.debug(`Found ${Object.keys(slugToUidContent).length} Slug to UID mappings`);
+			Logger.debug(`Found ${Object.keys(uidToHashContent).length} UID to hash mappings`);
 		} catch (e) {
 			// Initialize empty mappings and create files
 			Logger.warn(`Failed to load mappings for profile ${profileId}, falling back to empty mapping`);
