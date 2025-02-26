@@ -1,6 +1,7 @@
 import { TFile } from 'obsidian';
 import path from 'path';
 import CommonplaceNotesPlugin from '../main';
+import { Logger } from './logging';
 
 export class PathUtils {
 	static sluggify(s: string): string {
@@ -111,10 +112,10 @@ export class PathUtils {
 
 			for (const file of files.files) {
 				await adapter.remove(file);
-				console.log(`Deleted: ${file}`);
+				Logger.info(`Deleted: ${file}`);
 			}
 		} catch (error) {
-			console.error(`Error deleting files in ${directory}:`, error);
+			Logger.error(`Error deleting files in ${directory}:`, error);
 			throw error;
 		}
 	}

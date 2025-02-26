@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, AWSProfileSettings } from './types';
+import { Logger } from './utils/logging';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
     plugin: CommonplaceNotesPlugin;

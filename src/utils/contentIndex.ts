@@ -2,6 +2,7 @@ import { TFile } from 'obsidian';
 import { PathUtils } from './path';
 import CommonplaceNotesPlugin from '../main';
 import { convertMarkdownToPlaintext } from './formatting';
+import { Logger } from './logging';
 
 interface ContentEntry {
 	title: string;
@@ -49,7 +50,7 @@ export class ContentIndexManager {
 			try {
 				content = await convertMarkdownToPlaintext(file);
 			} catch (conversionError) {
-				console.warn(`Failed to convert content for ${file.path}, using fallback:`, conversionError);
+				Logger.warn(`Failed to convert content for ${file.path}, using fallback:`, conversionError);
 				content = file.basename; // Fallback to just using the title
 			}
 			
@@ -66,7 +67,7 @@ export class ContentIndexManager {
 			this.pendingUpdates.get(profileId)!.set(uid, entry);
 		} catch (error) {
 			// Log the error but don't throw it - allow the process to continue
-			console.error(`Error queuing content update for ${file.path}:`, error);
+			Logger.error(`Error queuing content update for ${file.path}:`, error);
 			// Add a minimal entry so we don't completely skip this file
 			const fallbackEntry: ContentEntry = {
 				title: file.basename,
@@ -97,7 +98,7 @@ export class ContentIndexManager {
 			// Clear the queue for this profile
 			this.pendingUpdates.delete(profileId);
 		} catch (error) {
-			console.error(`Error applying queued updates for profile ${profileId}:`, error);
+			Logger.error(`Error applying queued updates for profile ${profileId}:`, error);
 			throw error;
 		}
 	}

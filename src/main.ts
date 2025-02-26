@@ -11,6 +11,7 @@ import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
 import { Publisher } from './publish/publisher';
+import { Logger } from './utils/logging';
 
 const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
     publishingProfiles: [{
@@ -31,7 +32,8 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
             cloudFrontInvalidationScheme: 'individual',
             credentialRefreshCommands: ''
         }
-    }]
+    }],
+	debugMode: false,
 };
 
 export default class CommonplaceNotesPlugin extends Plugin {
@@ -46,6 +48,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	async onload() {
 		// Initialize settings
 		await this.loadSettings();
+		Logger.setDebugMode(!!this.settings.debugMode);
 
 		// Initialize classes
 		this.profileManager = new ProfileManager(this);
@@ -156,7 +159,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					await navigator.clipboard.writeText(url);
 					new Notice('Note URL copied');
 				} catch (error) {
-					console.error('Error copying note URL:', error);
+					Logger.error('Error copying note URL:', error);
 					throw new Error('Error copying note URL, check console');
 				}
 			}
@@ -185,7 +188,7 @@ cpn.rebuildContentIndex();
 			if (profile.publishContentIndex) {
 				const uid = await this.frontmatterManager.getNoteUID(file);
 				if (uid) {
-					console.log(`Processing ${file.basename}`);
+					Logger.info(`Processing ${file.basename}`);
 					await this.contentIndexManager.queueUpdate(profile.id, file, uid);
 				}
 			}
@@ -197,6 +200,6 @@ cpn.rebuildContentIndex();
 	}
 
 	onunload() {
-		console.log('Unloading CommonplaceNotesPlugin');
+		Logger.info('Unloading CommonplaceNotesPlugin');
 	}
 }

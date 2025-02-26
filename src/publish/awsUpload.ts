@@ -2,6 +2,7 @@ import { Notice } from 'obsidian';
 import * as path from 'path';
 import { execAsync } from '../utils/shell';
 import CommonplaceNotesPlugin from '../main';
+import { Logger } from '../utils/logging';
 
 export async function pushLocalJsonsToS3(
 	plugin: CommonplaceNotesPlugin,
@@ -35,9 +36,9 @@ export async function pushLocalJsonsToS3(
 			throw new Error(`Mapping directory does not exist: ${mappingDir}`);
 		}
 
-		console.log(stagedNotesDir);
+		Logger.info(stagedNotesDir);
 		const notesPath = `"${path.resolve(path.join(basePath, stagedNotesDir))}"`;
-		console.log(path.resolve(stagedNotesDir));
+		Logger.info(path.resolve(stagedNotesDir));
 		// Add prefix to S3 paths if configured
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 		const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}notes/`;
@@ -50,28 +51,28 @@ export async function pushLocalJsonsToS3(
 		// Upload notes
 		new Notice('Uploading notes from local to S3...');
 		const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-		console.log('Executing command:', cmdNotes);
+		Logger.info('Executing command:', cmdNotes);
 
 		const { stdout: stdoutNotes, stderr: stderrNotes } = await execAsync(cmdNotes, options);
 		if (stderrNotes) {
 			// TODO::generalize aws CLI calls to standardize error handling::
-			console.log(`stdout from aws command: ${stdoutNotes}`);
+			Logger.info(`stdout from aws command: ${stdoutNotes}`);
 			throw new Error(`Notes upload failed: ${stderrNotes}`);
 		}
-		console.log('Notes upload output:', stdoutNotes);
+		Logger.info('Notes upload output:', stdoutNotes);
 		new Notice('Successfully uploaded notes to S3');
 
 		// Upload mapping files
 		new Notice('Uploading mappings from local to S3...');
 		const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-		console.log('Executing command:', cmdMapping);
+		Logger.info('Executing command:', cmdMapping);
 
 		const { stdout: stdoutMapping, stderr: stderrMapping } = await execAsync(cmdMapping, options);
 		if (stderrMapping) {
-			console.log(`stdout from aws command: ${stdoutMapping}`);
+			Logger.info(`stdout from aws command: ${stdoutMapping}`);
 			throw new Error(`Mapping upload failed: ${stderrMapping}`);
 		}
-		console.log('Mappings upload output:', stdoutMapping);
+		Logger.info('Mappings upload output:', stdoutMapping);
 		new Notice('Mapping files successfully uploaded to S3');
 
 		// Upload content index if enabled
@@ -79,17 +80,17 @@ export async function pushLocalJsonsToS3(
 			new Notice('Uploading content index from local to S3...');
 
 			if (!plugin.app.vault.adapter.exists(contentIndexPath)) {
-				console.warn(`Content index file does not exist: ${contentIndexPath}`);
+				Logger.warn(`Content index file does not exist: ${contentIndexPath}`);
 				new Notice('No content index file found to upload');
 			} else {
 				const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/content/`;
 				const cmdContentIndex = `aws s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
-				console.log('Executing command:', cmdContentIndex);
+				Logger.info('Executing command:', cmdContentIndex);
 
 				const { stdout: stdoutContentIndex, stderr: stderrContentIndex } = 
 					await execAsync(cmdContentIndex, options);
 				if (stderrContentIndex) {
-					console.log(`stdout from aws command: ${stdoutContentIndex}`);
+					Logger.info(`stdout from aws command: ${stdoutContentIndex}`);
 					throw new Error(`Content index upload failed: ${stderrContentIndex}`);
 				}
 				new Notice('Content index successfully uploaded to S3');
@@ -103,7 +104,7 @@ export async function pushLocalJsonsToS3(
 
 		return true;
 	} catch (error) {
-		console.error('Error executing AWS command:', error);
+		Logger.error('Error executing AWS command:', error);
 		new Notice(`Upload failed: ${error.message}`);
 		return false;
 	}
@@ -113,7 +114,7 @@ async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, prof
 	try {
 		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 		if (!profile?.awsSettings?.cloudFrontDistributionId) {
-			console.log('No CloudFront distribution ID configured, skipping invalidation');
+			Logger.info('No CloudFront distribution ID configured, skipping invalidation');
 			return false;
 		}
 
@@ -123,15 +124,15 @@ async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, prof
 		const { stdout, stderr } = await execAsync(cmd);
 		
 		if (stderr) {
-			console.error('CloudFront invalidation error:', stderr);
+			Logger.error('CloudFront invalidation error:', stderr);
 			throw new Error(stderr);
 		}
 
-		console.log('CloudFront invalidation created:', stdout);
+		Logger.info('CloudFront invalidation created:', stdout);
 		new Notice('CloudFront invalidation created successfully');
 		return true;
 	} catch (error) {
-		console.error('Failed to create CloudFront invalidation:', error);
+		Logger.error('Failed to create CloudFront invalidation:', error);
 		new Notice('Failed to create CloudFront invalidation: ' + error.message);
 		return false;
 	}

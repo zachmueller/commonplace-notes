@@ -2,6 +2,7 @@ import path from 'path';
 import { PathUtils } from './path';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile } from '../types';
+import { Logger } from './logging';
 
 export class ProfileManager {
 	private plugin: CommonplaceNotesPlugin;
@@ -31,6 +32,7 @@ export class ProfileManager {
 		];
 
 		for (const dir of dirs) {
+			Logger.debug(`Ensuring directory: ${dir}`);
 			await PathUtils.ensureDirectory(this.plugin, dir);
 		}
 	}

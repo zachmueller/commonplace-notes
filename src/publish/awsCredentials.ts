@@ -2,6 +2,7 @@ import { Notice } from 'obsidian';
 import { execAsync } from '../utils/shell';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
+import { Logger } from '../utils/logging';
 
 export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profileId: string) {
     try {
@@ -34,7 +35,7 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
 
         new Notice('Successfully refreshed AWS credentials');
     } catch (error) {
-        console.error('Failed to refresh credentials:', error);
+        Logger.error('Failed to refresh credentials:', error);
         new Notice('Failed to refresh credentials: ' + (error as Error).message);
         throw error;
     }
@@ -45,7 +46,7 @@ export async function checkAwsCredentials() {
         const { stdout } = await execAsync('aws sts get-caller-identity --output json');
         return JSON.parse(stdout);
     } catch (error) {
-        console.error('Failed to check AWS credentials:', error);
+        Logger.error('Failed to check AWS credentials:', error);
         throw error;
     }
 }

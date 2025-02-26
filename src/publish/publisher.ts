@@ -3,6 +3,7 @@ import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
 import { pushLocalJsonsToS3 } from './awsUpload';
 import { PathUtils } from '../utils/path';
+import { Logger } from '../utils/logging';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	profiles: PublishingProfile[];
@@ -83,7 +84,7 @@ export class Publisher {
 		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
 		if (!profile) {
-			console.error(`No profile found with id ${profileId}`);
+			Logger.error(`No profile found with id ${profileId}`);
 			return [];
 		}
 
@@ -184,7 +185,7 @@ export class Publisher {
 			new Notice(`Successfully published ${files.length} note(s)`);
 		} catch (error) {
 			new Notice(`Error during publishing: ${error.message}`);
-			console.error('Publishing error:', error);
+			Logger.error('Publishing error:', error);
 
 			// Move staged files to error directory
 			await this.handlePublishError(profile.id, error);
@@ -233,7 +234,7 @@ export class Publisher {
 
 			new Notice(`Publish failed. Error details saved to ${errorSessionDir}`);
 		} catch (moveError) {
-			console.error('Error handling publish failure:', moveError);
+			Logger.error('Error handling publish failure:', moveError);
 			new Notice('Failed to save error details. Check console for more information.');
 		}
 	}
@@ -243,7 +244,7 @@ export class Publisher {
 		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
 		if (!profile) {
-			console.error(`No profile found with id ${profileId}`);
+			Logger.error(`No profile found with id ${profileId}`);
 			return files;
 		}
 
@@ -304,7 +305,7 @@ export class Publisher {
 		if (!profile) return;
 
 		if (this.isFileExcluded(file, profile)) {
-			console.log(`Note ${file.path} is in an excluded directory and cannot be published`);
+			Logger.info(`Note ${file.path} is in an excluded directory and cannot be published`);
 			return;
 		}
 

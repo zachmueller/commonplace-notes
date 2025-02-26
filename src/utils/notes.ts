@@ -6,6 +6,7 @@ import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from './path';
 import remarkObsidianLinks, { ResolvedNoteInfo } from './remarkObsidianLinks';
+import { Logger } from './logging';
 
 interface NoteState {
 	file: TFile;
@@ -88,7 +89,7 @@ export class NoteManager {
                             }
                             return null;
                         } catch (error) {
-                            console.error(`Failed to get UID for file ${targetFile.path}:`, error);
+                            Logger.error(`Failed to get UID for file ${targetFile.path}:`, error);
                             return null;
                         }
                     }
@@ -139,7 +140,7 @@ export class NoteManager {
             const key = `${profileId}:${uid}`;
             this.pendingNotes.set(key, noteState);
         } catch (error) {
-            console.error(`Error queuing note ${file.path}:`, error);
+            Logger.error(`Error queuing note ${file.path}:`, error);
             throw error;
         }
     }
@@ -180,7 +181,7 @@ export class NoteManager {
 			await this.plugin.contentIndexManager.applyQueuedUpdates(profileId);
 			new Notice(`Notes successfully committed for profile ${profileId}`);
 		} catch (error) {
-			console.error(`Error committing pending notes for profile ${profileId}:`, error);
+			Logger.error(`Error committing pending notes for profile ${profileId}:`, error);
 			// TODO: Handle error state, possibly move failed notes to error staging
 			new Notice(`Error committing notes: ${error.message}`);
 			throw error;

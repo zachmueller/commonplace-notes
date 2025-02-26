@@ -1,4 +1,5 @@
 import { TFile, MarkdownView, MarkdownRenderer } from 'obsidian';
+import { Logger } from './logging';
 
 export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
 	try {
@@ -35,7 +36,7 @@ export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
 				this
 			);
 		} catch (renderError) {
-			console.warn(`Render error for ${file.path}, falling back to basic cleanup:`, renderError);
+			Logger.warn(`Render error for ${file.path}, falling back to basic cleanup:`, renderError);
 			return cleanMarkdown;
 		}
 		// Extract text content
@@ -46,7 +47,7 @@ export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
             .replace(/\n\s*\n/g, '\n\n')  // Normalize multiple newlines
             .trim();
 	} catch (error) {
-		console.error('Error converting Markdown:', error);
+		Logger.error('Error converting Markdown:', error);
 		throw error;
 	}
 }

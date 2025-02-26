@@ -1,6 +1,7 @@
 import path from 'path';
 import { PathUtils } from '../utils/path';
 import CommonplaceNotesPlugin from '../main';
+import { Logger } from './logging';
 
 interface MappingData {
 	slugToUid: Record<string, string>;
@@ -23,7 +24,7 @@ export class MappingManager {
 				await this.loadProfileMappings(profile.id);
 			}
 		} catch (error) {
-			console.error('Error loading mappings:', error);
+			Logger.error('Error loading mappings:', error);
 			throw error;
 		}
 	}
@@ -60,7 +61,7 @@ export class MappingManager {
 				await this.saveProfileMappings(profileId);
 			}
 		} catch (error) {
-			console.error('Error saving mappings:', error);
+			Logger.error('Error saving mappings:', error);
 			throw error;
 		}
 	}
