@@ -16,7 +16,7 @@ interface NoteState {
 	slug: string;
 	title: string;
 	content: string;  // HTML content
-	raw: string;      // Raw Markdown
+	raw: string;	  // Raw Markdown
 	lastModified: number;
 }
 
@@ -35,12 +35,12 @@ export class NoteManager {
 		this.pendingNotes = new Map();
 	}
 
-    async getSHA1Hash(content: string): Promise<string> {
-        const msgUint8 = new TextEncoder().encode(content);
-        const hashBuffer = await crypto.subtle.digest('SHA-1', msgUint8);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    }
+	async getSHA1Hash(content: string): Promise<string> {
+		const msgUint8 = new TextEncoder().encode(content);
+		const hashBuffer = await crypto.subtle.digest('SHA-1', msgUint8);
+		const hashArray = Array.from(new Uint8Array(hashBuffer));
+		return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+	}
 
 	private async stripFrontmatter(file: TFile, content: string): Promise<string> {
 		const cache = this.plugin.app.metadataCache.getFileCache(file);
@@ -64,86 +64,89 @@ export class NoteManager {
 			}));
 	}
 
-    async markdownToHtml(markdown: string, currentFile: TFile, profileId: string): Promise<string> {
-        const processor = unified()
-            .use(remarkParse)
-            .use(remarkObsidianLinks, {
-                frontmatterManager: this.plugin.frontmatterManager,
-                resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
-                    const [link, alias] = linkText.split('|');
-                    const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
+	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string): Promise<string> {
+		const processor = unified()
+			.use(remarkParse)
+			.use(remarkObsidianLinks, {
+				frontmatterManager: this.plugin.frontmatterManager,
+				resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
+					const [link, alias] = linkText.split('|');
+					const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
 
-                    if (targetFile instanceof TFile && targetFile.extension === 'md') {
-                        try {
-                            const uid = await this.plugin.frontmatterManager.getNoteUID(targetFile);
-                            if (uid === null) return null;
-                            const contexts = await this.plugin.publisher.getPublishContextsForFile(targetFile);
+					if (targetFile instanceof TFile && targetFile.extension === 'md') {
+						try {
+							const uid = await this.plugin.frontmatterManager.getNoteUID(targetFile);
+							if (uid === null) return null;
+							const contexts = await this.plugin.publisher.getPublishContextsForFile(targetFile);
 
-                            if (contexts.includes(profileId)) {
-                                return {
-                                    uid,
-                                    title: targetFile.basename,
-                                    displayText: alias || link,
-                                    published: true
-                                };
-                            }
-                            return null;
-                        } catch (error) {
-                            Logger.error(`Failed to get UID for file ${targetFile.path}:`, error);
-                            return null;
-                        }
-                    }
-                    return null;
-                }
-            })
-            .use(remarkRehype, { allowDangerousHtml: true })
-            .use(rehypeStringify, { allowDangerousHtml: true });
+							if (contexts.includes(profileId)) {
+								return {
+									uid,
+									title: targetFile.basename,
+									displayText: alias || link,
+									published: true
+								};
+							}
+							return null;
+						} catch (error) {
+							Logger.error(`Failed to get UID for file ${targetFile.path}:`, error);
+							return null;
+						}
+					}
+					return null;
+				}
+			})
+			.use(remarkRehype, { allowDangerousHtml: true })
+			.use(rehypeStringify, { allowDangerousHtml: true });
 
-        const result = await processor.process(markdown);
-        return result.toString();
-    }
+		const result = await processor.process(markdown);
+		return result.toString();
+	}
 
 	async queueNote(file: TFile, profileId: string) {
-        try {
-            const uid = await this.plugin.frontmatterManager.getNoteUID(file);
-            if (!uid) return;
+		try {
+			const uid = await this.plugin.frontmatterManager.getNoteUID(file);
+			if (!uid) return;
 
-            // Get raw content and strip frontmatter
-            const rawWithFrontmatter = await this.plugin.app.vault.read(file);
-            const raw = await this.stripFrontmatter(file, rawWithFrontmatter);
+			// Derive title for publishing
+			const title = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
 
-            // Convert to HTML
-            const content = await this.markdownToHtml(raw, file, profileId);
+			// Get raw content and strip frontmatter
+			const rawWithFrontmatter = await this.plugin.app.vault.read(file);
+			const raw = await this.stripFrontmatter(file, rawWithFrontmatter);
 
-            // Calculate hash using raw content
-            const currentHash = await this.getSHA1Hash(`${uid}::${file.basename}::${raw}`);
-            const priorHash = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-prior-hash');
+			// Convert to HTML
+			const content = await this.markdownToHtml(raw, file, profileId);
 
-            // Update prior hash in frontmatter if needed
-            if (!priorHash || priorHash !== currentHash) {
-                await this.plugin.frontmatterManager.add(file, {'cpn-prior-hash': currentHash});
-                await this.plugin.frontmatterManager.process();
-            }
+			// Calculate hash using raw content
+			const currentHash = await this.getSHA1Hash(`${uid}::${title}::${raw}`);
+			const priorHash = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-prior-hash');
 
-            const noteState: NoteState = {
-                file,
-                uid,
-                currentHash,
-                priorHash: (priorHash === currentHash) ? null : priorHash,
-                slug: PathUtils.slugifyFilePath(file.path),
-                title: file.basename,
-                content,
-                raw,
-                lastModified: file.stat.mtime
-            };
+			// Update prior hash in frontmatter if needed
+			if (!priorHash || priorHash !== currentHash) {
+				await this.plugin.frontmatterManager.add(file, {'cpn-prior-hash': currentHash});
+				await this.plugin.frontmatterManager.process();
+			}
 
-            const key = `${profileId}:${uid}`;
-            this.pendingNotes.set(key, noteState);
-        } catch (error) {
-            Logger.error(`Error queuing note ${file.path}:`, error);
-            throw error;
-        }
-    }
+			const noteState: NoteState = {
+				file,
+				uid,
+				currentHash,
+				priorHash: (priorHash === currentHash) ? null : priorHash,
+				slug: PathUtils.slugifyFilePath(file.path),
+				title: title,
+				content,
+				raw,
+				lastModified: file.stat.mtime
+			};
+
+			const key = `${profileId}:${uid}`;
+			this.pendingNotes.set(key, noteState);
+		} catch (error) {
+			Logger.error(`Error queuing note ${file.path}:`, error);
+			throw error;
+		}
+	}
 
 	async commitPendingNotes(profileId: string) {
 		try {
