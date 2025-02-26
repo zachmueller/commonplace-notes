@@ -148,7 +148,7 @@ export class Publisher {
 		try {
 			// Load existing mappings and content index for profile
 			this.plugin.mappingManager.loadProfileMappings(profile.id);
-			this.plugin.contentIndex.loadIndex(profile.id);
+			this.plugin.contentIndexManager.loadIndex(profile.id);
 
 			// Queue all notes for processing
 			for (const file of files) {
