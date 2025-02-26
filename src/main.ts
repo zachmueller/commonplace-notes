@@ -1,11 +1,14 @@
 import { Plugin, MarkdownView, Notice, App, TFile } from 'obsidian';
-import { execAsync } from './utils/shell';
 import { CommonplaceNotesSettingTab } from './settings';
+import { CommonplaceNotesSettings } from './types';
+import { execAsync } from './utils/shell';
 import { PathUtils } from './utils/path';
-import { FrontmatterManager } from './utils/frontmatter';
 import { pushLocalJsonsToS3 } from './publish/awsUpload';
 import { refreshCredentials } from './publish/awsCredentials';
-import { CommonplaceNotesSettings } from './types';
+import { ProfileManager } from './utils/profiles';
+import { NoteManager } from './utils/notes';
+import { FrontmatterManager } from './utils/frontmatter';
+import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
 import { Publisher } from './publish/publisher';
 
@@ -33,21 +36,35 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 
 export default class CommonplaceNotesPlugin extends Plugin {
 	settings: CommonplaceNotesSettings;
+	profileManager: ProfileManager;
+	noteManager: NoteManager;
 	frontmatterManager: FrontmatterManager;
+	contentIndexManager: ContentIndexManager;
 	mappingManager: MappingManager;
 	publisher: Publisher;
 
 	async onload() {
 		// Initialize settings
 		await this.loadSettings();
-		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
 
 		// Initialize classes
+		this.profileManager = new ProfileManager(this);
+		this.noteManager = new NoteManager(this);
 		this.frontmatterManager = new FrontmatterManager(this.app);
+		this.contentIndexManager = new ContentIndexManager(this);
 		this.mappingManager = new MappingManager(this);
-		await this.mappingManager.loadMappings();
 		this.publisher = new Publisher(this);
 
+		await this.profileManager.initialize();
+		console.log(this.profileManager);
+		console.log(this.app.vault.configDir);
+		console.log(this.app.vault.adapter);
+
+		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
+		this.registerCommands();
+	}
+
+	private registerCommands() {
 		this.addCommand({
 			id: 'refresh-credentials',
 			name: 'Refresh credentials',
@@ -172,13 +189,13 @@ cpn.rebuildContentIndex();
 				const uid = await this.frontmatterManager.getNoteUID(file);
 				if (uid) {
 					console.log(`Processing ${file.basename}`);
-					await this.publisher.contentIndexManager.queueUpdate(profile.id, file, uid);
+					await this.contentIndexManager.queueUpdate(profile.id, file, uid);
 				}
 			}
 		}
 
 		// apply queued updates
-		await this.publisher.contentIndexManager.applyQueuedUpdates(profile.id);
+		await this.contentIndexManager.applyQueuedUpdates(profile.id);
 		new Notice(`Reprocessed contentIndex.json for profile ${profile.id}`);
 	}
 

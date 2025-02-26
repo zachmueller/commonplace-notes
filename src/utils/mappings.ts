@@ -10,30 +10,16 @@ interface MappingData {
 export class MappingManager {
 	private plugin: CommonplaceNotesPlugin;
 	private mappingData: Record<string, MappingData>;
-	public mappingDir: string;
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
-		this.mappingDir = `${plugin.manifest.dir}/mapping`;
 		this.mappingData = {};
-	}
-
-	private getProfileMappingDir(profileId: string): string {
-		return `${this.mappingDir}/${profileId}`;
 	}
 
 	async loadMappings() {
 		try {
-			// Ensure base mapping directory exists
-			await PathUtils.ensureDirectory(this.plugin, this.mappingDir);
-
 			// Load mappings for each profile
 			for (const profile of this.plugin.settings.publishingProfiles) {
-				const profileDir = this.getProfileMappingDir(profile.id);
-				
-				// Ensure profile directory exists
-				await PathUtils.ensureDirectory(this.plugin, profileDir);
-				
 				await this.loadProfileMappings(profile.id);
 			}
 		} catch (error) {
@@ -43,11 +29,11 @@ export class MappingManager {
 	}
 
 	private async loadProfileMappings(profileId: string) {
-		const profileDir = this.getProfileMappingDir(profileId);
-		await PathUtils.ensureDirectory(this.plugin, profileDir);
+		const mappingDir = this.plugin.profileManager.getMappingDir(profileId);
+		await PathUtils.ensureDirectory(this.plugin, mappingDir);
 
-		const slugToUidPath = `${profileDir}/slug-to-uid.json`;
-		const uidToHashPath = `${profileDir}/uid-to-hash.json`;
+		const slugToUidPath = `${mappingDir}/slug-to-uid.json`;
+		const uidToHashPath = `${mappingDir}/uid-to-hash.json`;
 
 		try {
 			const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
@@ -80,19 +66,19 @@ export class MappingManager {
 	}
 
 	private async saveProfileMappings(profileId: string) {
-		const profileDir = this.getProfileMappingDir(profileId);
-		await PathUtils.ensureDirectory(this.plugin, profileDir);
+		const mappingDir = this.plugin.profileManager.getMappingDir(profileId);
+		await PathUtils.ensureDirectory(this.plugin, mappingDir);
 
 		const data = this.mappingData[profileId];
 		if (!data) return;
 
 		await this.plugin.app.vault.adapter.write(
-			`${profileDir}/slug-to-uid.json`,
+			`${mappingDir}/slug-to-uid.json`,
 			JSON.stringify(data.slugToUid)
 		);
 
 		await this.plugin.app.vault.adapter.write(
-			`${profileDir}/uid-to-hash.json`,
+			`${mappingDir}/uid-to-hash.json`,
 			JSON.stringify(data.uidToHash)
 		);
 	}

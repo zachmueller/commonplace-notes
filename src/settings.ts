@@ -218,6 +218,22 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('S3 prefix')
+			.setDesc('Optional prefix path in the S3 bucket (e.g., "site/"). Leave empty to use bucket root.')
+			.addText(text => text
+				.setPlaceholder('notes/')
+				.setValue(profile.awsSettings?.s3Prefix || '')
+				.onChange(async (value) => {
+					if (profile.awsSettings) {
+						// Ensure the prefix ends with a forward slash if not empty
+						profile.awsSettings.s3Prefix = value ?
+							(value.endsWith('/') ? value : `${value}/`) :
+							'';
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		new Setting(containerEl)
 			.setName('AWS region')
 			.setDesc('The AWS region where your bucket is located')
 			.addText(text => text

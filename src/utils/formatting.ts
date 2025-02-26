@@ -24,7 +24,6 @@ export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
 			.replace(/```dataview\n([\s\S]*?)```/g, '$1')
 			// Remove HTML comments
 			.replace(/<!--[\s\S]*?-->/g, '')
-			
 
 		// Convert to plaintext
 		const element = document.createElement('div');

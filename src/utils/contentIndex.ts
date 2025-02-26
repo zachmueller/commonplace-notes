@@ -14,23 +14,13 @@ interface ContentIndex {
 
 export class ContentIndexManager {
 	private plugin: CommonplaceNotesPlugin;
-	private contentDir: string;
 	private pendingUpdates: Map<string, Map<string, ContentEntry>>;
 	private loadedIndices: Map<string, ContentIndex>;
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
-		this.contentDir = `${plugin.manifest.dir}/content`;
 		this.pendingUpdates = new Map();
 		this.loadedIndices = new Map();
-	}
-
-	private getProfileContentDir(profileId: string): string {
-		return `${this.contentDir}/${profileId}`;
-	}
-
-	private getIndexPath(profileId: string): string {
-		return `${this.getProfileContentDir(profileId)}/contentIndex.json`;
 	}
 
 	async loadIndex(profileId: string): Promise<ContentIndex> {
@@ -38,9 +28,8 @@ export class ContentIndexManager {
 			return this.loadedIndices.get(profileId)!;
 		}
 
-		const indexPath = this.getIndexPath(profileId);
+		const indexPath = this.plugin.profileManager.getContentIndexPath(profileId);
 		try {
-			await PathUtils.ensureDirectory(this.plugin, this.getProfileContentDir(profileId));
 			const content = await this.plugin.app.vault.adapter.read(indexPath);
 			const index = JSON.parse(content);
 			this.loadedIndices.set(profileId, index);
@@ -114,15 +103,11 @@ export class ContentIndexManager {
 	}
 
 	private async saveIndex(profileId: string, index: ContentIndex): Promise<void> {
-		const indexPath = this.getIndexPath(profileId);
+		const indexPath = this.plugin.profileManager.getContentIndexPath(profileId);
 		await this.plugin.app.vault.adapter.write(
 			indexPath,
 			JSON.stringify(index)
 		);
 		this.loadedIndices.set(profileId, index);
-	}
-
-	getContentIndexPath(profileId: string): string {
-		return this.getIndexPath(profileId);
 	}
 }

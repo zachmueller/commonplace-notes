@@ -1,10 +1,8 @@
 import { Notice, TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
-import { convertNotetoJSON } from '../convert/html';
 import { pushLocalJsonsToS3 } from './awsUpload';
 import { PathUtils } from '../utils/path';
-import { ContentIndexManager } from '../utils/contentIndex';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	profiles: PublishingProfile[];
@@ -33,15 +31,9 @@ class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 
 export class Publisher {
 	private plugin: CommonplaceNotesPlugin;
-	public contentIndexManager: ContentIndexManager;
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
-		this.contentIndexManager = new ContentIndexManager(plugin);
-	}
-
-	public getContentIndexPath(profileId: string): string {
-		return this.contentIndexManager.getContentIndexPath(profileId);
 	}
 
 	async getPublishContextsForFile(file: TFile): Promise<string[]> {
@@ -153,19 +145,13 @@ export class Publisher {
 		triggerCloudFrontInvalidation: boolean = false
 	) {
 		try {
-			// Process each note
+			// Queue all notes for processing
 			for (const file of files) {
-				if (profile.publishContentIndex) {
-					const uid = await this.plugin.frontmatterManager.getNoteUID(file);
-					if (uid) {
-						await this.contentIndexManager.queueUpdate(profile.id, file, uid);
-					}
-				}
-				await convertNotetoJSON(this.plugin, file, profile.id);
+				await this.plugin.noteManager.queueNote(file, profile.id);
 			}
 
-			// Apply queued content index updates
-			await this.contentIndexManager.applyQueuedUpdates(profile.id);
+			// Commit all queued notes to staging
+			await this.plugin.noteManager.commitPendingNotes(profile.id);
 
 			// Upload to destination
 			if (profile.publishMechanism === 'AWS CLI') {
@@ -173,22 +159,23 @@ export class Publisher {
 				// TODO::instead should prompt user whether to delete local copies of processed notes::
 				// (for now just stopping here to not delete anything)
 				if (!awsUpload) {
-					new Notice('Local note JSON files not deleted due to upload failure, you may need to clear out the directory or try uploading again.');
+					new Notice('Upload failed. Staged files preserved for retry.');
 					return;
 				}
 			} else {
 				// Handle local publishing when implemented
 			}
 
-			// Clean up local files
-			const notesDir = `${this.plugin.manifest.dir}/notes`; //TODO::centralize definition of this dir::
-			await new PathUtils().deleteFilesInDirectory(this.plugin, notesDir);
+			// Clean up staged files
+			await this.cleanupStagedFiles(profile.id);
 
 			// Update timestamp for full publishes
 			if (updatePublishTimestamp) {
-				const profileIndex = this.plugin.settings.publishingProfiles.findIndex(p => p.id === profile.id);
+				const profileIndex = this.plugin.settings.publishingProfiles
+					.findIndex(p => p.id === profile.id);
 				if (profileIndex !== -1) {
-					this.plugin.settings.publishingProfiles[profileIndex].lastFullPublishTimestamp = Date.now();
+					this.plugin.settings.publishingProfiles[profileIndex]
+						.lastFullPublishTimestamp = Date.now();
 					await this.plugin.saveSettings();
 				}
 			}
@@ -197,6 +184,56 @@ export class Publisher {
 		} catch (error) {
 			new Notice(`Error during publishing: ${error.message}`);
 			console.error('Publishing error:', error);
+
+			// Move staged files to error directory
+			await this.handlePublishError(profile.id, error);
+		}
+	}
+
+	private async cleanupStagedFiles(profileId: string) {
+		const stagedDir = this.plugin.profileManager.getStagedNotesDir(profileId);
+		await new PathUtils().deleteFilesInDirectory(this.plugin, stagedDir);
+	}
+
+	private async handlePublishError(profileId: string, error: Error) {
+		const stagedDir = this.plugin.profileManager.getStagedNotesDir(profileId);
+		const errorDir = this.plugin.profileManager.getStagedErrorDir(profileId);
+
+		// Create timestamp for error session
+		const errorTimestamp = Date.now();
+		const errorSessionDir = `${errorDir}/${errorTimestamp}`;
+
+		try {
+			// Ensure error session directory exists
+			await PathUtils.ensureDirectory(this.plugin, errorSessionDir);
+
+			// Move staged files to error directory
+			const stagedFiles = await this.plugin.app.vault.adapter.list(stagedDir);
+			for (const file of stagedFiles.files) {
+				const fileName = file.split('/').pop();
+				await this.plugin.app.vault.adapter.copy(
+					file,
+					`${errorSessionDir}/${fileName}`
+				);
+			}
+
+			// Write error details
+			await this.plugin.app.vault.adapter.write(
+				`${errorSessionDir}/error.json`,
+				JSON.stringify({
+					timestamp: errorTimestamp,
+					error: error.message,
+					stack: error.stack
+				})
+			);
+
+			// Clean up staged directory
+			await this.cleanupStagedFiles(profileId);
+
+			new Notice(`Publish failed. Error details saved to ${errorSessionDir}`);
+		} catch (moveError) {
+			console.error('Error handling publish failure:', moveError);
+			new Notice('Failed to save error details. Check console for more information.');
 		}
 	}
 

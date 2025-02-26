@@ -8,8 +8,8 @@ export async function pushLocalJsonsToS3(
 	profileId: string,
 	triggerCloudFrontInvalidation: boolean = false
 ): Promise<boolean> {
-    try {
-		// Get the active profile
+	try {
+		// Get the chosen profile
 		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
 		if (!profile) {
@@ -22,73 +22,77 @@ export async function pushLocalJsonsToS3(
 
 		// TODO::extract this directory setup into the main plugin class for standard access pattern::
 		const basePath = (plugin.app.vault.adapter as any).basePath;
-		const notesDir = path.join(basePath, '.obsidian', 'plugins', 'commonplace-notes', 'notes');
-		const profileMappingDir = path.join(basePath, plugin.mappingManager.mappingDir, profileId);
+		const stagedNotesDir = plugin.profileManager.getStagedNotesDir(profileId);
+		const mappingDir = plugin.profileManager.getMappingDir(profileId);
+		const contentIndexLoc = plugin.profileManager.getContentIndexPath(profileId);
+		const contentIndexPath = `"${path.resolve(path.join(basePath, contentIndexLoc))}"`;
 
-		// Verify directories exist before attempting upload
-		if (!plugin.app.vault.adapter.exists(notesDir)) {
-			throw new Error(`Notes directory does not exist: ${notesDir}`);
+		// Verify directories and files exist
+		if (!plugin.app.vault.adapter.exists(stagedNotesDir)) {
+			throw new Error(`Staged notes directory does not exist: ${stagedNotesDir}`);
 		}
-		if (!plugin.app.vault.adapter.exists(profileMappingDir)) {
-			throw new Error(`Mapping directory does not exist: ${profileMappingDir}`);
+		if (!plugin.app.vault.adapter.exists(mappingDir)) {
+			throw new Error(`Mapping directory does not exist: ${mappingDir}`);
 		}
 
-		const notesPath = `"${path.resolve(notesDir)}"`;
-		const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/notes/`;
-		const mappingPath = `"${profileMappingDir}"`;
-		const mappingS3Prefix = `s3://${profile.awsSettings.bucketName}/static/mapping/`;
+		console.log(stagedNotesDir);
+		const notesPath = `"${path.resolve(path.join(basePath, stagedNotesDir))}"`;
+		console.log(path.resolve(stagedNotesDir));
+		// Add prefix to S3 paths if configured
+		const s3Prefix = profile.awsSettings.s3Prefix || '';
+		const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}notes/`;
+		const mappingPath = `"${path.resolve(path.join(basePath, mappingDir))}"`;
+		const mappingS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/mapping/`;
 
 		// standard options to send to the shell
-		const options = {
-			cwd: basePath
-		};
+		const options = { cwd: basePath };
 
-        // Upload notes
+		// Upload notes
 		new Notice('Uploading notes from local to S3...');
-        const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-        console.log('Executing command:', cmdNotes);
+		const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
+		console.log('Executing command:', cmdNotes);
 
-        const { stdout: stdoutNotes, stderr: stderrNotes } = await execAsync(cmdNotes, options);
+		const { stdout: stdoutNotes, stderr: stderrNotes } = await execAsync(cmdNotes, options);
 		if (stderrNotes) {
 			// TODO::generalize aws CLI calls to standardize error handling::
 			console.log(`stdout from aws command: ${stdoutNotes}`);
 			throw new Error(`Notes upload failed: ${stderrNotes}`);
 		}
-        console.log('Notes upload output:', stdoutNotes);
-        new Notice('Successfully uploaded notes to S3');
+		console.log('Notes upload output:', stdoutNotes);
+		new Notice('Successfully uploaded notes to S3');
 
 		// Upload mapping files
 		new Notice('Uploading mappings from local to S3...');
-        const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-        console.log('Executing command:', cmdMapping);
+		const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
+		console.log('Executing command:', cmdMapping);
 
-        const { stdout: stdoutMapping, stderr: stderrMapping } = await execAsync(cmdMapping, options);
+		const { stdout: stdoutMapping, stderr: stderrMapping } = await execAsync(cmdMapping, options);
 		if (stderrMapping) {
-			console.log(`stdout from aws command: ${stdoutNotes}`);
+			console.log(`stdout from aws command: ${stdoutMapping}`);
 			throw new Error(`Mapping upload failed: ${stderrMapping}`);
 		}
-        console.log('Mappings upload output:', stdoutMapping);
-        new Notice('Mapping files successfully uploaded to S3');
+		console.log('Mappings upload output:', stdoutMapping);
+		new Notice('Mapping files successfully uploaded to S3');
 
+		// Upload content index if enabled
 		if (profile.publishContentIndex) {
 			new Notice('Uploading content index from local to S3...');
 
-			// Add content index path to upload
-			const contentIndexPath = path.join(
-				basePath,
-				plugin.publisher.getContentIndexPath(profileId)
-			);
-			const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/static/content/`;
+			if (!plugin.app.vault.adapter.exists(contentIndexPath)) {
+				console.warn(`Content index file does not exist: ${contentIndexPath}`);
+				new Notice('No content index file found to upload');
+			} else {
+				const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/content/`;
+				const cmdContentIndex = `aws s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
+				console.log('Executing command:', cmdContentIndex);
 
-			// Upload content index
-			const cmdContentIndex = `aws s3 cp "${contentIndexPath}" ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
-			console.log('Executing command:', cmdContentIndex);
-
-			const { stdout: stdoutContentIndex, stderr: stderrContentIndex } = 
-				await execAsync(cmdContentIndex, options);
-			if (stderrContentIndex) {
-				console.log(`stdout from aws command: ${stdoutContentIndex}`);
-				throw new Error(`Content index upload failed: ${stderrContentIndex}`);
+				const { stdout: stdoutContentIndex, stderr: stderrContentIndex } = 
+					await execAsync(cmdContentIndex, options);
+				if (stderrContentIndex) {
+					console.log(`stdout from aws command: ${stdoutContentIndex}`);
+					throw new Error(`Content index upload failed: ${stderrContentIndex}`);
+				}
+				new Notice('Content index successfully uploaded to S3');
 			}
 		}
 
@@ -98,11 +102,11 @@ export async function pushLocalJsonsToS3(
 		}
 
 		return true;
-    } catch (error) {
-        console.error('Error executing AWS command:', error);
+	} catch (error) {
+		console.error('Error executing AWS command:', error);
 		new Notice(`Upload failed: ${error.message}`);
 		return false;
-    }
+	}
 }
 
 async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, profileId: string): Promise<boolean> {

@@ -23,6 +23,7 @@ export interface AWSProfileSettings {
     awsProfile: string;
     region: string;
     bucketName: string;
+	s3Prefix?: string;
     cloudFrontInvalidationScheme: 'individual' | 'connected' | 'sinceLast' | 'all' | 'manual';
 	cloudFrontDistributionId?: string;
     credentialRefreshCommands: string;
