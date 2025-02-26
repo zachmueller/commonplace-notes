@@ -16,8 +16,6 @@ export class ProfileManager {
 		// Ensure base profiles directory exists
 		await PathUtils.ensureDirectory(this.plugin, this.baseDir);
 
-console.log(this.baseDir);
-		
 		// Initialize directories for each profile
 		for (const profile of this.plugin.settings.publishingProfiles) {
 			await this.initializeProfileDirectories(profile.id);

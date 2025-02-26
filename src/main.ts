@@ -56,9 +56,6 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.publisher = new Publisher(this);
 
 		await this.profileManager.initialize();
-		console.log(this.profileManager);
-		console.log(this.app.vault.configDir);
-		console.log(this.app.vault.adapter);
 
 		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
 		this.registerCommands();
