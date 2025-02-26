@@ -35,6 +35,17 @@ export class ProfileManager {
 			Logger.debug(`Ensuring directory: ${dir}`);
 			await PathUtils.ensureDirectory(this.plugin, dir);
 		}
+
+		// Also ensure publish history file exists with at least empty JSON
+		const historyPath = this.getPublishHistoryPath(profileId);
+		Logger.debug(`Verifying ${historyPath} exists`);
+		if (!(await this.plugin.app.vault.adapter.exists(historyPath))) {
+			await this.plugin.app.vault.adapter.write(
+				historyPath,
+				JSON.stringify({})
+			);
+			Logger.debug(`Created empty publish history file: ${historyPath}`);
+		}
 	}
 
 	getProfileDir(profileId: string): string {

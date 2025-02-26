@@ -28,11 +28,65 @@ interface BacklinkInfo {
 
 export class NoteManager {
 	private pendingNotes: Map<string, NoteState>;
+	private publishHistory: Map<string, Record<string, string[]>>;
 	private plugin: CommonplaceNotesPlugin;
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
 		this.pendingNotes = new Map();
+		this.publishHistory = new Map();
+	}
+
+	private async loadPublishHistory(profileId: string): Promise<Record<string, string[]>> {
+		if (this.publishHistory.has(profileId)) {
+			return this.publishHistory.get(profileId)!;
+		}
+
+		const historyPath = this.plugin.profileManager.getPublishHistoryPath(profileId);
+		try {
+			const content = await this.plugin.app.vault.adapter.read(historyPath);
+			const history = JSON.parse(content);
+			this.publishHistory.set(profileId, history);
+			return history;
+		} catch (e) {
+			const emptyHistory = {};
+			this.publishHistory.set(profileId, emptyHistory);
+			return emptyHistory;
+		}
+	}
+
+	private async savePublishHistory(profileId: string) {
+		const history = this.publishHistory.get(profileId);
+		if (!history) return;
+
+		const historyPath = this.plugin.profileManager.getPublishHistoryPath(profileId);
+		await this.plugin.app.vault.adapter.write(
+			historyPath,
+			JSON.stringify(history)
+		);
+	}
+
+	private getMostRecentPriorHash(history: Record<string, string[]>, uid: string, currentHash: string): string | null {
+		const hashes = history[uid] || [];
+
+		// If no history exists
+		if (hashes.length === 0) {
+			return null;
+		}
+
+		// If the last hash matches current, get the second-to-last hash
+		if (hashes[hashes.length - 1] === currentHash) {
+			return hashes.length > 1 ? hashes[hashes.length - 2] : null;
+		}
+
+		// Otherwise return the most recent hash
+		return hashes[hashes.length - 1];
+	}
+
+	private shouldAddHashToHistory(history: Record<string, string[]>, uid: string, newHash: string): boolean {
+		const hashes = history[uid] || [];
+		// Only add if it's different from the last hash in history
+		return hashes.length === 0 || hashes[hashes.length - 1] !== newHash;
 	}
 
 	async getSHA1Hash(content: string): Promise<string> {
@@ -108,34 +162,26 @@ export class NoteManager {
 			const uid = await this.plugin.frontmatterManager.getNoteUID(file);
 			if (!uid) return;
 
-			// Derive title for publishing
-			const title = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
-
 			// Get raw content and strip frontmatter
 			const rawWithFrontmatter = await this.plugin.app.vault.read(file);
 			const raw = await this.stripFrontmatter(file, rawWithFrontmatter);
 
-			// Convert to HTML
-			const content = await this.markdownToHtml(raw, file, profileId);
-
-			// Calculate hash using raw content
+			// Calculate current hash
+			const title = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
 			const currentHash = await this.getSHA1Hash(`${uid}::${title}::${raw}`);
-			const priorHash = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-prior-hash');
 
-			// Update prior hash in frontmatter if needed
-			if (!priorHash || priorHash !== currentHash) {
-				await this.plugin.frontmatterManager.add(file, {'cpn-prior-hash': currentHash});
-				await this.plugin.frontmatterManager.process();
-			}
+			// Load publish history to determine prior hash
+			const history = await this.loadPublishHistory(profileId);
+			const priorHash = this.getMostRecentPriorHash(history, uid, currentHash);
 
 			const noteState: NoteState = {
 				file,
 				uid,
 				currentHash,
-				priorHash: (priorHash === currentHash) ? null : priorHash,
+				priorHash: priorHash,
 				slug: PathUtils.slugifyFilePath(file.path),
 				title: title,
-				content,
+				content: await this.markdownToHtml(raw, file, profileId),
 				raw,
 				lastModified: file.stat.mtime
 			};
@@ -151,10 +197,22 @@ export class NoteManager {
 	async commitPendingNotes(profileId: string) {
 		try {
 			// Process all queued notes for this profile
+			const history = await this.loadPublishHistory(profileId);
 			const notesToProcess = Array.from(this.pendingNotes.entries())
 				.filter(([key]) => key.startsWith(`${profileId}:`));
 
 			for (const [key, noteState] of notesToProcess) {
+				// Only update history if hash is different from last recorded
+				if (this.shouldAddHashToHistory(history, noteState.uid, noteState.currentHash)) {
+					if (!history[noteState.uid]) {
+						history[noteState.uid] = [];
+					}
+					history[noteState.uid].push(noteState.currentHash);
+					Logger.debug(`Added hash ${noteState.currentHash} to history for ${noteState.uid}`);
+				} else {
+					Logger.debug(`Skipped adding duplicate hash ${noteState.currentHash} for ${noteState.uid}`);
+				}
+
 				// Update mappings
 				this.plugin.mappingManager.updateMappings(
 					profileId,
@@ -172,16 +230,18 @@ export class NoteManager {
 					);
 				}
 
-				// Write note JSON to staged directory
+				// Write note JSON to staging directory
 				await this.writeNoteToStaging(profileId, noteState);
 
 				// Remove from pending queue
 				this.pendingNotes.delete(key);
 			}
 
-			// Commit all changes
+			// Save all changes
+			await this.savePublishHistory(profileId);
 			await this.plugin.mappingManager.saveMappings();
 			await this.plugin.contentIndexManager.applyQueuedUpdates(profileId);
+
 			new Notice(`Notes successfully committed for profile ${profileId}`);
 		} catch (error) {
 			Logger.error(`Error committing pending notes for profile ${profileId}:`, error);
