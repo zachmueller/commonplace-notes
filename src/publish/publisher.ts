@@ -146,8 +146,9 @@ export class Publisher {
 		triggerCloudFrontInvalidation: boolean = false
 	) {
 		try {
-			// Load existing mappings for profile
+			// Load existing mappings and content index for profile
 			this.plugin.mappingManager.loadProfileMappings(profile.id);
+			this.plugin.contentIndex.loadIndex(profile.id);
 
 			// Queue all notes for processing
 			for (const file of files) {
