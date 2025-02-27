@@ -186,10 +186,13 @@ cpn.rebuildContentIndex();
 		const files = await this.publisher.getAllPublishableNotes(profile.id);
 		for (const file of files) {
 			if (profile.publishContentIndex) {
+				const rawWithFrontmatter = await this.app.vault.read(file);
+				const raw = await this.noteManager.stripFrontmatter(file, rawWithFrontmatter);
+				const title = this.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
 				const uid = await this.frontmatterManager.getNoteUID(file);
 				if (uid) {
 					Logger.info(`Processing ${file.basename}`);
-					await this.contentIndexManager.queueUpdate(profile.id, file, uid);
+					await this.contentIndexManager.queueUpdate(profile.id, uid, title, raw);
 				}
 			}
 		}

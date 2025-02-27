@@ -1,27 +1,11 @@
-import { TFile, MarkdownView, MarkdownRenderer } from 'obsidian';
+import { MarkdownRenderer } from 'obsidian';
 import { Logger } from './logging';
 
-export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
+export async function convertMarkdownToPlaintext(markdown: string): Promise<string> {
 	try {
-		// Check if file exists and is markdown
-		if (!file || file.extension !== 'md') {
-			throw new Error('Not a markdown file');
-		}
-
-		// Get the cached file metadata
-		Logger.debug(`Converting ${file.basename} to plaintext`);
-		const markdown = await this.app.vault.read(file);
-		const cache = this.app.metadataCache.getFileCache(file);
-
-		// Remove any frontmatter
-		let cleanMarkdown = markdown;
-		if (cache?.frontmatter && cache.frontmatterPosition) {
-			const frontmatterEnd = cache.frontmatterPosition.end.offset;
-			cleanMarkdown = markdown.slice(frontmatterEnd).trim();
-		}
-
 		// Clean up problematic syntax
-		 cleanMarkdown = cleanMarkdown
+		let cleanMarkdown = markdown;
+		cleanMarkdown = cleanMarkdown
 			// Preserve dataview query contents by just removing the backticks and dataview keyword
 			.replace(/```dataview\n([\s\S]*?)```/g, '$1')
 			// Remove HTML comments
@@ -37,7 +21,7 @@ export async function convertMarkdownToPlaintext(file: TFile): Promise<string> {
 				this
 			);
 		} catch (renderError) {
-			Logger.warn(`Render error for ${file.path}, falling back to basic cleanup:`, renderError);
+			Logger.warn(`Render error, falling back to basic cleanup:`, renderError);
 			return cleanMarkdown;
 		}
 		// Extract text content

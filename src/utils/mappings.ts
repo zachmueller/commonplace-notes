@@ -1,3 +1,4 @@
+import { Notice } from 'obsidian';
 import path from 'path';
 import { PathUtils } from '../utils/path';
 import CommonplaceNotesPlugin from '../main';
@@ -31,31 +32,92 @@ export class MappingManager {
 
 	async loadProfileMappings(profileId: string) {
 		const mappingDir = this.plugin.profileManager.getMappingDir(profileId);
+		const errorDir = this.plugin.profileManager.getStagedErrorDir(profileId);
 		await PathUtils.ensureDirectory(this.plugin, mappingDir);
 
 		const slugToUidPath = `${mappingDir}/slug-to-uid.json`;
 		const uidToHashPath = `${mappingDir}/uid-to-hash.json`;
 
 		try {
-			Logger.debug(`Loading mapping from ${slugToUidPath}`);
-			const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
-			Logger.debug(`Loading mapping from ${uidToHashPath}`);
-			const uidToHashContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
+			let slugToUid = {};
+			let uidToHash = {};
+			const timestamp = Date.now();
 
-			this.mappingData[profileId] = {
-				slugToUid: JSON.parse(slugToUidContent),
-				uidToHash: JSON.parse(uidToHashContent)
-			};
-			Logger.debug(`Found ${Object.keys(slugToUidContent).length} Slug to UID mappings`);
-			Logger.debug(`Found ${Object.keys(uidToHashContent).length} UID to hash mappings`);
-		} catch (e) {
-			// Initialize empty mappings and create files
-			Logger.warn(`Failed to load mappings for profile ${profileId}, falling back to empty mapping`);
-			this.mappingData[profileId] = {
-				slugToUid: {},
-				uidToHash: {}
-			};
-			await this.saveProfileMappings(profileId);
+			// Try to load slug-to-uid mapping
+			try {
+				const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
+				slugToUid = JSON.parse(slugToUidContent);
+			} catch (e) {
+				// If file exists but is corrupted, back it up
+				if (await this.plugin.app.vault.adapter.exists(slugToUidPath)) {
+					const backupPath = `${errorDir}/${timestamp}-slug-to-uid.json`;
+					new Notice(`Corrupted slug-to-uid mapping backed up to the error directory. Check the console for details.`);
+					Logger.warn(`Failed to parse slug-to-uid mapping for profile ${profileId}, backing up to ${backupPath}`);
+
+					try {
+						// Ensure error directory exists
+						await PathUtils.ensureDirectory(this.plugin, errorDir);
+
+						// Copy the corrupted file
+						const corruptedContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
+						await this.plugin.app.vault.adapter.write(backupPath, corruptedContent);
+
+						// Also save error details
+						await this.plugin.app.vault.adapter.write(
+							`${errorDir}/${timestamp}-slug-to-uid-error.json`,
+							JSON.stringify({
+								timestamp,
+								file: 'slug-to-uid.json',
+								error: e.message,
+								stack: e.stack
+							})
+						);
+					} catch (backupError) {
+						Logger.error(`Failed to backup corrupted slug-to-uid mapping:`, backupError);
+					}
+				}
+			}
+
+			// Try to load uid-to-hash mapping
+			try {
+				const uidToHashContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
+				uidToHash = JSON.parse(uidToHashContent);
+			} catch (e) {
+				// If file exists but is corrupted, back it up
+				if (await this.plugin.app.vault.adapter.exists(uidToHashPath)) {
+					const backupPath = `${errorDir}/${timestamp}-uid-to-hash.json`;
+					new Notice(`Corrupted uid-to-hash mapping backed up to the error directory. Check the console for details.`);
+					Logger.warn(`Failed to parse uid-to-hash mapping for profile ${profileId}, backing up to ${backupPath}`);
+
+					try {
+						// Ensure error directory exists
+						await PathUtils.ensureDirectory(this.plugin, errorDir);
+
+						// Copy the corrupted file
+						const corruptedContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
+						await this.plugin.app.vault.adapter.write(backupPath, corruptedContent);
+
+						// Also save error details
+						await this.plugin.app.vault.adapter.write(
+							`${errorDir}/${timestamp}-uid-to-hash-error.json`,
+							JSON.stringify({
+								timestamp,
+								file: 'uid-to-hash.json',
+								error: e.message,
+								stack: e.stack
+							})
+						);
+					} catch (backupError) {
+						Logger.error(`Failed to backup corrupted uid-to-hash mapping:`, backupError);
+					}
+				}
+			}
+
+			// Store mapping data in memory
+			this.mappingData[profileId] = { slugToUid, uidToHash };
+		} catch (error) {
+			Logger.error(`Critical error loading mappings for profile ${profileId}:`, error);
+			throw error;
 		}
 	}
 
@@ -91,6 +153,8 @@ export class MappingManager {
 	}
 
 	updateMappings(profileId: string, slug: string, uid: string, hash: string) {
+		Logger.debug(`Updating mappings for profile ${profileId}: ${slug} -> ${uid} -> ${hash}`);
+
 		// Initialize profile mappings if they don't exist
 		if (!this.mappingData[profileId]) {
 			this.mappingData[profileId] = {

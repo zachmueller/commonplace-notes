@@ -96,7 +96,7 @@ export class NoteManager {
 		return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 	}
 
-	private async stripFrontmatter(file: TFile, content: string): Promise<string> {
+	async stripFrontmatter(file: TFile, content: string): Promise<string> {
 		const cache = this.plugin.app.metadataCache.getFileCache(file);
 		if (cache?.frontmatter && cache.frontmatterPosition) {
 			const frontmatterEnd = cache.frontmatterPosition.end.offset;
@@ -159,12 +159,15 @@ export class NoteManager {
 
 	async queueNote(file: TFile, profileId: string) {
 		try {
-			const uid = await this.plugin.frontmatterManager.getNoteUID(file);
-			if (!uid) return;
-
 			// Get raw content and strip frontmatter
+			// (grabbing prior to accessing UID since updating the frontmatter
+			//  while processing in-flight causes offset issues with below trimming)
 			const rawWithFrontmatter = await this.plugin.app.vault.read(file);
 			const raw = await this.stripFrontmatter(file, rawWithFrontmatter);
+
+			// grab UID of the note
+			const uid = await this.plugin.frontmatterManager.getNoteUID(file);
+			if (!uid) return;
 
 			// Calculate current hash
 			const title = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
@@ -223,10 +226,12 @@ export class NoteManager {
 
 				// Update content index if enabled
 				if (this.plugin.settings.publishingProfiles.find(p => p.id === profileId)?.publishContentIndex) {
+					Logger.debug(`Queuing contentIndex update for file ${noteState.file.basename} (${noteState.uid}) under profile ${profileId}`);
 					await this.plugin.contentIndexManager.queueUpdate(
 						profileId,
-						noteState.file,
-						noteState.uid
+						noteState.uid,
+						noteState.title,
+						noteState.raw
 					);
 				}
 

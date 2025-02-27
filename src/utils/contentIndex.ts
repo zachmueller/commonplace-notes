@@ -43,21 +43,20 @@ export class ContentIndexManager {
 		}
 	}
 
-	async queueUpdate(profileId: string, file: TFile, uid: string) {
+	async queueUpdate(profileId: string, uid: string, title: string, rawMarkdown: string) {
 		try {
 			// Get plaintext content
-			Logger.debug(`Queuing contentIndex update for file ${file.basename} (${uid}) under profile ${profileId}`);
 			let content;
 			try {
-				content = await convertMarkdownToPlaintext(file);
+				content = await convertMarkdownToPlaintext(rawMarkdown);
 			} catch (conversionError) {
-				Logger.warn(`Failed to convert content for ${file.path}, using fallback:`, conversionError);
-				content = file.basename; // Fallback to just using the title
+				Logger.warn(`Failed to convert content for ${title} (${uid}), using fallback:`, conversionError);
+				content = title; // Fallback to just using the title
 			}
-			
+
 			// Create entry
 			const entry: ContentEntry = {
-				title: file.basename,
+				title: title,
 				content: content
 			};
 
@@ -68,11 +67,11 @@ export class ContentIndexManager {
 			this.pendingUpdates.get(profileId)!.set(uid, entry);
 		} catch (error) {
 			// Log the error but don't throw it - allow the process to continue
-			Logger.error(`Error queuing content update for ${file.path}:`, error);
+			Logger.error(`Error queuing content update for ${title} (${uid}):`, error);
 			// Add a minimal entry so we don't completely skip this file
 			const fallbackEntry: ContentEntry = {
-				title: file.basename,
-				content: file.basename
+				title: title,
+				content: title
 			};
 			if (!this.pendingUpdates.has(profileId)) {
 				this.pendingUpdates.set(profileId, new Map());
