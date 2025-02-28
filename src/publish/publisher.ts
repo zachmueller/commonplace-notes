@@ -157,6 +157,12 @@ export class Publisher {
 			Logger.debug(`${files.length} notes processed`);
 			new Notice(`${files.length} notes processed`);
 
+			// Commit any pending frontmatter updates
+			if (this.plugin.frontmatterManager.hasUpdates()) {
+				Logger.debug(`Processing frontmatter updates`);
+				this.plugin.frontmatterManager.process();
+			}
+
 			// Commit all queued notes to staging
 			await this.plugin.noteManager.commitPendingNotes(profile.id);
 

@@ -1,6 +1,7 @@
 import { TFile, App, Notice } from 'obsidian';
 import { generateUID } from './uid';
 import CommonplaceNotesPlugin from '../main';
+import { Logger } from './logging';
 
 export class FrontmatterManager {
     private queue: Map<string, Record<string, any>> = new Map();
@@ -41,7 +42,7 @@ export class FrontmatterManager {
 			if (Array.isArray(publishContexts) && publishContexts.length > 0) {
 				const newUID = generateUID();
 				this.add(file, {"cpn-uid": newUID});
-				await this.process();
+				Logger.debug(`Queuing frontmatter update to add UID ${newUID} to ${file.basename}`);
 				return newUID;
 			}
 
@@ -65,7 +66,8 @@ export class FrontmatterManager {
         for (const [path, updates] of this.queue) {
             const file = this.app.vault.getAbstractFileByPath(path);
             if (file instanceof TFile) {
-                await this.updateFrontmatter(file, updates);
+                Logger.debug(`Commit frontmatter edits to ${file.basename}: ${JSON.stringify(updates)}`);
+				await this.updateFrontmatter(file, updates);
             }
         }
         this.queue.clear();
