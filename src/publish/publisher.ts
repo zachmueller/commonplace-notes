@@ -160,7 +160,7 @@ export class Publisher {
 			// Commit any pending frontmatter updates
 			if (this.plugin.frontmatterManager.hasUpdates()) {
 				Logger.debug(`Processing frontmatter updates`);
-				this.plugin.frontmatterManager.process();
+				await this.plugin.frontmatterManager.process();
 			}
 
 			// Commit all queued notes to staging
