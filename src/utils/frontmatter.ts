@@ -1,4 +1,4 @@
-import { TFile, App } from 'obsidian';
+import { TFile, App, Notice } from 'obsidian';
 import { generateUID } from './uid';
 import CommonplaceNotesPlugin from '../main';
 
@@ -88,6 +88,26 @@ export class FrontmatterManager {
 				reject(error);
 			}
 		});
+	}
+
+	async togglePublishContext(file: TFile, profileId: string): Promise<void> {
+		const contexts = this.getFrontmatterValue(file, 'cpn-publish-contexts') || [];
+		const wasPresent = contexts.includes(profileId);
+		
+		const updatedContexts = wasPresent
+			? contexts.filter((ctx: string) => ctx !== profileId)
+			: [...contexts, profileId];
+		
+		await this.updateFrontmatter(file, {
+			'cpn-publish-contexts': updatedContexts
+		});
+
+		// Highlight to user whether it was added/removed
+		new Notice(
+			wasPresent 
+				? `Removed "${profileId}" from publishing contexts`
+				: `Added "${profileId}" to publishing contexts`
+		);
 	}
 
 	// Check queue status

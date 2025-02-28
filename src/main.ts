@@ -13,6 +13,21 @@ import { MappingManager } from './utils/mappings';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 
+// defining interfaces to facilitate deregistering commands
+interface Command {
+	id: string;
+	name: string;
+}
+
+interface Commands {
+	listCommands(): Command[];
+	removeCommand(id: string): void;
+}
+
+interface ObsidianApp extends App {
+	commands: Commands;
+}
+
 const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
     publishingProfiles: [{
         name: 'Default AWS Profile',
@@ -164,6 +179,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				}
 			}
 		});
+
+		this.registerProfileCommands();
 	}
 
 	async loadSettings() {
@@ -172,6 +189,37 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		this.registerProfileCommands();
+	}
+
+	private registerProfileCommands() {
+		// Clear any existing profile commands first
+		const app = this.app as ObsidianApp;
+		app.commands.listCommands()
+			.filter((cmd: Command) => cmd.id.startsWith('commonplace-notes:toggle-profile-'))
+			.forEach((cmd: Command) => {
+				Logger.debug(`Deregistering command ${cmd.id}`);
+				app.commands.removeCommand(cmd.id);
+			});
+
+		// Register a command for each profile
+		this.settings.publishingProfiles.forEach(profile => {
+			Logger.debug(`Registering command dynamically: ${profile.id}`);
+			this.addCommand({
+				id: `toggle-profile-${profile.id}`,
+				name: `Toggle publishing context: ${profile.name}`,
+				checkCallback: (checking: boolean) => {
+					const activeFile = this.app.workspace.getActiveFile();
+					if (!activeFile) return false;
+					
+					if (checking) return true;
+
+					// Toggle the publish context
+					this.frontmatterManager.togglePublishContext(activeFile, profile.id);
+					return true;
+				}
+			});
+		});
 	}
 
 	async rebuildContentIndex(): Promise<void> {
