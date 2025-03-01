@@ -45,3 +45,24 @@ export interface NoteConnection {
     slug: string;
     title: string;
 }
+
+export interface BulkPublishContextMapping {
+	directory: string;
+	contexts: string[];
+	action: 'add' | 'remove';
+}
+
+export interface BulkPublishContextConfig {
+	include: BulkPublishContextMapping[];
+	exclude: string[];
+	previewPath: string;
+}
+
+export interface PublishContextChange {
+	filePath: string;
+	currentContexts: string[];
+	proposedContexts: string[];
+	action: string;
+	includePattern: string;
+	excludePattern: string;
+}

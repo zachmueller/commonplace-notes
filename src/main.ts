@@ -1,6 +1,11 @@
 import { Plugin, MarkdownView, Notice, App, TFile } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
-import { CommonplaceNotesSettings } from './types';
+import { 
+	CommonplaceNotesSettings,
+	BulkPublishContextMapping,
+	BulkPublishContextConfig,
+	PublishContextChange
+} from './types';
 import { execAsync } from './utils/shell';
 import { PathUtils } from './utils/path';
 import { pushLocalJsonsToS3 } from './publish/awsUpload';
@@ -252,5 +257,148 @@ cpn.rebuildContentIndex();
 
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
+	}
+
+	private async getTimeWindowHash(): Promise<string> {
+		// Round to nearest 3-hour window (in milliseconds)
+		const threeHours = 3 * 60 * 60 * 1000;
+		const windowTimestamp = Math.floor(Date.now() / threeHours) * threeHours;
+
+		// Convert timestamp to string and then to Uint8Array
+		const data = new TextEncoder().encode(windowTimestamp.toString());
+
+		// Generate SHA-256 hash
+		const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+
+		// Convert to hex string and take first 8 characters
+		const hashArray = Array.from(new Uint8Array(hashBuffer));
+		const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+		return hashHex.substring(0, 8);
+	}
+
+	private async writePreviewCSV(filePath: string, changes: PublishContextChange[]): Promise<void> {
+		const stringifyArray = (arr: any[]): string =>
+			'[' + arr.map(item => typeof item === 'string'
+				? `'${item}'` : item).join(', ') + ']';
+		const csvContent = [
+			['File Path', 'Current Contexts', 'Proposed Contexts', 'Action', 'Include Pattern', 'Exclude Pattern'].join(','),
+			...changes.map(change => [
+				change.filePath,
+				stringifyArray(change.currentContexts),
+				stringifyArray(change.proposedContexts),
+				change.action,
+				change.includePattern,
+				change.excludePattern
+			].map(field => `"${field}"`).join(','))
+		].join('\n');
+
+		await this.app.vault.adapter.write(filePath, csvContent);
+	}
+
+	async bulkUpdatePublishContexts(
+		config: BulkPublishContextConfig,
+		validationHash?: string,
+		dryRun: boolean = true
+	): Promise<void> {
+		// Validate hash
+		const expectedHash = await this.getTimeWindowHash();
+		if (validationHash !== expectedHash) {
+			throw new Error(
+				`Invalid validation hash. Expected: ${expectedHash}\n` +
+				`This hash is valid for the current 3-hour window.\n` +
+				`Please ensure you have backed up your vault before proceeding.`
+			);
+			return;
+		}
+
+		// Get all markdown files
+		const files = this.app.vault.getMarkdownFiles();
+		const changes: PublishContextChange[] = [];
+		let updateCount = 0;
+
+		// Process each file
+		for (const file of files) {
+			const filePath = file.path;
+
+			// Check if file is in an excluded directory
+			const isExcluded = config.exclude.some(excludeDir =>
+				filePath.startsWith(excludeDir) || filePath.includes('/' + excludeDir + '/')
+			);
+
+			if (isExcluded) {
+				// Record excluded files in the preview
+				const excludePattern = config.exclude.find(excludeDir =>
+					filePath.startsWith(excludeDir) || filePath.includes('/' + excludeDir + '/')
+				) || '';
+
+				changes.push({
+					filePath,
+					currentContexts: this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts') || [],
+					proposedContexts: [],
+					action: 'Excluded',
+					includePattern: '',
+					excludePattern
+				});
+				continue;
+			}
+
+			// Find matching include patterns
+			const matchingIncludes = config.include.filter(inc =>
+				filePath.startsWith(inc.directory) || filePath.includes('/' + inc.directory + '/')
+			);
+
+			if (matchingIncludes.length > 0) {
+				const currentContexts = this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts') || [];
+				let proposedContexts = [...currentContexts];
+
+				// Process each matching pattern
+				matchingIncludes.forEach(inc => {
+					if (inc.action === 'add') {
+						// Add new contexts
+						proposedContexts = Array.from(new Set([...proposedContexts, ...inc.contexts]));
+					} else if (inc.action === 'remove') {
+						// Remove specified contexts
+						proposedContexts = proposedContexts.filter(ctx => !inc.contexts.includes(ctx));
+					}
+				});
+
+				const hasChanges = JSON.stringify(currentContexts) !== JSON.stringify(proposedContexts);
+
+				changes.push({
+					filePath,
+					currentContexts,
+					proposedContexts,
+					action: hasChanges ? 'Update' : 'No Change',
+					includePattern: matchingIncludes.map(inc =>
+						`${inc.directory} (${inc.action} ${inc.contexts.join(',')})`
+					).join(', '),
+					excludePattern: ''
+				});
+
+				// Apply changes if not in dry run mode and there are actual changes
+				if (!dryRun && hasChanges) {
+					await this.frontmatterManager.updateFrontmatter(file, {
+						'cpn-publish-contexts': proposedContexts
+					});
+					updateCount++;
+				}
+			}
+		}
+
+		// Write preview CSV
+		await this.writePreviewCSV(config.previewPath, changes);
+
+		// Log summary
+		const mode = dryRun ? 'Preview' : 'Applied';
+		Logger.info(`${mode} CSV written to ${config.previewPath}`);
+		Logger.info(`Total files to be updated: ${changes.filter(c => c.action === 'Update').length}`);
+		Logger.info(`Total files excluded: ${changes.filter(c => c.action === 'Excluded').length}`);
+		Logger.info(`Total files unchanged: ${changes.filter(c => c.action === 'No Change').length}`);
+
+		if (!dryRun) {
+			Logger.info(`Successfully updated ${updateCount} files`);
+		} else {
+			Logger.info(`To apply these changes, call this function again with dryRun set to false`);
+		}
 	}
 }

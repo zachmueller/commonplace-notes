@@ -73,7 +73,7 @@ export class FrontmatterManager {
         this.queue.clear();
     }
 
-	private async updateFrontmatter(file: TFile, updates: Record<string, any>) {
+	async updateFrontmatter(file: TFile, updates: Record<string, any>) {
 		return new Promise<void>((resolve, reject) => {
 			try {
 				this.app.fileManager.processFrontMatter(file, (frontmatter) => {
