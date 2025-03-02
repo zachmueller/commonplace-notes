@@ -11,6 +11,7 @@ import { PathUtils } from './utils/path';
 import { pushLocalJsonsToS3 } from './publish/awsUpload';
 import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
+import { IndicatorManager } from './utils/indicators';
 import { NoteManager } from './utils/notes';
 import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
@@ -44,7 +45,11 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
         isPublic: false,
 		publishContentIndex: true,
         publishMechanism: 'AWS CLI',
-        awsSettings: {
+        indicator: {
+			style: 'color',
+			color: '#3366cc'
+		},
+		awsSettings: {
             awsAccountId: '123456789012',
             awsProfile: 'notes',
             bucketName: 'my-bucket',
@@ -59,6 +64,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 export default class CommonplaceNotesPlugin extends Plugin {
 	settings: CommonplaceNotesSettings;
 	profileManager: ProfileManager;
+	indicatorManager: IndicatorManager;
 	noteManager: NoteManager;
 	frontmatterManager: FrontmatterManager;
 	contentIndexManager: ContentIndexManager;
@@ -72,11 +78,31 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		// Initialize classes
 		this.profileManager = new ProfileManager(this);
+		this.indicatorManager = new IndicatorManager(this);
 		this.noteManager = new NoteManager(this);
 		this.frontmatterManager = new FrontmatterManager(this.app);
 		this.contentIndexManager = new ContentIndexManager(this);
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);
+
+		// refresh indicators upon file open
+		this.registerEvent(
+			this.app.workspace.on('file-open', (file) => {
+				Logger.debug(`File opened for indicator: ${file?.path}`);
+				this.indicatorManager.updateAllVisibleIndicators();
+			})
+		);
+
+		// refresh indicators for already-opened files upon initial load
+		this.indicatorManager.updateAllVisibleIndicators();
+
+		// refresh indicators upon frontmatter changes
+		this.registerEvent(
+			this.app.metadataCache.on('changed', (file) => {
+				Logger.debug('Indicator refresh triggered by frontmatter change...');
+				this.indicatorManager.updateAllVisibleIndicators();
+			})
+		);
 
 		await this.profileManager.initialize();
 

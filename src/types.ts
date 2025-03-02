@@ -17,6 +17,7 @@ export interface PublishingProfile {
     publishMechanism: 'AWS CLI' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;
+	indicator: PublishingIndicator;
 }
 
 export interface AWSProfileSettings {
@@ -65,4 +66,12 @@ export interface PublishContextChange {
 	action: string;
 	includePattern: string;
 	excludePattern: string;
+}
+
+export type IndicatorStyle = 'color' | 'emoji';
+
+export interface PublishingIndicator {
+	style: IndicatorStyle;
+	color?: string;
+	emoji?: string;
 }

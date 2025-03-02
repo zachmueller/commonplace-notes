@@ -1,6 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
-import { PublishingProfile, AWSProfileSettings } from './types';
+import { PublishingProfile, AWSProfileSettings, IndicatorStyle } from './types';
 import { Logger } from './utils/logging';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
@@ -104,6 +104,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		this.displayIndicatorSettings(containerEl, profile, index);
+
 		new Setting(profileContainer)
 			.setName('Publish mechanism')
 			.addDropdown(dropdown => dropdown
@@ -165,6 +167,66 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			this.displayLocalSettings(profileContainer, profile, index);
 		}
     }
+
+	private displayIndicatorSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
+		// Initialize indicator if it doesn't exist
+		if (!profile.indicator) {
+			profile.indicator = {
+				style: 'color',
+				color: '#000000'
+			};
+		}
+
+		// Style selector
+		new Setting(containerEl)
+			.setName('Indicator style')
+			.setDesc('Choose how to display this profile\'s indicator')
+			.addDropdown(dropdown => dropdown
+				.addOption('color', 'Color block')
+				.addOption('emoji', 'Emoji')
+				.setValue(profile.indicator.style)
+				.onChange(async (value: IndicatorStyle) => {
+					profile.indicator.style = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (profile.indicator.style === 'color') {
+			const colorSetting = new Setting(containerEl)
+				.setName('Indicator color')
+				.setDesc('Choose the color for this profile\'s indicator')
+				.addText(text => {
+					text.inputEl.type = 'color';
+					text.setValue(profile.indicator.color || '#000000')
+						.onChange(async (value) => {
+							profile.indicator.color = value;
+							await this.plugin.saveSettings();
+							//preview.style.backgroundColor = value;
+						});
+					return text;
+				});
+/*
+			// Add color preview
+			const preview = colorSetting.controlEl.createDiv();
+			preview.style.width = '20px';
+			preview.style.height = '20px';
+			preview.style.backgroundColor = profile.indicator.color || '#000000';
+			preview.style.border = '1px solid var(--text-muted)';
+			preview.style.display = 'inline-block';
+			preview.style.marginLeft = '10px';
+*/
+		} else {
+			new Setting(containerEl)
+				.setName('Indicator emoji')
+				.setDesc('Choose an emoji for this profile\'s indicator')
+				.addText(text => text
+					.setValue(profile.indicator.emoji || '📝')
+					.onChange(async (value) => {
+						profile.indicator.emoji = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+	}
 
 	private displayAWSSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
 		// Display AWS-specific settings...
@@ -306,6 +368,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			isPublic: false,
 			publishContentIndex:true,
 			publishMechanism: 'AWS CLI',
+			indicator: {
+				style: 'color',
+				color: '#3366cc'
+			},
 			awsSettings: {
 				awsAccountId: '',
 				awsProfile: '',
