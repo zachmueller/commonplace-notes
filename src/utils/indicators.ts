@@ -13,15 +13,15 @@ export class IndicatorManager {
 
 	async updateAllVisibleIndicators() {
 		// Update indicators for all visible markdown files
-		this.plugin.app.workspace.iterateAllLeaves(leaf => {
-			if (leaf.view.getViewType() === 'markdown') {
-				const view = leaf.view as MarkdownView;
-				const file = view.file;
-				if (file) {
-					this.updateIndicators(file);
-				}
+		const leaves = this.plugin.app.workspace.getLeavesOfType('markdown');
+		for (const leaf of leaves) {
+			const view = leaf.view as MarkdownView;
+			const file = view.file;
+			if (file) {
+				Logger.debug(`Updating indicators for ${file.path}`);
+				await this.updateIndicators(file);
 			}
-		});
+		}
 	}
 
 	async updateIndicators(file: TFile | null) {

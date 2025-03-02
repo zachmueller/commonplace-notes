@@ -86,10 +86,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.publisher = new Publisher(this);
 
 		// Initialize indicator updates
-		// Refresh indicators for already-opened files upon initial load
-		this.indicatorManager.updateAllVisibleIndicators();
-
-		// Targeted indicator refresh upon file open
+		// Targeted indicator refresh upon file open events
 		this.registerEvent(
 			this.app.workspace.on('file-open', (file) => {
 				if (file) {
@@ -101,11 +98,11 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		// Refresh indicators upon frontmatter changes
 		this.registerEvent(
-			this.app.metadataCache.on('changed', (file) => {
+			this.app.metadataCache.on('changed', async (file) => {
 				const cache = this.app.metadataCache.getFileCache(file);
 				if (cache?.frontmatter && 'cpn-publish-contexts' in cache.frontmatter) {
 					Logger.debug('Publish contexts changed, updating indicators');
-					this.indicatorManager.updateAllVisibleIndicators();
+					await this.indicatorManager.updateAllVisibleIndicators();
 				}
 			})
 		);
@@ -114,6 +111,12 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
 		this.registerCommands();
+
+		// Refresh indicators upon fully loading
+		this.app.workspace.onLayoutReady(async () => {
+			Logger.debug('Layout ready, initializing indicators');
+			await this.indicatorManager.updateAllVisibleIndicators();
+		});
 	}
 
 	private registerCommands() {
