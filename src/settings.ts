@@ -71,6 +71,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 						// Save settings and refresh the display
 						await this.plugin.saveSettings();
+						this.plugin.registerProfileCommands();
 						this.display();
 					}
 				}));
@@ -91,6 +92,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				})
 				.inputEl.addEventListener('blur', async () => {
 					// Refresh display to update name
+					this.plugin.registerProfileCommands();
 					this.display();
 				}));
 
@@ -102,6 +104,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.publishingProfiles[index].id = value;
 					await this.plugin.saveSettings();
+					this.plugin.registerProfileCommands();
 				}));
 
 		this.displayIndicatorSettings(containerEl, profile, index);
@@ -201,20 +204,9 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						.onChange(async (value) => {
 							profile.indicator.color = value;
 							await this.plugin.saveSettings();
-							//preview.style.backgroundColor = value;
 						});
 					return text;
 				});
-/*
-			// Add color preview
-			const preview = colorSetting.controlEl.createDiv();
-			preview.style.width = '20px';
-			preview.style.height = '20px';
-			preview.style.backgroundColor = profile.indicator.color || '#000000';
-			preview.style.border = '1px solid var(--text-muted)';
-			preview.style.display = 'inline-block';
-			preview.style.marginLeft = '10px';
-*/
 		} else {
 			new Setting(containerEl)
 				.setName('Indicator emoji')

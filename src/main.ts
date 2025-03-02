@@ -226,10 +226,9 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-		this.registerProfileCommands();
 	}
 
-	private registerProfileCommands() {
+	registerProfileCommands() {
 		// Clear any existing profile commands first
 		const app = this.app as ObsidianApp;
 		app.commands.listCommands()
