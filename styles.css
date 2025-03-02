@@ -32,3 +32,15 @@
 	margin-left: 4px; /* Space after the close button */
 	scale: 0.8;
 }
+
+.cpn-profile-delete-container {
+	margin-bottom: 1em;
+}
+
+.cpn-profile-container {
+	transition: opacity 0.2s ease-out;
+}
+
+.cpn-profile-container.removing {
+	opacity: 0;
+}

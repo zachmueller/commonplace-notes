@@ -232,33 +232,49 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	}
 
 	registerProfileCommands() {
+		Logger.debug('Starting to register profile commands');
+
 		// Clear any existing profile commands first
 		const app = this.app as ObsidianApp;
-		app.commands.listCommands()
-			.filter((cmd: Command) => cmd.id.startsWith('commonplace-notes:toggle-profile-'))
-			.forEach((cmd: Command) => {
-				Logger.debug(`Deregistering command ${cmd.id}`);
+		const existingCommands = app.commands.listCommands()
+			.filter((cmd: Command) => cmd.id.startsWith('commonplace-notes:toggle-profile-'));
+		Logger.debug(`Found ${existingCommands.length} existing profile commands to remove`);
+
+		// Attempt to deregister each command individually
+		existingCommands.forEach((cmd: Command) => {
+			Logger.debug(`Deregistering command ${cmd.id}`);
+			try {
 				app.commands.removeCommand(cmd.id);
-			});
+			} catch (error) {
+				Logger.error(`Error removing command ${cmd.id}:`, error);
+			}
+		});
 
 		// Register a command for each profile
+		Logger.debug(`Registering commands for ${this.settings.publishingProfiles.length} profiles`);
 		this.settings.publishingProfiles.forEach(profile => {
-			Logger.debug(`Registering command dynamically: ${profile.id}`);
-			this.addCommand({
-				id: `toggle-profile-${profile.id}`,
-				name: `Toggle publishing context: ${profile.name}`,
-				checkCallback: (checking: boolean) => {
-					const activeFile = this.app.workspace.getActiveFile();
-					if (!activeFile) return false;
-					
-					if (checking) return true;
+			Logger.debug(`Registering command for profile: ${profile.name} (${profile.id})`);
+			try {
+				this.addCommand({
+					id: `toggle-profile-${profile.id}`,
+					name: `Toggle publishing context: ${profile.name}`,
+					checkCallback: (checking: boolean) => {
+						const activeFile = this.app.workspace.getActiveFile();
+						if (!activeFile) return false;
+						
+						if (checking) return true;
 
-					// Toggle the publish context
-					this.frontmatterManager.togglePublishContext(activeFile, profile.id);
-					return true;
-				}
-			});
+						// Toggle the publish context
+						this.frontmatterManager.togglePublishContext(activeFile, profile.id);
+						return true;
+					}
+				});
+				Logger.debug(`Successfully registered command for profile ${profile.name}`);
+			} catch (error) {
+				Logger.error(`Error registering command for profile ${profile.name}:`, error);
+			}
 		});
+		Logger.debug('Completed profile command registration');
 	}
 
 	async rebuildContentIndex(): Promise<void> {

@@ -12,40 +12,108 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
     }
 
     display(): void {
-        const {containerEl} = this;
-        containerEl.empty();
+        Logger.debug('Starting settings display refresh');
+		const {containerEl} = this;
+        Logger.debug('Clearing container');
+		containerEl.empty();
 
+		Logger.debug('Creating header');
 		containerEl.createEl('h2', {text: 'Publishing profiles'});
 
 		// Add button to create new profile
+		Logger.debug('Adding new profile button');
 		new Setting(containerEl)
 			.setName('Add new profile')
 			.addButton(button => button
 				.setButtonText('Add profile')
 				.onClick(async () => {
+					Logger.debug('Add profile button clicked');
 					await this.addNewProfile();
 				}));
 
 		// Display existing profiles
+		Logger.debug(`Displaying ${this.plugin.settings.publishingProfiles.length} profiles`);
 		this.plugin.settings.publishingProfiles.forEach((profile, index) => {
-			this.displayProfileSettings(containerEl, profile, index);
+			Logger.debug(`Processing profile ${index}: ${profile.name}`);
+			try {
+				this.displayProfileSettings(containerEl, profile, index);
+				Logger.debug(`Successfully displayed profile ${profile.name}`);
+			} catch (error) {
+				Logger.error(`Error displaying profile ${profile.name}:`, error);
+			}
 		});
+		Logger.debug('Completed settings display refresh');
 	}
 
 	private displayProfileSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
-		const profileContainer = containerEl.createDiv();
+		Logger.debug(`Starting to display settings for profile ${profile.name} (${profile.id})`);
+		const profileContainer = containerEl.createDiv({cls: 'cpn-profile-container'});
 		profileContainer.createEl('h3', {text: profile.name});
 
 		// Add last publish timestamp info
 		const lastUpdated = profile.lastFullPublishTimestamp ? new Date(profile.lastFullPublishTimestamp).toLocaleString() : 'n/a';
 		const timestampDiv = profileContainer.createEl('div', {
-			cls: 'profile-last-publish',
+			cls: 'cpn-profile-last-publish',
 			text: `Last full publish: ${lastUpdated}`
 		});
+
 		// Add simple styling
 		timestampDiv.style.fontSize = '0.8em';
 		timestampDiv.style.color = 'var(--text-muted)';
 		timestampDiv.style.marginBottom = '1em';
+
+		// Create delete button in its own container
+		const deleteButtonContainer = profileContainer.createDiv({
+			cls: 'cpn-profile-delete-container'
+		});
+
+		new Setting(deleteButtonContainer)
+			.addButton(button => {
+				let isConfirmState = false;
+
+				button
+					.setButtonText('Delete profile')
+					.setClass('mod-warning')
+					.onClick(async (evt: MouseEvent) => {
+						evt.preventDefault();
+
+						if (!isConfirmState) {
+							// First click - show confirmation state
+							button.setButtonText('Click again to confirm deletion');
+							button.setClass('mod-error');
+							isConfirmState = true;
+
+							// Reset after 3 seconds if not clicked
+							setTimeout(() => {
+								if (isConfirmState) {
+									button.setButtonText('Delete profile');
+									button.setClass('mod-warning');
+									isConfirmState = false;
+								}
+							}, 3000);
+						} else { // Second click - perform deletion
+							// Add removing class for animation
+							profileContainer.addClass('removing');
+
+							// Wait for animation to complete before actual removal
+							setTimeout(async () => {
+								this.plugin.settings.publishingProfiles.splice(index, 1);
+								await this.plugin.saveSettings().then(() => {
+									this.plugin.registerProfileCommands();
+									this.display();
+								});
+							}, 200); // match CSS transition duration: .cpn-profile-container
+						}
+					});
+				return button;
+			});
+
+		// Don't allow deletion of the last profile
+		if (this.plugin.settings.publishingProfiles.length <= 1) {
+			Logger.debug(`Disabling delete button for last remaining profile ${profile.name}`);
+			deleteButtonContainer.querySelector('button')?.setAttribute('disabled', 'true');
+			deleteButtonContainer.setAttribute('title', 'Cannot delete the last remaining profile');
+		}
 
 		// container for header and delete button
 		const headerContainer = profileContainer.createDiv({
@@ -55,32 +123,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		headerContainer.style.justifyContent = 'space-between';
 		headerContainer.style.alignItems = 'center';
 		headerContainer.style.marginBottom = '1em';
-
-		// Create the delete button
-		// TODO::clean up the CSS/etc to make this button less obnoxious::
-		const deleteButton = new Setting(headerContainer)
-			.addButton(button => button
-				.setButtonText('Delete profile')
-				.setClass('mod-warning') // This gives it a red color to indicate destructive action
-				.onClick(async () => {
-					// Show a confirmation dialog
-					const confirmDelete = confirm(`Are you sure you want to delete the profile "${profile.name}"?`);
-					if (confirmDelete) {
-						// Remove the profile from the array
-						this.plugin.settings.publishingProfiles.splice(index, 1);
-
-						// Save settings and refresh the display
-						await this.plugin.saveSettings();
-						this.plugin.registerProfileCommands();
-						this.display();
-					}
-				}));
-
-		// Don't allow deletion of the last profile
-		if (this.plugin.settings.publishingProfiles.length <= 1) {
-			deleteButton.setDisabled(true);
-			deleteButton.setTooltip('Cannot delete the last remaining profile');
-		}
 
 		new Setting(profileContainer)
 			.setName('Profile name')
