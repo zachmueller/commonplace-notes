@@ -27,7 +27,13 @@ export class IndicatorManager {
 	async updateIndicators(file: TFile | null) {
 		try {
 			Logger.debug(`Starting indicator update for file: ${file?.path}`);
-			
+
+			// Only update if file exists and is markdown
+			if (!file || file.extension !== 'md') {
+				Logger.debug(`Skipping non-Markdown file`);
+				return;
+			}
+
 			// Clear existing indicators for this file only
 			this.clearIndicatorsForFile(file);
 

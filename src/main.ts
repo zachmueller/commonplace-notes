@@ -85,22 +85,28 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);
 
-		// refresh indicators upon file open
+		// Initialize indicator updates
+		// Refresh indicators for already-opened files upon initial load
+		this.indicatorManager.updateAllVisibleIndicators();
+
+		// Targeted indicator refresh upon file open
 		this.registerEvent(
 			this.app.workspace.on('file-open', (file) => {
-				Logger.debug(`File opened for indicator: ${file?.path}`);
-				this.indicatorManager.updateAllVisibleIndicators();
+				if (file) {
+					Logger.debug(`File opened for indicator: ${file?.path}`);
+					this.indicatorManager.updateIndicators(file);
+				}
 			})
 		);
 
-		// refresh indicators for already-opened files upon initial load
-		this.indicatorManager.updateAllVisibleIndicators();
-
-		// refresh indicators upon frontmatter changes
+		// Refresh indicators upon frontmatter changes
 		this.registerEvent(
 			this.app.metadataCache.on('changed', (file) => {
-				Logger.debug('Indicator refresh triggered by frontmatter change...');
-				this.indicatorManager.updateAllVisibleIndicators();
+				const cache = this.app.metadataCache.getFileCache(file);
+				if (cache?.frontmatter && 'cpn-publish-contexts' in cache.frontmatter) {
+					Logger.debug('Publish contexts changed, updating indicators');
+					this.indicatorManager.updateAllVisibleIndicators();
+				}
 			})
 		);
 
