@@ -6,6 +6,7 @@ import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from './path';
 import remarkObsidianLinks, { ResolvedNoteInfo } from './remarkObsidianLinks';
+import remarkLineNumbers from './remarkLineNumbers';
 import { Logger } from './logging';
 
 interface NoteState {
@@ -121,6 +122,7 @@ export class NoteManager {
 	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string): Promise<string> {
 		const processor = unified()
 			.use(remarkParse)
+			.use(remarkLineNumbers)
 			.use(remarkObsidianLinks, {
 				frontmatterManager: this.plugin.frontmatterManager,
 				resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
