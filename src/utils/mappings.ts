@@ -141,11 +141,13 @@ export class MappingManager {
 		const data = this.mappingData[profileId];
 		if (!data) return;
 
+		Logger.debug(`Writing updates to slug-to-uid file for profile '${profileId}'`);
 		await this.plugin.app.vault.adapter.write(
 			`${mappingDir}/slug-to-uid.json`,
 			JSON.stringify(data.slugToUid)
 		);
 
+		Logger.debug(`Writing updates to uid-to-hash file for profile '${profileId}'`);
 		await this.plugin.app.vault.adapter.write(
 			`${mappingDir}/uid-to-hash.json`,
 			JSON.stringify(data.uidToHash)

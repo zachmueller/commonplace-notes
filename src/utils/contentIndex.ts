@@ -106,6 +106,7 @@ export class ContentIndexManager {
 
 	private async saveIndex(profileId: string, index: ContentIndex): Promise<void> {
 		const indexPath = this.plugin.profileManager.getContentIndexPath(profileId);
+		Logger.debug(`Writing contentIndex updates to local file for profile '${profileId}'`);
 		await this.plugin.app.vault.adapter.write(
 			indexPath,
 			JSON.stringify(index)
