@@ -28,6 +28,12 @@
 	z-index: 1000;
 }
 
+.workspace-tab-header .cpn-tooltip:hover::after {
+	bottom: auto;  /* Remove bottom positioning */
+	top: 100%;    /* Position below instead of above */
+	margin-top: 4px; /* Add some spacing from the icon */
+}
+
 .cpn-tab-indicators {
 	margin-left: 4px; /* Space after the close button */
 	scale: 0.8;
