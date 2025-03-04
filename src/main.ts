@@ -291,7 +291,7 @@ cpn.rebuildContentIndex();
 			if (profile.publishContentIndex) {
 				const rawWithFrontmatter = await this.app.vault.read(file);
 				const raw = await this.noteManager.stripFrontmatter(file, rawWithFrontmatter);
-				const title = this.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
+				const title = this.frontmatterManager.getNoteTitle(file);
 				const uid = this.frontmatterManager.getNoteUID(file);
 				if (uid) {
 					Logger.info(`Processing ${file.basename}`);
