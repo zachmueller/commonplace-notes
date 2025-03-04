@@ -25,7 +25,7 @@ export class FrontmatterManager {
 		return this.getFrontmatter(file) !== undefined;
 	}
 
-	async getNoteUID(file: TFile): Promise<string | null> {
+	getNoteUID(file: TFile): string|null {
 		try {
 			// First check if there's any frontmatter at all
 			if (!this.hasFrontmatter(file)) {

@@ -203,7 +203,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				}
 
 				// craft URL
-				const uid = await this.frontmatterManager.getNoteUID(file);
+				const uid = this.frontmatterManager.getNoteUID(file);
 				if (!uid) {
 					new Notice(`Did not find UID for note '${file.basename}'`);
 					return;
@@ -292,7 +292,7 @@ cpn.rebuildContentIndex();
 				const rawWithFrontmatter = await this.app.vault.read(file);
 				const raw = await this.noteManager.stripFrontmatter(file, rawWithFrontmatter);
 				const title = this.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
-				const uid = await this.frontmatterManager.getNoteUID(file);
+				const uid = this.frontmatterManager.getNoteUID(file);
 				if (uid) {
 					Logger.info(`Processing ${file.basename}`);
 					await this.contentIndexManager.queueUpdate(profile.id, uid, title, raw);

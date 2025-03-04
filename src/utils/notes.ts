@@ -131,7 +131,7 @@ export class NoteManager {
 
 					if (targetFile instanceof TFile && targetFile.extension === 'md') {
 						try {
-							const uid = await this.plugin.frontmatterManager.getNoteUID(targetFile);
+							const uid = this.plugin.frontmatterManager.getNoteUID(targetFile);
 							if (uid === null) return null;
 							const contexts = await this.plugin.publisher.getPublishContextsForFile(targetFile);
 
@@ -168,7 +168,7 @@ export class NoteManager {
 			const raw = await this.stripFrontmatter(file, rawWithFrontmatter);
 
 			// grab UID of the note
-			const uid = await this.plugin.frontmatterManager.getNoteUID(file);
+			const uid = this.plugin.frontmatterManager.getNoteUID(file);
 			if (!uid) return;
 
 			// Calculate current hash
