@@ -103,7 +103,7 @@ export class Publisher {
 						isOutgoingLink: true,
 						uid,
 						slug: PathUtils.slugifyFilePath(connectedFile.path),
-						title: connectedFile.basename
+						title: this.plugin.frontmatterManager.getNoteTitle(connectedFile)
 					});
 				}
 			}
@@ -128,7 +128,7 @@ export class Publisher {
 								isOutgoingLink: false,
 								uid,
 								slug: PathUtils.slugifyFilePath(connectedFile.path),
-								title: connectedFile.basename
+								title: this.plugin.frontmatterManager.getNoteTitle(connectedFile)
 							});
 						}
 					}

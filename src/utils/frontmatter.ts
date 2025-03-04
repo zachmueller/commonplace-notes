@@ -64,6 +64,16 @@ export class FrontmatterManager {
 		}
 	}
 
+	getNoteTitle(file: TFile): string {
+		try {
+			const title = this.getFrontmatterValue(file, 'cpn-title') || file.basename;
+			return title;
+		} catch (error) {
+			console.error('Error getting note title:', error);
+			throw error;
+		}
+	}
+
     add(file: TFile, updates: Record<string, any>) {
         const path = file.path;
         if (!this.queue.has(path)) {

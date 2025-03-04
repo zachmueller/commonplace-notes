@@ -138,7 +138,7 @@ export class NoteManager {
 							if (contexts.includes(profileId)) {
 								return {
 									uid,
-									title: targetFile.basename,
+									title: this.plugin.frontmatterManager.getNoteTitle(targetFile),
 									displayText: alias || link,
 									published: true
 								};
@@ -172,7 +172,7 @@ export class NoteManager {
 			if (!uid) return;
 
 			// Calculate current hash
-			const title = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') || file.basename;
+			const title = this.plugin.frontmatterManager.getNoteTitle(file);
 			const currentHash = await this.getSHA1Hash(`${uid}::${title}::${raw}`);
 
 			// Load publish history to determine prior hash
