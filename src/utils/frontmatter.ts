@@ -6,6 +6,7 @@ import { Logger } from './logging';
 export class FrontmatterManager {
     private queue: Map<string, Record<string, any>> = new Map();
     private app: App;
+	private cachedUIDs: Map<string, string> = new Map();
 
     constructor(app: App) {
         this.app = app;
@@ -27,7 +28,16 @@ export class FrontmatterManager {
 
 	getNoteUID(file: TFile): string|null {
 		try {
-			// First check if there's any frontmatter at all
+			// First check if there's already a cached UID. This helps handle cases
+			// for new notes without UIDs to have a single UID generated when the
+			// same note is referenced multiple times in a single publish
+            const cachedUID = this.cachedUIDs.get(file.path);
+            if (cachedUID) {
+                Logger.debug(`Using cached UID for ${file.basename}: ${cachedUID}`);
+                return cachedUID;
+            }
+
+			// Check if there's any frontmatter at all
 			if (!this.hasFrontmatter(file)) {
 				return null;
 			}
@@ -42,6 +52,7 @@ export class FrontmatterManager {
 			if (Array.isArray(publishContexts) && publishContexts.length > 0) {
 				const newUID = generateUID();
 				this.add(file, {"cpn-uid": newUID});
+				this.cachedUIDs.set(file.path, newUID);
 				Logger.debug(`Queuing frontmatter update to add UID ${newUID} to ${file.basename}`);
 				return newUID;
 			}
@@ -71,6 +82,8 @@ export class FrontmatterManager {
             }
         }
         this.queue.clear();
+		this.cachedUIDs.clear();
+		Logger.debug('Frontmatter queue and cachedUIDs cleared after processing frontmatter');
     }
 
 	async updateFrontmatter(file: TFile, updates: Record<string, any>) {
@@ -125,5 +138,6 @@ export class FrontmatterManager {
 	// Clear queue without processing
 	clear() {
 		this.queue.clear();
+		this.cachedUIDs.clear();
 	}
 }
