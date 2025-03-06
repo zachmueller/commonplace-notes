@@ -19,5 +19,5 @@ export function generateUID(): string {
 
 		r += b64list.charAt(p) + b64list.charAt(q);
 	}
-	return r.replace('/', '_');
+	return r.replace(/\//g, '_');
 }
