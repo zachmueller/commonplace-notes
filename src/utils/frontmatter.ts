@@ -2,6 +2,7 @@ import { TFile, App, Notice } from 'obsidian';
 import { generateUID } from './uid';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';
+import { NoticeManager } from '../utils/notice';
 
 export class FrontmatterManager {
     private queue: Map<string, Record<string, any>> = new Map();
@@ -128,7 +129,7 @@ export class FrontmatterManager {
 		});
 
 		// Highlight to user whether it was added/removed
-		new Notice(
+		NoticeManager.showNotice(
 			wasPresent 
 				? `Removed "${profileId}" from publishing contexts`
 				: `Added "${profileId}" to publishing contexts`

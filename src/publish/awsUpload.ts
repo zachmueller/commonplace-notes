@@ -48,11 +48,9 @@ export async function pushLocalJsonsToS3(
 		const options = { cwd: basePath };
 
 		// Upload notes
-//new Notice('Uploading notes from local to S3...');
 		const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
 		Logger.debug('Executing command:', cmdNotes);
 
-//const { stdout: stdoutNotes, stderr: stderrNotes } = await execAsync(cmdNotes, options);
 		let { success, result, error } = await NoticeManager.showProgress(
 			`Uploading notes from local to S3`,
 			execAsync(cmdNotes, options),
@@ -65,7 +63,6 @@ export async function pushLocalJsonsToS3(
 			throw new Error(`Notes upload failed: ${result?.stderr}`);
 		}
 		Logger.debug('Notes upload output:', result?.stdout);
-//new Notice('Successfully uploaded notes to S3');
 
 		// Upload mapping files
 		new Notice('Uploading mappings from local to S3...');

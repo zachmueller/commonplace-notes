@@ -55,7 +55,7 @@ export class Publisher {
 			);
 
 			if (profiles.length === 0) {
-				new Notice('No valid publishing profiles available');
+				NoticeManager.showNotice('No valid publishing profiles available');
 				resolve(null);
 				return;
 			}
@@ -148,7 +148,7 @@ export class Publisher {
 	) {
 		try {
 			await NoticeManager.showProgress(
-				`Processing ${files.length} notes...`,
+				`Processing ${files.length} notes`,
 				(async () => {
 					// Ensure all required directories exist before processing
 					await this.plugin.profileManager.initializeProfileDirectories(profile.id);
@@ -182,7 +182,7 @@ export class Publisher {
 				// TODO::instead should prompt user whether to delete local copies of processed notes::
 				// (for now just stopping here to not delete anything)
 				if (!awsUpload) {
-					new Notice('Upload failed. Staged files preserved for retry.');
+					NoticeManager.showNotice('Upload failed. Staged files preserved for retry.');
 					return;
 				}
 			} else {
@@ -203,9 +203,9 @@ export class Publisher {
 				}
 			}
 
-			new Notice(`Successfully published ${files.length} note(s)`);
+			NoticeManager.showNotice(`Successfully published ${files.length} note(s)`);
 		} catch (error) {
-			new Notice(`Error during publishing: ${error.message}`);
+			NoticeManager.showNotice(`Error during publishing: ${error.message}`);
 			Logger.error('Publishing error:', error);
 
 			// Move staged files to error directory
@@ -253,10 +253,10 @@ export class Publisher {
 			// Clean up staged directory
 			await this.cleanupStagedFiles(profileId);
 
-			new Notice(`Publish failed. Error details saved to ${errorSessionDir}`);
+			NoticeManager.showNotice(`Publish failed. Error details saved to ${errorSessionDir}`);
 		} catch (moveError) {
 			Logger.error('Error handling publish failure:', moveError);
-			new Notice('Failed to save error details. Check console for more information.');
+			NoticeManager.showNotice('Failed to save error details. Check console for more information.');
 		}
 	}
 
@@ -318,7 +318,7 @@ export class Publisher {
 	async publishSingle(file: TFile) {
 		const contexts = await this.getPublishContextsForFile(file);
 		if (contexts.length === 0) {
-			new Notice('No publishing contexts defined for this note');
+			NoticeManager.showNotice('No publishing contexts defined for this note');
 			return;
 		}
 
@@ -337,7 +337,7 @@ export class Publisher {
 	async publishConnected(file: TFile) {
 		const contexts = await this.getPublishContextsForFile(file);
 		if (contexts.length === 0) {
-			new Notice('No publishing contexts defined for this note');
+			NoticeManager.showNotice('No publishing contexts defined for this note');
 			return;
 		}
 
@@ -345,7 +345,7 @@ export class Publisher {
 		if (!profile) return;
 
 		if (this.isFileExcluded(file, profile)) {
-			new Notice('This note is in an excluded directory and cannot be published');
+			NoticeManager.showNotice('This note is in an excluded directory and cannot be published');
 			return;
 		}
 
@@ -363,7 +363,7 @@ export class Publisher {
 
 		const updatedNotes = await this.getUpdatedNotes(profile.id);
 		if (updatedNotes.length === 0) {
-			new Notice('No updates found since last full publish');
+			NoticeManager.showNotice('No updates found since last full publish');
 			return;
 		}
 
@@ -377,7 +377,7 @@ export class Publisher {
 
 		const allNotes = await this.getAllPublishableNotes(profile.id);
 		if (allNotes.length === 0) {
-			new Notice('No publishable notes found for this profile');
+			NoticeManager.showNotice('No publishable notes found for this profile');
 			return;
 		}
 
