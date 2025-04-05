@@ -4,6 +4,7 @@ import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from 
 import { pushLocalJsonsToS3 } from './awsUpload';
 import { PathUtils } from '../utils/path';
 import { Logger } from '../utils/logging';
+import { NoticeManager } from '../utils/notice';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	profiles: PublishingProfile[];
@@ -146,19 +147,25 @@ export class Publisher {
 		triggerCloudFrontInvalidation: boolean = false
 	) {
 		try {
-			// Ensure all required directories exist before processing
-			await this.plugin.profileManager.initializeProfileDirectories(profile.id);
+			await NoticeManager.showProgress(
+				`Processing ${files.length} notes...`,
+				(async () => {
+					// Ensure all required directories exist before processing
+					await this.plugin.profileManager.initializeProfileDirectories(profile.id);
 
-			// Load existing mappings and content index for profile
-			await this.plugin.mappingManager.loadProfileMappings(profile.id);
-			await this.plugin.contentIndexManager.loadIndex(profile.id);
+					// Load existing mappings and content index for profile
+					await this.plugin.mappingManager.loadProfileMappings(profile.id);
+					await this.plugin.contentIndexManager.loadIndex(profile.id);
 
-			// Queue all notes for processing
-			for (const file of files) {
-				await this.plugin.noteManager.queueNote(file, profile.id);
-			}
-			Logger.debug(`${files.length} notes processed`);
-			new Notice(`${files.length} notes processed`);
+					// Queue all notes for processing
+					for (const file of files) {
+						await this.plugin.noteManager.queueNote(file, profile.id);
+					}
+
+					Logger.debug(`${files.length} notes processed`);
+				})(),
+				`${files.length} notes processed`
+			);
 
 			// Commit any pending frontmatter updates
 			if (this.plugin.frontmatterManager.hasUpdates()) {

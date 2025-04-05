@@ -16,6 +16,7 @@ import { NoteManager } from './utils/notes';
 import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
+import { NoticeManager } from './utils/notice';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 
@@ -307,6 +308,7 @@ cpn.rebuildContentIndex();
 
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
+		NoticeManager.cleanup();
 	}
 
 	private async getTimeWindowHash(): Promise<string> {
