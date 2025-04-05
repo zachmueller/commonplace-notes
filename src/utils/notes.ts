@@ -8,6 +8,7 @@ import { PathUtils } from './path';
 import remarkObsidianLinks, { ResolvedNoteInfo } from './remarkObsidianLinks';
 import remarkLineNumbers from './remarkLineNumbers';
 import { Logger } from './logging';
+import { NoticeManager } from '../utils/notice';
 
 interface NoteState {
 	file: TFile;

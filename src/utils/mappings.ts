@@ -2,6 +2,7 @@ import path from 'path';
 import { PathUtils } from '../utils/path';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';
+import { NoticeManager } from '../utils/notice';
 
 interface MappingData {
 	slugToUid: Record<string, string>;
