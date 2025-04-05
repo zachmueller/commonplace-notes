@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, Notice, App, TFile } from 'obsidian';
+import { Plugin, MarkdownView, App, TFile } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
 import { 
 	CommonplaceNotesSettings,
@@ -182,14 +182,14 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				// check that file is active
 				const file = this.app.workspace.getActiveFile();
 				if (!file) {
-					new Notice('No active file');
+					NoticeManager.showNotice('No active file');
 					return;
 				}
 
 				// check publishing contexts
 				const contexts = await this.publisher.getPublishContextsForFile(file);
 				if (contexts.length === 0) {
-					new Notice('No publishing contexts defined for this note');
+					NoticeManager.showNotice('No publishing contexts defined for this note');
 					return;
 				}
 
@@ -199,21 +199,21 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 				// check for baseUrl setting
 				if (!profile.baseUrl) {
-					new Notice(`No baseUrl defined for profile ${profile.id}`);
+					NoticeManager.showNotice(`No baseUrl defined for profile ${profile.id}`);
 					return;
 				}
 
 				// craft URL
 				const uid = this.frontmatterManager.getNoteUID(file);
 				if (!uid) {
-					new Notice(`Did not find UID for note '${file.basename}'`);
+					NoticeManager.showNotice(`Did not find UID for note '${file.basename}'`);
 					return;
 				}
 				const base = profile.baseUrl.replace(/\/?$/, '/');
 				const url = `${base}#u=${encodeURIComponent(uid)}`;
 				try {
 					await navigator.clipboard.writeText(url);
-					new Notice('Note URL copied');
+					NoticeManager.showNotice('Note URL copied');
 				} catch (error) {
 					Logger.error('Error copying note URL:', error);
 					throw new Error('Error copying note URL, check console');
@@ -303,7 +303,7 @@ cpn.rebuildContentIndex();
 
 		// apply queued updates
 		await this.contentIndexManager.applyQueuedUpdates(profile.id);
-		new Notice(`Reprocessed contentIndex.json for profile ${profile.id}`);
+		NoticeManager.showNotice(`Reprocessed contentIndex.json for profile ${profile.id}`);
 	}
 
 	onunload() {

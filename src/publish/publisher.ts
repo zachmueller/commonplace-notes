@@ -1,4 +1,4 @@
-import { Notice, TFile, SuggestModal, App } from 'obsidian';
+import { TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
 import { pushLocalJsonsToS3 } from './awsUpload';

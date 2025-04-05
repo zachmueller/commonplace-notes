@@ -1,4 +1,4 @@
-import { TFile, App, Notice } from 'obsidian';
+import { TFile, App } from 'obsidian';
 import { generateUID } from './uid';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';

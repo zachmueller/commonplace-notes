@@ -1,4 +1,3 @@
-import { Notice } from 'obsidian';
 import { execAsync } from '../utils/shell';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
@@ -31,7 +30,6 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
 			(async () => {
 				for (const command of commands) {
 					Logger.debug(`Executing: ${command}`);
-					new Notice(`Executing: ${command}`);
 					await execAsync(command);
 				}
 			})(),
@@ -43,7 +41,7 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
 		}
 	} catch (error) {
 		Logger.error('Failed to refresh credentials:', error);
-		new Notice('Failed to refresh credentials: ' + (error as Error).message);
+		NoticeManager.showNotice('Failed to refresh credentials: ' + (error as Error).message);
 		throw error;
 	}
 }

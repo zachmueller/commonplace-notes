@@ -1,4 +1,3 @@
-import { Notice } from 'obsidian';
 import path from 'path';
 import { PathUtils } from '../utils/path';
 import CommonplaceNotesPlugin from '../main';
@@ -51,7 +50,7 @@ export class MappingManager {
 				// If file exists but is corrupted, back it up
 				if (await this.plugin.app.vault.adapter.exists(slugToUidPath)) {
 					const backupPath = `${errorDir}/${timestamp}-slug-to-uid.json`;
-					new Notice(`Corrupted slug-to-uid mapping backed up to the error directory. Check the console for details.`);
+					NoticeManager.showNotice(`Corrupted slug-to-uid mapping backed up to the error directory. Check the console for details.`);
 					Logger.warn(`Failed to parse slug-to-uid mapping for profile ${profileId}, backing up to ${backupPath}`);
 
 					try {
@@ -86,7 +85,7 @@ export class MappingManager {
 				// If file exists but is corrupted, back it up
 				if (await this.plugin.app.vault.adapter.exists(uidToHashPath)) {
 					const backupPath = `${errorDir}/${timestamp}-uid-to-hash.json`;
-					new Notice(`Corrupted uid-to-hash mapping backed up to the error directory. Check the console for details.`);
+					NoticeManager.showNotice(`Corrupted uid-to-hash mapping backed up to the error directory. Check the console for details.`);
 					Logger.warn(`Failed to parse uid-to-hash mapping for profile ${profileId}, backing up to ${backupPath}`);
 
 					try {

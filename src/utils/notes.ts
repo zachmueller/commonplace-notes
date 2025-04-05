@@ -1,4 +1,4 @@
-import { Notice, TFile } from 'obsidian';
+import { TFile } from 'obsidian';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
@@ -249,11 +249,11 @@ export class NoteManager {
 			await this.plugin.mappingManager.saveMappings();
 			await this.plugin.contentIndexManager.applyQueuedUpdates(profileId);
 
-			new Notice(`Notes successfully committed for profile ${profileId}`);
+			NoticeManager.showNotice(`Notes successfully committed for profile ${profileId}`);
 		} catch (error) {
 			Logger.error(`Error committing pending notes for profile ${profileId}:`, error);
 			// TODO: Handle error state, possibly move failed notes to error staging
-			new Notice(`Error committing notes: ${error.message}`);
+			NoticeManager.showNotice(`Error committing notes: ${error.message}`);
 			throw error;
 		}
 	}

@@ -1,4 +1,3 @@
-import { Notice } from 'obsidian';
 import * as path from 'path';
 import { execAsync } from '../utils/shell';
 import CommonplaceNotesPlugin from '../main';
@@ -51,51 +50,55 @@ export async function pushLocalJsonsToS3(
 		const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
 		Logger.debug('Executing command:', cmdNotes);
 
-		let { success, result, error } = await NoticeManager.showProgress(
+		const { success: notesSuccess, result: notesResult, error: notesError } = await NoticeManager.showProgress(
 			`Uploading notes from local to S3`,
 			execAsync(cmdNotes, options),
 			`Successfully uploaded notes to S3`,
 			`Notes upload failed, check console for error details`
 		);
-		if (result && result?.stderr) {
+		if (notesResult && notesResult?.stderr) {
 			// TODO::generalize aws CLI calls to standardize error handling::
-			Logger.debug(`stdout from aws command: ${result?.stdout}`);
-			throw new Error(`Notes upload failed: ${result?.stderr}`);
+			Logger.debug(`stdout from aws command: ${notesResult?.stdout}`);
+			throw new Error(`Notes upload failed: ${notesResult?.stderr}`);
 		}
-		Logger.debug('Notes upload output:', result?.stdout);
+		Logger.debug('Notes upload output:', notesResult?.stdout);
 
 		// Upload mapping files
-		new Notice('Uploading mappings from local to S3...');
 		const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
 		Logger.debug('Executing command:', cmdMapping);
 
-		const { stdout: stdoutMapping, stderr: stderrMapping } = await execAsync(cmdMapping, options);
-		if (stderrMapping) {
-			Logger.debug(`stdout from aws command: ${stdoutMapping}`);
-			throw new Error(`Mapping upload failed: ${stderrMapping}`);
+		const { success: mapSuccess, result: mapResult, error: mapError } = await NoticeManager.showProgress(
+			`Uploading mappings from local to S3`,
+			execAsync(cmdNotes, options),
+			`Mapping files successfully uploaded to S3`,
+			`Mapping upload failed, check console for error details`
+		);
+		if (mapResult && mapResult?.stderr) {
+			Logger.debug(`stdout from aws command: ${mapResult?.stdout}`);
+			throw new Error(`Mapping upload failed: ${mapResult?.stderr}`);
 		}
-		Logger.debug('Mappings upload output:', stdoutMapping);
-		new Notice('Mapping files successfully uploaded to S3');
+		Logger.debug('Mappings upload output:', mapResult?.stdout);
 
 		// Upload content index if enabled
 		if (profile.publishContentIndex) {
-			new Notice('Uploading content index from local to S3...');
-
 			if (!plugin.app.vault.adapter.exists(contentIndexPath)) {
 				Logger.warn(`Content index file does not exist: ${contentIndexPath}`);
-				new Notice('No content index file found to upload');
+				NoticeManager.showNotice('No content index file found to upload');
 			} else {
 				const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/content/`;
 				const cmdContentIndex = `aws s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
 				Logger.debug('Executing command:', cmdContentIndex);
 
-				const { stdout: stdoutContentIndex, stderr: stderrContentIndex } = 
-					await execAsync(cmdContentIndex, options);
-				if (stderrContentIndex) {
-					Logger.debug(`stdout from aws command: ${stdoutContentIndex}`);
-					throw new Error(`Content index upload failed: ${stderrContentIndex}`);
+				const { success: contentSuccess, result: contentResult, error: contentError } = await NoticeManager.showProgress(
+					`Uploading content index from local to S3`,
+					execAsync(cmdContentIndex, options),
+					`Content index successfully uploaded to S3`,
+					`Content index upload failed, check console for error details`
+				);
+				if (contentResult && contentResult?.stderr) {
+					Logger.debug(`stdout from aws command: ${contentResult?.stdout}`);
+					throw new Error(`Content index upload failed: ${contentResult?.stderr}`);
 				}
-				new Notice('Content index successfully uploaded to S3');
 			}
 		}
 
@@ -107,7 +110,7 @@ export async function pushLocalJsonsToS3(
 		return true;
 	} catch (error) {
 		Logger.error('Error executing AWS command:', error);
-		new Notice(`Upload failed: ${error.message}`);
+		NoticeManager.showNotice(`Upload failed: ${error.message}`);
 		return false;
 	}
 }
@@ -121,21 +124,23 @@ async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, prof
 		}
 
 		const cmd = `aws cloudfront create-invalidation --distribution-id ${profile.awsSettings.cloudFrontDistributionId} --paths "/*" --profile ${profile.awsSettings.awsProfile}`;
-		
-		new Notice('Creating CloudFront invalidation...');
-		const { stdout, stderr } = await execAsync(cmd);
-		
-		if (stderr) {
-			Logger.error('CloudFront invalidation error:', stderr);
-			throw new Error(stderr);
+
+		const { success, result, error } = await NoticeManager.showProgress(
+			`Creating CloudFront invalidation`,
+			execAsync(cmd),
+			`CloudFront invalidation created successfully`,
+			`CloudFront invalidation failed, check console for error details`
+		);
+		if (result && result?.stderr) {
+			Logger.error('CloudFront invalidation error:', result?.stderr);
+			throw new Error(`CloudFront invalidation failed: ${result?.stderr}`);
 		}
 
-		Logger.debug('CloudFront invalidation created:', stdout);
-		new Notice('CloudFront invalidation created successfully');
+		Logger.debug('CloudFront invalidation created:', result?.stdout);
 		return true;
 	} catch (error) {
 		Logger.error('Failed to create CloudFront invalidation:', error);
-		new Notice('Failed to create CloudFront invalidation: ' + error.message);
+		NoticeManager.showNotice('Failed to create CloudFront invalidation: ' + error.message);
 		return false;
 	}
 }
