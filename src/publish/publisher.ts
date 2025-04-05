@@ -146,6 +146,9 @@ export class Publisher {
 		triggerCloudFrontInvalidation: boolean = false
 	) {
 		try {
+			// Ensure all required directories exist before processing
+			await this.plugin.profileManager.initializeProfileDirectories(profile.id);
+
 			// Load existing mappings and content index for profile
 			await this.plugin.mappingManager.loadProfileMappings(profile.id);
 			await this.plugin.contentIndexManager.loadIndex(profile.id);

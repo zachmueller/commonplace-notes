@@ -80,28 +80,34 @@ export class PathUtils {
 	}
 
 	static async ensureDirectory(plugin: CommonplaceNotesPlugin, targetPath: string): Promise<void> {
-		// Normalize the path to handle different path separators
-		const normalizedPath = targetPath.replace(/\\/g, '/');
+		try {
+			// Normalize the path to handle different path separators
+			const normalizedPath = targetPath.replace(/\\/g, '/');
 
-		// Split the path into parts
-		const parts = normalizedPath.split('/');
-		let currentPath = '';
+			// Split the path into parts
+			const parts = normalizedPath.split('/');
+			let currentPath = '';
 
-		// Recursively create each directory in the path
-		for (const part of parts) {
-			if (part) {  // Skip empty parts
-				currentPath += (currentPath ? '/' : '') + part;
-				if (!(await plugin.app.vault.adapter.exists(currentPath))) {
+			// Recursively create each directory in the path
+			for (const part of parts) {
+				if (part) {  // Skip empty parts
+					currentPath += (currentPath ? '/' : '') + part;
 					try {
-						await plugin.app.vault.adapter.mkdir(currentPath);
+						if (!(await plugin.app.vault.adapter.exists(currentPath))) {
+							await plugin.app.vault.adapter.mkdir(currentPath);
+							Logger.debug(`Created directory: ${currentPath}`);
+						}
 					} catch (error) {
-						// Ignore errors if directory already exists
+						// Only ignore errors if directory already exists
 						if (error.code !== 'EEXIST') {
 							throw error;
 						}
 					}
 				}
 			}
+		} catch (error) {
+			Logger.error(`Failed to create directory ${targetPath}:`, error);
+			throw error;
 		}
 	}
 

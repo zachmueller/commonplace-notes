@@ -23,7 +23,7 @@ export class ProfileManager {
 		}
 	}
 
-	private async initializeProfileDirectories(profileId: string) {
+	public async initializeProfileDirectories(profileId: string) {
 		const dirs = [
 			this.getProfileDir(profileId),
 			this.getMappingDir(profileId),

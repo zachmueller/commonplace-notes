@@ -259,7 +259,9 @@ export class NoteManager {
 	}
 
 	private async writeNoteToStaging(profileId: string, noteState: NoteState) {
+		// Ensure directory exists before writing
 		const stagedNotesDir = this.plugin.profileManager.getStagedNotesDir(profileId);
+		await PathUtils.ensureDirectory(this.plugin, stagedNotesDir);
 		
 		// Get backlinks
 		const backlinks = await this.getBacklinks(noteState.file, profileId);
