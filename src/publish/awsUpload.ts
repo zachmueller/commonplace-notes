@@ -69,7 +69,7 @@ export async function pushLocalJsonsToS3(
 
 		const { success: mapSuccess, result: mapResult, error: mapError } = await NoticeManager.showProgress(
 			`Uploading mappings from local to S3`,
-			execAsync(cmdNotes, options),
+			execAsync(cmdMapping, options),
 			`Mapping files successfully uploaded to S3`,
 			`Mapping upload failed, check console for error details`
 		);
