@@ -2,6 +2,7 @@ import { TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
 import { pushLocalJsonsToS3 } from './awsUpload';
+import { publishLocalNotes } from './local';
 import { PathUtils } from '../utils/path';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
@@ -177,16 +178,18 @@ export class Publisher {
 			await this.plugin.noteManager.commitPendingNotes(profile.id);
 
 			// Upload to destination
+			let uploadSuccess = false;
 			if (profile.publishMechanism === 'AWS CLI') {
-				const awsUpload = await pushLocalJsonsToS3(this.plugin, profile.id, triggerCloudFrontInvalidation);
-				// TODO::instead should prompt user whether to delete local copies of processed notes::
-				// (for now just stopping here to not delete anything)
-				if (!awsUpload) {
-					NoticeManager.showNotice('Upload failed. Staged files preserved for retry.');
-					return;
-				}
-			} else {
-				// Handle local publishing when implemented
+				uploadSuccess = await pushLocalJsonsToS3(this.plugin, profile.id, triggerCloudFrontInvalidation);
+			} else if (profile.publishMechanism === 'Local') {
+				uploadSuccess = await publishLocalNotes(this.plugin, profile.id);
+			}
+
+			// TODO::instead should prompt user whether to delete local copies of processed notes::
+			// (for now just stopping here to not delete anything)
+			if (!uploadSuccess) {
+				NoticeManager.showNotice('Publishing failed. Staged files preserved for retry.');
+				return;
 			}
 
 			// Clean up staged files

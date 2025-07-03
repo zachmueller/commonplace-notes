@@ -60,6 +60,10 @@ export class ProfileManager {
 		return `${this.getProfileDir(profileId)}/contentIndex.json`;
 	}
 
+	getCombinedLocalNotesPath(profileId: string): string {
+		return `${this.getProfileDir(profileId)}/combinedNotes.json`;
+	}
+
 	getPublishHistoryPath(profileId: string): string {
 		return `${this.getProfileDir(profileId)}/publish-history.json`;
 	}

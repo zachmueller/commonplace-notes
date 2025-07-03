@@ -1,1 +1,1 @@
-// generalize from awsUpload.ts
+// generalize from awsUpload.ts and local.ts
