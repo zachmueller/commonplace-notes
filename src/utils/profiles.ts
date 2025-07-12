@@ -17,6 +17,9 @@ export class ProfileManager {
 		// Ensure base profiles directory exists
 		await PathUtils.ensureDirectory(this.plugin, this.baseDir);
 
+		// Ensure templates directory exists
+		await PathUtils.ensureDirectory(this.plugin, this.getTemplateDir());
+
 		// Initialize directories for each profile
 		for (const profile of this.plugin.settings.publishingProfiles) {
 			await this.initializeProfileDirectories(profile.id);
@@ -74,5 +77,17 @@ export class ProfileManager {
 
 	getStagedErrorDir(profileId: string): string {
 		return `${this.getProfileDir(profileId)}/staged-error`;
+	}
+
+	getTemplateDir(): string {
+		return `${this.plugin.manifest.dir}/templates`;
+	}
+
+	getLocalTemplateHtmlPath(): string {
+		return `${this.getTemplateDir()}/local-template.html`;
+	}
+
+	getPublishedHtmlPath(profileId: string): string {
+		return `${this.getProfileDir(profileId)}/published-notes.html`;
 	}
 }
