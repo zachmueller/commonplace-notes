@@ -9,6 +9,12 @@ export async function publishLocalNotes(
 	profileId: string
 ): Promise<boolean> {
 	try {
+		// Ensure template exists before proceeding
+		const templateReady = await plugin.templateManager.ensureLocalTemplate();
+		if (!templateReady) {
+			throw new Error('Could not prepare template file');
+		}
+
 		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
 		if (!profile) {

@@ -17,6 +17,7 @@ import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
 import { NoticeManager } from './utils/notice';
+import { TemplateManager } from './utils/templateManager';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 
@@ -70,6 +71,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	frontmatterManager: FrontmatterManager;
 	contentIndexManager: ContentIndexManager;
 	mappingManager: MappingManager;
+	templateManager: TemplateManager;
 	publisher: Publisher;
 
 	async onload() {
@@ -85,6 +87,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.contentIndexManager = new ContentIndexManager(this);
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);
+		this.templateManager = new TemplateManager(this);
 
 		// Initialize indicator updates
 		// Targeted indicator refresh upon file open events
