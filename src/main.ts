@@ -18,6 +18,7 @@ import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
 import { NoticeManager } from './utils/notice';
 import { TemplateManager } from './utils/templateManager';
+import { AwsCliManager } from './utils/awsCli';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 
@@ -57,7 +58,8 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
             bucketName: 'my-bucket',
             region: 'us-east-1',
             cloudFrontInvalidationScheme: 'individual',
-            credentialRefreshCommands: ''
+            credentialRefreshCommands: '',
+			awsCliPath: ''
         }
     }],
 	debugMode: false,
@@ -73,6 +75,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	mappingManager: MappingManager;
 	templateManager: TemplateManager;
 	publisher: Publisher;
+	awsCliManager: AwsCliManager;
 
 	async onload() {
 		// Initialize settings
@@ -88,6 +91,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);
 		this.templateManager = new TemplateManager(this);
+		this.awsCliManager = new AwsCliManager(this);
 
 		// Initialize indicator updates
 		// Targeted indicator refresh upon file open events

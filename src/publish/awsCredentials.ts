@@ -15,11 +15,12 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
 			throw new Error('Selected profile is not configured for AWS');
 			// TODO::generalize credentials handling and build a better flow around this::
 		}
+
 		const commands = profile.awsSettings.credentialRefreshCommands
 			.split('\n')
 			.filter((cmd: string) => cmd.trim().length > 0)
 			.map((cmd: string) => {
-				// Replace variables in the command
+				// Replace variables in the command, including AWS CLI path
 				return cmd
 					.replace('${awsAccountId}', profile.awsSettings?.awsAccountId || '')
 					.replace('${awsProfile}', profile.awsSettings?.awsProfile || '');
@@ -53,7 +54,8 @@ export async function checkAwsCredentials(plugin: CommonplaceNotesPlugin, profil
 			throw new Error('No valid publishing profile found');
 		}
 
-		const cmd = `aws sts get-caller-identity --output json --profile ${profile.awsSettings?.awsProfile}`;
+		const awsCommand = plugin.awsCliManager.getAwsCliCommand(profileId);
+		const cmd = `${awsCommand} sts get-caller-identity --output json --profile ${profile.awsSettings?.awsProfile}`;
 		Logger.debug(`Executing: ${cmd}`);
 		const { stdout } = await execAsync(cmd);
 		return JSON.parse(stdout);

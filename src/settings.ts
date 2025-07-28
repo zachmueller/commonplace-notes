@@ -271,9 +271,23 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				region: '',
 				bucketName: '',
 				cloudFrontInvalidationScheme: 'individual',
-				credentialRefreshCommands: ''
+				credentialRefreshCommands: '',
+				awsCliPath: ''
 			};
 		}
+
+		new Setting(containerEl)
+			.setName('AWS CLI Path')
+			.setDesc('Custom path to AWS CLI executable (leave empty to use default "aws" command). Example: /usr/local/bin/aws')
+			.addText(text => text
+				.setPlaceholder('/usr/local/bin/aws')
+				.setValue(profile.awsSettings?.awsCliPath || '')
+				.onChange(async (value) => {
+					if (profile.awsSettings) {
+						profile.awsSettings.awsCliPath = value;
+						await this.plugin.saveSettings();
+					}
+				}));
 
 		new Setting(containerEl)
 			.setName('AWS account ID')
@@ -400,7 +414,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			baseUrl: '',
 			homeNotePath: '',
 			isPublic: false,
-			publishContentIndex:true,
+			publishContentIndex: true,
 			publishMechanism: 'AWS CLI',
 			indicator: {
 				style: 'color',
@@ -412,7 +426,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				region: '',
 				bucketName: '',
 				cloudFrontInvalidationScheme: 'individual',
-				credentialRefreshCommands: ''
+				credentialRefreshCommands: '',
+				awsCliPath: ''
 			}
 		};
 

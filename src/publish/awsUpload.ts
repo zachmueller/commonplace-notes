@@ -21,6 +21,9 @@ export async function pushLocalJsonsToS3(
 			throw new Error('Selected profile is not configured for AWS publishing');
 		}
 
+		// Get the AWS CLI command
+		const awsCommand = plugin.awsCliManager.getAwsCliCommandFromProfile(profile);
+
 		// TODO::extract this directory setup into the main plugin class for standard access pattern::
 		const basePath = (plugin.app.vault.adapter as any).basePath;
 		const stagedNotesDir = plugin.profileManager.getStagedNotesDir(profileId);
@@ -47,7 +50,7 @@ export async function pushLocalJsonsToS3(
 		const options = { cwd: basePath };
 
 		// Upload notes
-		const cmdNotes = `aws s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
+		const cmdNotes = `${awsCommand} s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
 		Logger.debug('Executing command:', cmdNotes);
 
 		const { success: notesSuccess, result: notesResult, error: notesError } = await NoticeManager.showProgress(
@@ -64,7 +67,7 @@ export async function pushLocalJsonsToS3(
 		Logger.debug('Notes upload output:', notesResult?.stdout);
 
 		// Upload mapping files
-		const cmdMapping = `aws s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
+		const cmdMapping = `${awsCommand} s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
 		Logger.debug('Executing command:', cmdMapping);
 
 		const { success: mapSuccess, result: mapResult, error: mapError } = await NoticeManager.showProgress(
@@ -86,7 +89,7 @@ export async function pushLocalJsonsToS3(
 				NoticeManager.showNotice('No content index file found to upload');
 			} else {
 				const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/content/`;
-				const cmdContentIndex = `aws s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
+				const cmdContentIndex = `${awsCommand} s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
 				Logger.debug('Executing command:', cmdContentIndex);
 
 				const { success: contentSuccess, result: contentResult, error: contentError } = await NoticeManager.showProgress(
@@ -123,7 +126,8 @@ async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, prof
 			return false;
 		}
 
-		const cmd = `aws cloudfront create-invalidation --distribution-id ${profile.awsSettings.cloudFrontDistributionId} --paths "/*" --profile ${profile.awsSettings.awsProfile}`;
+		const awsCommand = plugin.awsCliManager.getAwsCliCommand(profileId);
+		const cmd = `${awsCommand} cloudfront create-invalidation --distribution-id ${profile.awsSettings.cloudFrontDistributionId} --paths "/*" --profile ${profile.awsSettings.awsProfile}`;
 
 		const { success, result, error } = await NoticeManager.showProgress(
 			`Creating CloudFront invalidation`,

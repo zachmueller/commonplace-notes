@@ -29,6 +29,7 @@ export interface AWSProfileSettings {
     cloudFrontInvalidationScheme: 'individual' | 'connected' | 'sinceLast' | 'all' | 'manual';
 	cloudFrontDistributionId?: string;
     credentialRefreshCommands: string;
+	awsCliPath?: string;
 }
 
 export interface LocalProfileSettings {
