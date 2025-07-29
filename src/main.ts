@@ -313,6 +313,124 @@ cpn.rebuildContentIndex();
 		NoticeManager.showNotice(`Reprocessed contentIndex.json for profile ${profile.id}`);
 	}
 
+	/**
+	 * Check for files with publish contexts in string format instead of array
+	 * Access in Obsidian console:
+	 * const cpn = app.plugins.plugins['commonplace-notes'];
+	 * cpn.checkPublishContextsFormat();
+	 */
+	async checkPublishContextsFormat(): Promise<void> {
+		const files = this.app.vault.getMarkdownFiles();
+		let issueCount = 0;
+
+		Logger.info('Scanning for files with string publish contexts...');
+
+		for (const file of files) {
+			const rawContexts = this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts');
+			if (rawContexts && typeof rawContexts === 'string') {
+				this.frontmatterManager.normalizePublishContexts(file);
+				issueCount++;
+				Logger.info(`Found issue in: ${file.path} (value: "${rawContexts}")`);
+			}
+		}
+
+		if (issueCount === 0) {
+			Logger.info('✓ All publish contexts are properly formatted as lists');
+		} else {
+			Logger.info(`Found ${issueCount} files with string publish contexts. Run fixPublishContextsFormat() to fix.`);
+		}
+
+		return;
+	}
+
+	/**
+	 * Fix publish contexts format for files with string values instead of arrays
+	 * Access in Obsidian console:
+	 * const cpn = app.plugins.plugins['commonplace-notes'];
+	 * cpn.fixPublishContextsFormat(); // Use default delimiter (comma)
+	 * cpn.fixPublishContextsFormat('|'); // Use custom delimiter
+	 * cpn.fixPublishContextsFormat(null); // Don't split at all, just wrap in array
+	 * 
+	 * @param delimiter Optional delimiter to split string values (default: ',')
+	 * @param dryRun If true, only logs what would be changed without making changes
+	 */
+	async fixPublishContextsFormat(delimiter: string | null = ',', dryRun: boolean = false): Promise<void> {
+		// Initialize scan if problematic files are empty
+		if (this.frontmatterManager.getMisconfiguredContexts().length === 0) {
+			Logger.info('Scanning for files with string publish contexts...');
+			const files = this.app.vault.getMarkdownFiles();
+
+			for (const file of files) {
+				const rawContexts = this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts');
+				if (rawContexts && typeof rawContexts === 'string') {
+					this.frontmatterManager.normalizePublishContexts(file);
+				}
+			}
+		}
+
+		const problematicFiles = this.frontmatterManager.getMisconfiguredContexts();
+
+		if (problematicFiles.length === 0) {
+			Logger.info('No files found with publish contexts format issues');
+			return;
+		}
+
+		Logger.info(`Found ${problematicFiles.length} files with string publish contexts:`);
+		problematicFiles.forEach(path => Logger.info(`- ${path}`));
+
+		if (dryRun) {
+			Logger.info('DRY RUN: No changes made. Run without dryRun=true to apply changes.');
+			return;
+		}
+
+		let fixedCount = 0;
+		let failedCount = 0;
+
+		Logger.info(`Fixing ${problematicFiles.length} files using delimiter: ${delimiter === null ? 'NONE (wrapping as-is)' : `"${delimiter}"`}`);
+
+		for (const filePath of problematicFiles) {
+			const file = this.app.vault.getAbstractFileByPath(filePath);
+			if (file instanceof TFile) {
+				try {
+					// Get the raw string value
+					const rawContexts = this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts');
+
+					if (typeof rawContexts === 'string') {
+						// Convert to array based on delimiter parameter
+						let normalized: string[];
+
+						if (delimiter === null) {
+							// Just wrap the string in an array without splitting
+							normalized = [rawContexts.trim()];
+						} else {
+							// Split by delimiter and clean up
+							normalized = rawContexts.split(delimiter)
+								.map(s => s.trim())
+								.filter(s => s.length > 0);
+						}
+
+						// Apply the fix
+						await this.frontmatterManager.updateFrontmatter(file, {
+							'cpn-publish-contexts': normalized
+						});
+
+						fixedCount++;
+						Logger.info(`Fixed ${filePath}: ${rawContexts} → ${JSON.stringify(normalized)}`);
+					}
+				} catch (error) {
+					Logger.error(`Failed to fix ${filePath}:`, error);
+					failedCount++;
+				}
+			}
+		}
+
+		if (fixedCount > 0) {
+			this.frontmatterManager.clearMisconfiguredContexts();
+		}
+
+		Logger.info(`Completed: Fixed ${fixedCount} files, ${failedCount} failed`);
+	}
+
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
 		NoticeManager.cleanup();

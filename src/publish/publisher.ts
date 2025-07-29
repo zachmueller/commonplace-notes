@@ -40,8 +40,7 @@ export class Publisher {
 	}
 
 	async getPublishContextsForFile(file: TFile): Promise<string[]> {
-		const contexts = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts');
-		return Array.isArray(contexts) ? contexts : [];
+		return this.plugin.frontmatterManager.normalizePublishContexts(file);
 	}
 
 	async promptForProfile(availableProfiles?: string[]): Promise<PublishingProfile | null> {
