@@ -1,6 +1,6 @@
 {
 	"name": "commonplace-notes-publisher",
-	"version": "0.1.18",
+	"version": "0.1.19",
 	"description": "tbd",
 	"main": "main.js",
 	"scripts": {
