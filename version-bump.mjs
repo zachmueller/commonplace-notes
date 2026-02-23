@@ -12,3 +12,9 @@ writeFileSync("manifest.json", JSON.stringify(manifest, null, "\t"));
 let versions = JSON.parse(readFileSync("versions.json", "utf8"));
 versions[targetVersion] = minAppVersion;
 writeFileSync("versions.json", JSON.stringify(versions, null, "\t"));
+
+// Post-bump reminders
+console.log(`\n✅ Version bumped to ${targetVersion}`);
+console.log(`\nNext steps:`);
+console.log(`  1. Verify it builds locally:  npm run build`);
+console.log(`  2. Push to trigger release:   git push origin main --tags`);
