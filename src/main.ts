@@ -38,6 +38,7 @@ interface ObsidianApp extends App {
 }
 
 const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
+	uidLength: 10,
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -86,7 +87,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.profileManager = new ProfileManager(this);
 		this.indicatorManager = new IndicatorManager(this);
 		this.noteManager = new NoteManager(this);
-		this.frontmatterManager = new FrontmatterManager(this.app);
+		this.frontmatterManager = new FrontmatterManager(this);
 		this.contentIndexManager = new ContentIndexManager(this);
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);

@@ -45,9 +45,9 @@ function generateCrockfordUID(): string {
  * Iteratively generates Crockford UIDs until enough characters are available,
  * then returns the first `length` characters.
  *
- * @param length Number of characters in the resulting UID (default 8)
+ * @param length Number of characters in the resulting UID (default 10)
  */
-export function generateUID(length = 8): string {
+export function generateUID(length = 10): string {
 	let pool = "";
 	while (pool.length < length) {
 		pool += generateCrockfordUID();

@@ -3,6 +3,7 @@ import { TFile } from 'obsidian';
 export interface CommonplaceNotesSettings {
     publishingProfiles: PublishingProfile[];
 	debugMode?: boolean;
+	uidLength?: number;
 }
 
 export interface PublishingProfile {

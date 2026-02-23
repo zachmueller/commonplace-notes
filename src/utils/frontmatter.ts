@@ -7,13 +7,15 @@ import { NoticeManager } from '../utils/notice';
 export class FrontmatterManager {
     private queue: Map<string, Record<string, any>> = new Map();
     private app: App;
+	private plugin: CommonplaceNotesPlugin;
 	private cachedUIDs: Map<string, string> = new Map();
 	private misconfiguredContexts: Set<string> = new Set();
 	private lastNoticeTime: number = 0;
 	private readonly NOTICE_COOLDOWN = 30000; // 30 seconds
 
-    constructor(app: App) {
-        this.app = app;
+    constructor(plugin: CommonplaceNotesPlugin) {
+        this.plugin = plugin;
+		this.app = plugin.app;
     }
 
 	getFrontmatter(file: TFile): any {
@@ -148,7 +150,7 @@ export class FrontmatterManager {
 			// Only add new UID if cpn-publish-contexts contains a value
 			const publishContexts = this.normalizePublishContexts(file);
 			if (publishContexts.length > 0) {
-				const newUID = generateUID();
+				const newUID = generateUID(this.plugin.settings.uidLength);
 				this.add(file, {"cpn-uid": newUID});
 				this.cachedUIDs.set(file.path, newUID);
 				Logger.debug(`Queuing frontmatter update to add UID ${newUID} to ${file.basename}`);
