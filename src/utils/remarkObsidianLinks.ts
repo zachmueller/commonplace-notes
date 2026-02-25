@@ -3,6 +3,7 @@ import { visit } from 'unist-util-visit';
 import { Link, Text, Parent, HTML } from 'mdast';
 import { TFile } from 'obsidian';
 import { FrontmatterManager } from '../utils/frontmatter';
+import { formatNoteUrl, UrlScheme } from '../utils/urlScheme';
 
 export interface ResolvedNoteInfo {
 	uid: string;
@@ -14,6 +15,7 @@ export interface ResolvedNoteInfo {
 export interface ObsidianLinksOptions {
 	frontmatterManager: FrontmatterManager;
 	resolveInternalLinks: (linkText: string) => Promise<ResolvedNoteInfo | null>;
+	urlScheme: UrlScheme;
 }
 
 const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
@@ -55,7 +57,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 							// For resolved and published notes
 							children.push({
 								type: 'link',
-								url: `#u=${encodeURIComponent(resolved.uid)}`,
+								url: formatNoteUrl('u', resolved.uid, options.urlScheme),
 								children: [{ type: 'text', value: resolved.displayText || resolved.title }]
 							});
 						} else {

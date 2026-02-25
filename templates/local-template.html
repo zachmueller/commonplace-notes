@@ -390,6 +390,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 </script>
 <script>
 const DEFAULT_UID = "{{DEFAULT_UID}}";
+const URL_SCHEME = "{{URL_SCHEME}}";
 const NOTES = {{NOTES_JSON}};
 const SLUG_TO_UID = {{SLUG_TO_UID}};
 const UID_TO_HASH = {{UID_TO_HASH}};
@@ -547,23 +548,42 @@ initializeSearch().catch(error => {console.error('Top-level initialization error
 
 function parseURLFragment(fragment) {
 	if (!fragment) return [];
-	
+
 	// Remove the leading '#' if present
 	fragment = fragment.startsWith('#') ? fragment.slice(1) : fragment;
-	
-	// Split by '&' to get individual parameters
-	return fragment.split('&').map(param => {
-		// Find the first '=' to split properly
-		const equalIndex = param.indexOf('=');
-		if (equalIndex === -1) {
-			// Handle case where there's no '=' character
-			return { type: 't', value: decodeURIComponent(param) }; // Default to title if no type specified
-		}
-		
-		const type = param.substring(0, equalIndex);
-		const value = param.substring(equalIndex + 1);
-		return { type, value: decodeURIComponent(value) };
-	});
+	if (!fragment) return [];
+
+	// Detect format: if fragment contains '=' it is the original scheme
+	if (fragment.includes('=')) {
+		// Original scheme: type=value&type=value&...
+		return fragment.split('&').map(param => {
+			const equalIndex = param.indexOf('=');
+			if (equalIndex === -1) {
+				return { type: '~', value: decodeURIComponent(param) };
+			}
+			const type = param.substring(0, equalIndex);
+			const value = param.substring(equalIndex + 1);
+			return { type, value: decodeURIComponent(value) };
+		});
+	}
+
+	// Current scheme: {optional-slug}/{type}{value}/{type}{value}/...
+	// If first char is '/' → no base slug; otherwise first segment is decorative slug (discard)
+	let segments;
+	if (fragment.startsWith('/')) {
+		// No base slug — strip leading '/' and split
+		segments = fragment.slice(1).split('/').filter(s => s.length > 0);
+	} else {
+		// First segment is the decorative slug — discard it
+		const parts = fragment.split('/').filter(s => s.length > 0);
+		segments = parts.slice(1);
+	}
+
+	// Each segment: first char = type, rest = value
+	return segments.map(seg => ({
+		type: seg.charAt(0),
+		value: decodeURIComponent(seg.slice(1))
+	}));
 }
 
 async function loadNoteByParameter(type, value) {
@@ -631,18 +651,48 @@ async function loadNoteByParameter(type, value) {
 		}
 	}
 
-	// Define delimiting character
-	const DELIMITER = '|';
+	// Function to format a single note URL fragment based on the active URL scheme
+	function formatNoteUrl(type, value) {
+		if (URL_SCHEME === 'original') {
+			return `#${type}=${encodeURIComponent(value)}`;
+		}
+		return `#/${type}${encodeURIComponent(value)}`;
+	}
 
 	// Function to update URL based on current panel stack
 	function updateURL() {
 		const panels = Array.from(document.querySelectorAll('.panel'));
-		const params = panels.map(panel => {
-			const type = panel.dataset.paramType;
-			const value = panel.dataset.paramValue;
-			return `${type}=${encodeURIComponent(value)}`;
-		});
-		const newURL = '#' + params.join('&');
+		if (panels.length === 0) {
+			history.pushState(null, '', '#');
+			return;
+		}
+
+		let newURL;
+		if (URL_SCHEME === 'original') {
+			// Original scheme: #type=value&type=value&...
+			const params = panels.map(panel => {
+				const type = panel.dataset.paramType;
+				const value = panel.dataset.paramValue;
+				return `${type}=${encodeURIComponent(value)}`;
+			});
+			newURL = '#' + params.join('&');
+		} else {
+			// Current scheme: #{slug}/{type}{value}/{type}{value}/...
+			const paramPath = panels.map(panel => {
+				const type = panel.dataset.paramType;
+				const value = panel.dataset.paramValue;
+				return `/${type}${encodeURIComponent(value)}`;
+			}).join('');
+
+			// Derive base slug from first panel
+			const firstSlug = panels[0].dataset.slug;
+			if (firstSlug) {
+				newURL = `#${firstSlug}${paramPath}`;
+			} else {
+				newURL = `#${paramPath}`;
+			}
+		}
+
 		history.pushState(null, '', newURL);
 	}
 
@@ -732,7 +782,7 @@ ${closeButton}
 		// Create permanent link if hash exists
 		const permanentLinkHtml = noteData.hash ? `
 			<div title="Click to copy permanent link">
-				<span class="permanent-link" data-permalink="#p=${noteData.hash}" role="button" tabindex="0">
+				<span class="permanent-link" data-permalink="${formatNoteUrl('p', noteData.hash)}" role="button" tabindex="0">
 					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 						<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
 						<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
@@ -755,7 +805,7 @@ ${closeButton}
 		<div class="backlinks">
 			<h3>Referenced by:</h3>
 			${noteData.backlinks.map(link => 
-				`<div><a href="#u=${encodeURIComponent(link.uid)}">${link.title}</a></div>`
+				`<div><a href="${formatNoteUrl('u', link.uid)}">${link.title}</a></div>`
 			).join('')}
 		</div>
 				` : ''}
@@ -873,6 +923,9 @@ async function addPanel(paramType, paramValue) {
 		// Store parameter information
 		panel.dataset.paramType = paramType;
 		panel.dataset.paramValue = paramValue;
+		if (noteData.slug) {
+			panel.dataset.slug = noteData.slug;
+		}
 		
 		container.appendChild(panel);
 		loadedPanels.add(panelId);

@@ -4,6 +4,7 @@ export interface CommonplaceNotesSettings {
     publishingProfiles: PublishingProfile[];
 	debugMode?: boolean;
 	uidLength?: number;
+	urlScheme?: 'current' | 'original';
 }
 
 export interface PublishingProfile {

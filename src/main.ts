@@ -21,6 +21,7 @@ import { TemplateManager } from './utils/templateManager';
 import { AwsCliManager } from './utils/awsCli';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
+import { formatNoteUrl } from './utils/urlScheme';
 
 // defining interfaces to facilitate deregistering commands
 interface Command {
@@ -39,6 +40,7 @@ interface ObsidianApp extends App {
 
 const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 	uidLength: 10,
+	urlScheme: 'current',
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -218,7 +220,9 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					return;
 				}
 				const base = profile.baseUrl.replace(/\/?$/, '/');
-				const url = `${base}#u=${encodeURIComponent(uid)}`;
+				const urlScheme = this.settings.urlScheme || 'current';
+				const fragment = formatNoteUrl('u', uid, urlScheme);
+				const url = `${base}${fragment}`;
 				try {
 					await navigator.clipboard.writeText(url);
 					NoticeManager.showNotice('Note URL copied');

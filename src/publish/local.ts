@@ -152,6 +152,7 @@ async function processTemplate(
 
 	// Replace placeholders
 	template = template.replace('{{DEFAULT_UID}}', defaultUid);
+	template = template.replace('{{URL_SCHEME}}', plugin.settings.urlScheme || 'current');
 	template = template.replace('{{NOTES_JSON}}', JSON.stringify(combinedNotes));
 	template = template.replace('{{SLUG_TO_UID}}', JSON.stringify(slugToUid));
 	template = template.replace('{{UID_TO_HASH}}', JSON.stringify(uidToHash));

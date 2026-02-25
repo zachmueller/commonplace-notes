@@ -9,6 +9,7 @@ import remarkObsidianLinks, { ResolvedNoteInfo } from './remarkObsidianLinks';
 import remarkLineNumbers from './remarkLineNumbers';
 import { Logger } from './logging';
 import { NoticeManager } from '../utils/notice';
+import { UrlScheme } from './urlScheme';
 
 interface NoteState {
 	file: TFile;
@@ -121,11 +122,14 @@ export class NoteManager {
 	}
 
 	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string): Promise<string> {
+		const urlScheme: UrlScheme = this.plugin.settings.urlScheme || 'current';
+
 		const processor = unified()
 			.use(remarkParse)
 			.use(remarkLineNumbers)
 			.use(remarkObsidianLinks, {
 				frontmatterManager: this.plugin.frontmatterManager,
+				urlScheme,
 				resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
 					const [link, alias] = linkText.split('|');
 					const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
