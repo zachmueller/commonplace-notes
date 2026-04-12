@@ -40,7 +40,7 @@ export class NoteManager {
 		this.publishHistory = new Map();
 	}
 
-	private async loadPublishHistory(profileId: string): Promise<Record<string, string[]>> {
+	async loadPublishHistory(profileId: string): Promise<Record<string, string[]>> {
 		if (this.publishHistory.has(profileId)) {
 			return this.publishHistory.get(profileId)!;
 		}

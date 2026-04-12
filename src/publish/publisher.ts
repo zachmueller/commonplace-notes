@@ -1,7 +1,7 @@
 import { TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
-import { pushLocalJsonsToS3 } from './awsUpload';
+import { pushLocalJsonsToS3, deleteNoteHashesFromS3, pushMappingAndIndexToS3, createCloudFrontInvalidation } from './awsUpload';
 import { publishLocalNotes } from './local';
 import { PathUtils } from '../utils/path';
 import { Logger } from '../utils/logging';
@@ -29,6 +29,64 @@ class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 
 	onChooseSuggestion(profile: PublishingProfile, evt: MouseEvent | KeyboardEvent) {
 		this.onChoose(profile);
+	}
+}
+
+interface NoteEntry {
+	slug: string;
+	uid: string;
+}
+
+class NoteSuggestModal extends SuggestModal<NoteEntry> {
+	entries: NoteEntry[];
+	onChoose: (entry: NoteEntry) => void;
+
+	constructor(app: App, slugToUid: Record<string, string>, onChoose: (entry: NoteEntry) => void) {
+		super(app);
+		this.entries = Object.entries(slugToUid).map(([slug, uid]) => ({ slug, uid }));
+		this.onChoose = onChoose;
+		this.setPlaceholder('Search for a published note to delete...');
+	}
+
+	getSuggestions(query: string): NoteEntry[] {
+		return this.entries.filter(entry =>
+			entry.slug.toLowerCase().includes(query.toLowerCase())
+		);
+	}
+
+	renderSuggestion(entry: NoteEntry, el: HTMLElement) {
+		el.createEl("div", { text: entry.slug });
+		el.createEl("small", { text: entry.uid, cls: 'suggestion-note' });
+	}
+
+	onChooseSuggestion(entry: NoteEntry, evt: MouseEvent | KeyboardEvent) {
+		this.onChoose(entry);
+	}
+}
+
+class ConfirmSuggestModal extends SuggestModal<string> {
+	options: string[];
+	onChoose: (choice: string) => void;
+
+	constructor(app: App, slug: string, onChoose: (choice: string) => void) {
+		super(app);
+		this.options = ['No', 'Yes'];
+		this.onChoose = onChoose;
+		this.setPlaceholder(`Type 'yes' to confirm deletion of: ${slug}`);
+	}
+
+	getSuggestions(query: string): string[] {
+		return this.options.filter(opt =>
+			opt.toLowerCase().includes(query.toLowerCase())
+		);
+	}
+
+	renderSuggestion(option: string, el: HTMLElement) {
+		el.createEl("div", { text: option });
+	}
+
+	onChooseSuggestion(option: string, evt: MouseEvent | KeyboardEvent) {
+		this.onChoose(option);
 	}
 }
 
@@ -385,5 +443,96 @@ export class Publisher {
 
 		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'all');
 		await this.publishNotes(allNotes, profile, true, triggerInvalidation);
+	}
+
+	async deletePublishedNote() {
+		// Step 1: Select profile
+		const profile = await this.promptForProfile();
+		if (!profile) return;
+
+		if (profile.publishMechanism !== 'AWS CLI' || !profile.awsSettings) {
+			NoticeManager.showNotice('Delete is only supported for AWS CLI publishing profiles');
+			return;
+		}
+
+		// Step 2: Load mappings and present note selection
+		await this.plugin.mappingManager.loadProfileMappings(profile.id);
+		const slugToUid = this.plugin.mappingManager.getSlugToUidMap(profile.id);
+
+		if (Object.keys(slugToUid).length === 0) {
+			NoticeManager.showNotice('No published notes found for this profile');
+			return;
+		}
+
+		const selectedNote = await new Promise<NoteEntry | null>((resolve) => {
+			new NoteSuggestModal(this.plugin.app, slugToUid, (entry) => {
+				resolve(entry);
+			}).open();
+		});
+		if (!selectedNote) return;
+
+		// Step 3: Confirmation
+		const confirmed = await new Promise<boolean>((resolve) => {
+			new ConfirmSuggestModal(this.plugin.app, selectedNote.slug, (choice) => {
+				resolve(choice === 'Yes');
+			}).open();
+		});
+		if (!confirmed) {
+			NoticeManager.showNotice('Deletion cancelled');
+			return;
+		}
+
+		try {
+			// Step 4: Collect all hashes to delete
+			const history = await this.plugin.noteManager.loadPublishHistory(profile.id);
+			const hashSet = new Set<string>();
+
+			// Add all historical hashes
+			const historyHashes = history[selectedNote.uid] || [];
+			for (const h of historyHashes) {
+				hashSet.add(h);
+			}
+
+			// Add current hash from uid-to-hash mapping (in case it diverges from history)
+			const currentHash = this.plugin.mappingManager.getPriorHash(profile.id, selectedNote.uid);
+			if (currentHash) {
+				hashSet.add(currentHash);
+			}
+
+			if (hashSet.size === 0) {
+				Logger.warn(`No hashes found for UID ${selectedNote.uid}, skipping S3 deletes`);
+			} else {
+				// Step 5: Delete from S3 (stop on permission error)
+				const deleteSuccess = await NoticeManager.showProgress(
+					`Deleting ${hashSet.size} note version(s) from S3`,
+					deleteNoteHashesFromS3(this.plugin, profile.id, [...hashSet]),
+					`Note versions deleted from S3`,
+					`Failed to delete note versions from S3`
+				);
+
+				if (!deleteSuccess.success || !deleteSuccess.result) {
+					// Permission error or failure — stop without modifying local files
+					return;
+				}
+			}
+
+			// Step 6: Update local mapping files (keep publish-history.json intact)
+			this.plugin.mappingManager.removeUidFromMappings(profile.id, selectedNote.uid);
+			await this.plugin.mappingManager.saveMappings();
+
+			// Step 7: Update content index
+			await this.plugin.contentIndexManager.removeEntry(profile.id, selectedNote.uid);
+
+			// Step 8: Push updated mappings and content index to S3
+			await pushMappingAndIndexToS3(this.plugin, profile.id);
+
+			// Step 9: Trigger CloudFront invalidation
+			await createCloudFrontInvalidation(this.plugin, profile.id);
+
+			NoticeManager.showNotice(`Successfully deleted published note: ${selectedNote.slug}`);
+		} catch (error) {
+			Logger.error('Error deleting published note:', error);
+			NoticeManager.showNotice(`Error deleting note: ${error.message}`);
+		}
 	}
 }

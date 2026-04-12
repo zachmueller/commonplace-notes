@@ -104,6 +104,15 @@ export class ContentIndexManager {
 		}
 	}
 
+	async removeEntry(profileId: string, uid: string): Promise<void> {
+		const index = await this.loadIndex(profileId);
+		if (uid in index) {
+			delete index[uid];
+			await this.saveIndex(profileId, index);
+			Logger.debug(`Removed content index entry for UID ${uid} in profile ${profileId}`);
+		}
+	}
+
 	private async saveIndex(profileId: string, index: ContentIndex): Promise<void> {
 		const indexPath = this.plugin.profileManager.getContentIndexPath(profileId);
 		Logger.debug(`Writing contentIndex updates to local file for profile '${profileId}'`);

@@ -186,6 +186,14 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'delete-published-note',
+			name: 'Delete a published note',
+			callback: async () => {
+				await this.publisher.deletePublishedNote();
+			}
+		});
+
+		this.addCommand({
 			id: 'copy-active-note-published-url',
 			name: 'Copy link to current note URL',
 			callback: async () => {

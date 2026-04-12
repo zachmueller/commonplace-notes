@@ -176,4 +176,24 @@ export class MappingManager {
 	getUidFromSlug(profileId: string, slug: string): string | null {
 		return this.mappingData[profileId]?.slugToUid[slug] || null;
 	}
+
+	getSlugToUidMap(profileId: string): Record<string, string> {
+		return this.mappingData[profileId]?.slugToUid ?? {};
+	}
+
+	removeUidFromMappings(profileId: string, uid: string) {
+		const data = this.mappingData[profileId];
+		if (!data) return;
+
+		// Remove slug entry where value matches the uid
+		for (const [slug, mappedUid] of Object.entries(data.slugToUid)) {
+			if (mappedUid === uid) {
+				delete data.slugToUid[slug];
+				break;
+			}
+		}
+
+		// Remove uid from hash mapping
+		delete data.uidToHash[uid];
+	}
 }
