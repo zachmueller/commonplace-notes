@@ -6,13 +6,18 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json"
+		"version": "node version-bump.mjs && git add manifest.json versions.json",
+		"e2e": "npx playwright test --config=e2e/playwright.config.ts",
+		"e2e:run": "npx tsx e2e/run-and-collect.ts",
+		"e2e:run:quick": "npx tsx e2e/run-and-collect.ts --duration 10",
+		"e2e:setup-vault": "npx tsx e2e/scripts/setup-vault.ts"
 	},
 	"keywords": [],
 	"author": "Zach Mueller",
 	"license": "MIT",
 	"devDependencies": {
 		"@eslint/js": "^9.32.0",
+		"@playwright/test": "^1.59.1",
 		"@types/cli-spinner": "^0.2.1",
 		"@types/d3": "^7.4.3",
 		"@types/dompurify": "^3.0.5",
@@ -37,6 +42,7 @@
 		"eslint": "^9.32.0",
 		"globals": "^16.3.0",
 		"obsidian": "latest",
+		"playwright-core": "^1.59.1",
 		"prettier": "^3.0.0",
 		"tslib": "2.4.0",
 		"tsx": "^3.12.7",

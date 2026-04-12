@@ -23,3 +23,9 @@ data.json
 
 # Exclude private folder
 private
+
+# E2E test artifacts (ephemeral, regenerated each run)
+e2e/test-vault/
+e2e/test-user-data/
+e2e/results/
+e2e/dist/
