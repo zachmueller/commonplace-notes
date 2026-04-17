@@ -61,6 +61,51 @@
 			font-size: 1.17em;
 		}
 
+		/* GFM tables */
+		table {
+			border-collapse: collapse;
+			width: 100%;
+			margin: 1em 0;
+			font-size: 0.95em;
+		}
+
+		th, td {
+			border: 1px solid #ddd;
+			padding: 8px 12px;
+			text-align: left;
+		}
+
+		th {
+			background-color: #f6f8fa;
+			font-weight: 600;
+		}
+
+		tr:nth-child(even) {
+			background-color: #fafbfc;
+		}
+
+		tr:hover {
+			background-color: #f0f4f8;
+		}
+
+		/* GFM strikethrough */
+		del {
+			text-decoration: line-through;
+			opacity: 0.65;
+		}
+
+		/* GFM task list checkboxes */
+		input[type="checkbox"] {
+			margin-right: 6px;
+			vertical-align: middle;
+			pointer-events: none;
+		}
+
+		li:has(> input[type="checkbox"]) {
+			list-style: none;
+			margin-left: -1.5em;
+		}
+
 		/* base link styles */
 		a {
 			color: #0366d6;
