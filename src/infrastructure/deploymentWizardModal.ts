@@ -4,6 +4,7 @@ import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
 import type { DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
+import { pushSiteAssetsToS3 } from '../publish/awsUpload';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5;
 
@@ -615,6 +616,9 @@ export class DeploymentWizardModal extends Modal {
 		await this.plugin.saveSettings();
 		this.refreshSettingsTab();
 		new Notice('Profile settings updated from stack outputs.');
+
+		// Push initial site assets so the deployed site has content immediately
+		await pushSiteAssetsToS3(this.plugin, profile.id);
 	}
 
 	private refreshSettingsTab(): void {
