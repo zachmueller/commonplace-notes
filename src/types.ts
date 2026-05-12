@@ -22,6 +22,7 @@ export interface PublishingProfile {
     localSettings?: LocalProfileSettings;
 	infrastructureState?: InfrastructureState;
 	indicator: PublishingIndicator;
+	siteCustomization?: SiteCustomization;
 }
 
 export interface AWSProfileSettings {
@@ -81,4 +82,30 @@ export interface PublishingIndicator {
 	style: IndicatorStyle;
 	color?: string;
 	emoji?: string;
+}
+
+export interface HeaderLink {
+	label: string;
+	url: string;
+}
+
+export interface ThemeColors {
+	bgPrimary?: string;
+	bgSecondary?: string;
+	textPrimary?: string;
+	linkColor?: string;
+	borderColor?: string;
+}
+
+export interface ThemeOverrides {
+	light?: ThemeColors;
+	dark?: ThemeColors;
+}
+
+export interface SiteCustomization {
+	siteTitle: string;
+	headerLinks: HeaderLink[];
+	panelWidth: number;
+	fontFamily: string;
+	themeOverrides: ThemeOverrides;
 }

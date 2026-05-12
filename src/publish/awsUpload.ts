@@ -3,6 +3,7 @@ import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
+import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs } from './siteRenderer';
 
 const MAX_CONCURRENCY = 5;
 
@@ -246,6 +247,95 @@ export async function deleteNoteHashesFromS3(
 		}
 		Logger.error('Error deleting from S3:', error);
 		throw error;
+	}
+}
+
+export async function pushSiteAssetsToS3(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string
+): Promise<boolean> {
+	try {
+		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+
+		if (!profile) {
+			throw new Error('No publishing profile provided');
+		}
+
+		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
+			throw new Error('Selected profile is not configured for AWS publishing');
+		}
+
+		const s3Client = plugin.awsSdkManager.getS3Client(profile);
+		const bucket = profile.awsSettings.bucketName;
+		const s3Prefix = profile.awsSettings.s3Prefix || '';
+
+		const assets: { key: string; body: string; contentType: string; cacheControl: string }[] = [
+			{
+				key: `${s3Prefix}index.html`,
+				body: renderIndexHtml(profile),
+				contentType: 'text/html',
+				cacheControl: 'no-cache',
+			},
+			{
+				key: `${s3Prefix}styles.css`,
+				body: renderStylesCss(profile),
+				contentType: 'text/css',
+				cacheControl: 'public, max-age=31536000, immutable',
+			},
+			{
+				key: `${s3Prefix}app.js`,
+				body: renderAppJs(),
+				contentType: 'application/javascript',
+				cacheControl: 'public, max-age=31536000, immutable',
+			},
+			{
+				key: `${s3Prefix}flexsearch.min.js`,
+				body: getFlexSearchJs(),
+				contentType: 'application/javascript',
+				cacheControl: 'public, max-age=31536000, immutable',
+			},
+			{
+				key: `${s3Prefix}config.json`,
+				body: renderConfigJson(profile),
+				contentType: 'application/json',
+				cacheControl: 'no-cache',
+			},
+		];
+
+		const { success, error } = await NoticeManager.showProgress(
+			'Uploading site assets to S3',
+			(async () => {
+				for (const asset of assets) {
+					await s3Client.send(new PutObjectCommand({
+						Bucket: bucket,
+						Key: asset.key,
+						Body: asset.body,
+						ContentType: asset.contentType,
+						CacheControl: asset.cacheControl,
+					}));
+					Logger.debug(`Uploaded site asset: ${asset.key}`);
+				}
+			})(),
+			'Site assets uploaded successfully',
+			'Site assets upload failed, check console for error details'
+		);
+
+		if (!success) {
+			if (isCredentialError(error)) {
+				NoticeManager.showNotice('S3 permission error — please refresh your AWS credentials and try again.', 10000);
+			}
+			return false;
+		}
+
+		return true;
+	} catch (error) {
+		Logger.error('Error uploading site assets:', error);
+		if (isCredentialError(error)) {
+			NoticeManager.showNotice('S3 permission error — please refresh your AWS credentials and try again.', 10000);
+		} else {
+			NoticeManager.showNotice(`Site assets upload failed: ${error.message}`);
+		}
+		return false;
 	}
 }
 

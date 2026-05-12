@@ -1,7 +1,7 @@
 import { TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
-import { pushLocalJsonsToS3, deleteNoteHashesFromS3, pushMappingAndIndexToS3, createCloudFrontInvalidation } from './awsUpload';
+import { pushLocalJsonsToS3, deleteNoteHashesFromS3, pushMappingAndIndexToS3, pushSiteAssetsToS3, createCloudFrontInvalidation } from './awsUpload';
 import { publishLocalNotes } from './local';
 import { PathUtils } from '../utils/path';
 import { Logger } from '../utils/logging';
@@ -238,6 +238,9 @@ export class Publisher {
 			let uploadSuccess = false;
 			if (profile.publishMechanism === 'AWS') {
 				uploadSuccess = await pushLocalJsonsToS3(this.plugin, profile.id, triggerCloudFrontInvalidation);
+				if (uploadSuccess) {
+					await pushSiteAssetsToS3(this.plugin, profile.id);
+				}
 			} else if (profile.publishMechanism === 'Local') {
 				uploadSuccess = await publishLocalNotes(this.plugin, profile.id);
 			}

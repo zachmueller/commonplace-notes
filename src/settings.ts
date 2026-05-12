@@ -1,6 +1,6 @@
 import { App, DropdownComponent, Modal, Notice, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
-import { PublishingProfile, IndicatorStyle } from './types';
+import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from './types';
 import { Logger } from './utils/logging';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
@@ -200,6 +200,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			// --- Authentication & Delivery ---
 			const authSection = this.createSection(profileContainer, 'Authentication & Delivery');
 			this.displayAWSAuthSettings(authSection, profile, index);
+
+			// --- Site Customization ---
+			const siteSection = this.createSection(profileContainer, 'Site Customization');
+			this.displaySiteCustomizationSettings(siteSection, profile, index);
 		} else {
 			this.displayLocalSettings(destSection, profile, index);
 		}
@@ -624,6 +628,165 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		};
 
 		modal.open();
+	}
+
+	private displaySiteCustomizationSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
+		const custom = profile.siteCustomization ?? {
+			siteTitle: '',
+			headerLinks: [],
+			panelWidth: 600,
+			fontFamily: '',
+			themeOverrides: {},
+		};
+
+		new Setting(containerEl)
+			.setName('Site title')
+			.setDesc('Displayed in the browser tab')
+			.addText(text => text
+				.setPlaceholder('Notes')
+				.setValue(custom.siteTitle)
+				.onChange(async (value) => {
+					this.ensureSiteCustomization(index).siteTitle = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Font family')
+			.setDesc('CSS font-family value for the site body')
+			.addText(text => text
+				.setPlaceholder('"Helvetica Neue", Arial, sans-serif')
+				.setValue(custom.fontFamily)
+				.onChange(async (value) => {
+					this.ensureSiteCustomization(index).fontFamily = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Panel width')
+			.setDesc('Width of note panels in pixels')
+			.addText(text => text
+				.setPlaceholder('600')
+				.setValue(custom.panelWidth ? String(custom.panelWidth) : '')
+				.onChange(async (value) => {
+					const num = parseInt(value, 10);
+					if (!isNaN(num) && num > 0) {
+						this.ensureSiteCustomization(index).panelWidth = num;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		// Header links
+		const linksContainer = containerEl.createDiv({ cls: 'cpn-header-links-container' });
+		new Setting(linksContainer)
+			.setName('Header links')
+			.setDesc('Additional navigation links in the site header');
+
+		for (let i = 0; i < custom.headerLinks.length; i++) {
+			const link = custom.headerLinks[i];
+			new Setting(linksContainer)
+				.addText(text => text
+					.setPlaceholder('Label')
+					.setValue(link.label)
+					.onChange(async (value) => {
+						this.ensureSiteCustomization(index).headerLinks[i].label = value;
+						await this.plugin.saveSettings();
+					}))
+				.addText(text => text
+					.setPlaceholder('URL')
+					.setValue(link.url)
+					.onChange(async (value) => {
+						this.ensureSiteCustomization(index).headerLinks[i].url = value;
+						await this.plugin.saveSettings();
+					}))
+				.addButton(button => button
+					.setButtonText('Remove')
+					.onClick(async () => {
+						this.ensureSiteCustomization(index).headerLinks.splice(i, 1);
+						await this.plugin.saveSettings();
+						this.renderActiveProfile();
+					}));
+		}
+
+		new Setting(linksContainer)
+			.addButton(button => button
+				.setButtonText('Add link')
+				.onClick(async () => {
+					this.ensureSiteCustomization(index).headerLinks.push({ label: '', url: '' });
+					await this.plugin.saveSettings();
+					this.renderActiveProfile();
+				}));
+
+		// Theme overrides
+		const themeContainer = containerEl.createDiv({ cls: 'cpn-theme-overrides-container' });
+		const themeDetails = themeContainer.createEl('details');
+		themeDetails.createEl('summary', { text: 'Theme color overrides' });
+
+		const lightSection = themeDetails.createDiv();
+		lightSection.createEl('h5', { text: 'Light mode' });
+		this.displayThemeColorInputs(lightSection, 'light', custom, index);
+
+		const darkSection = themeDetails.createDiv();
+		darkSection.createEl('h5', { text: 'Dark mode' });
+		this.displayThemeColorInputs(darkSection, 'dark', custom, index);
+	}
+
+	private displayThemeColorInputs(
+		containerEl: HTMLElement,
+		mode: 'light' | 'dark',
+		custom: SiteCustomization,
+		index: number
+	) {
+		const colors = custom.themeOverrides[mode] ?? {};
+		const fields: { name: string; key: keyof typeof colors }[] = [
+			{ name: 'Background (primary)', key: 'bgPrimary' },
+			{ name: 'Background (secondary)', key: 'bgSecondary' },
+			{ name: 'Text color', key: 'textPrimary' },
+			{ name: 'Link color', key: 'linkColor' },
+			{ name: 'Border color', key: 'borderColor' },
+		];
+
+		for (const field of fields) {
+			new Setting(containerEl)
+				.setName(field.name)
+				.addText(text => {
+					text.inputEl.type = 'color';
+					text.inputEl.style.width = '50px';
+					text.setValue(colors[field.key] || '#000000')
+						.onChange(async (value) => {
+							const siteCustom = this.ensureSiteCustomization(index);
+							if (!siteCustom.themeOverrides[mode]) {
+								siteCustom.themeOverrides[mode] = {};
+							}
+							siteCustom.themeOverrides[mode]![field.key] = value;
+							await this.plugin.saveSettings();
+						});
+					return text;
+				})
+				.addButton(button => button
+					.setButtonText('Reset')
+					.onClick(async () => {
+						const siteCustom = this.ensureSiteCustomization(index);
+						if (siteCustom.themeOverrides[mode]) {
+							delete siteCustom.themeOverrides[mode]![field.key];
+						}
+						await this.plugin.saveSettings();
+						this.renderActiveProfile();
+					}));
+		}
+	}
+
+	private ensureSiteCustomization(index: number): SiteCustomization {
+		const profile = this.plugin.settings.publishingProfiles[index];
+		if (!profile.siteCustomization) {
+			profile.siteCustomization = {
+				siteTitle: '',
+				headerLinks: [],
+				panelWidth: 600,
+				fontFamily: '',
+				themeOverrides: {},
+			};
+		}
+		return profile.siteCustomization;
 	}
 
 	private displayLocalSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
