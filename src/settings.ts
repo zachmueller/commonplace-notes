@@ -1,6 +1,6 @@
 import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
-import { PublishingProfile, AWSProfileSettings, IndicatorStyle } from './types';
+import { PublishingProfile, IndicatorStyle } from './types';
 import { Logger } from './utils/logging';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
@@ -81,26 +81,126 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		return Math.max(0, Math.min(index, length - 1));
 	}
 
+	private createSection(parent: HTMLElement, title: string): HTMLElement {
+		const section = parent.createDiv({ cls: 'cpn-settings-section' });
+		section.createEl('h4', { text: title, cls: 'cpn-settings-section-heading' });
+		return section;
+	}
+
 	private displayProfileSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
 		const profileContainer = containerEl.createDiv({cls: 'cpn-profile-container'});
-		profileContainer.createEl('h3', {text: profile.name});
 
-		// Add last publish timestamp info
 		const lastUpdated = profile.lastFullPublishTimestamp ? new Date(profile.lastFullPublishTimestamp).toLocaleString() : 'n/a';
-		const timestampDiv = profileContainer.createEl('div', {
+		profileContainer.createEl('div', {
 			cls: 'cpn-profile-last-publish',
 			text: `Last full publish: ${lastUpdated}`
 		});
 
-		// Add simple styling
-		timestampDiv.style.fontSize = '0.8em';
-		timestampDiv.style.color = 'var(--text-muted)';
-		timestampDiv.style.marginBottom = '1em';
+		// --- Profile Identity ---
+		const identitySection = this.createSection(profileContainer, 'Profile Identity');
 
-		// Create delete button in its own container
-		const deleteButtonContainer = profileContainer.createDiv({
-			cls: 'cpn-profile-delete-container'
-		});
+		new Setting(identitySection)
+			.setName('Profile name')
+			.addText(text => text
+				.setValue(profile.name)
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].name = value;
+					await this.plugin.saveSettings();
+				})
+				.inputEl.addEventListener('blur', () => {
+					this.plugin.registerProfileCommands();
+					if (this.profileDropdown) {
+						const option = this.profileDropdown.selectEl.options[index];
+						if (option) option.text = this.plugin.settings.publishingProfiles[index].name;
+					}
+				}));
+
+		new Setting(identitySection)
+			.setName('Profile ID')
+			.setDesc('Unique identifier used in frontmatter')
+			.addText(text => text
+				.setValue(profile.id)
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].id = value;
+					await this.plugin.saveSettings();
+					this.plugin.registerProfileCommands();
+				}));
+
+		this.displayIndicatorSettings(identitySection, profile, index);
+
+		// --- Content ---
+		const contentSection = this.createSection(profileContainer, 'Content');
+
+		new Setting(contentSection)
+			.setName('Home Page')
+			.setDesc('Path to the note that should serve as the home page')
+			.addText(text => text
+				.setPlaceholder('path/to/home-page.md')
+				.setValue(profile.homeNotePath || '')
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].homeNotePath = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(contentSection)
+			.setName('Include site-wide content search')
+			.setDesc('Choose whether to upload central content index data set to enable search on your published notes')
+			.addToggle(toggle => toggle
+				.setValue(profile.publishContentIndex ?? false)
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].publishContentIndex = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(contentSection)
+			.setName('Excluded directories')
+			.setDesc('One directory per line (e.g., private/)')
+			.addTextArea(text => text
+				.setValue(profile.excludedDirectories.join('\n'))
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].excludedDirectories =
+						value.split('\n').filter(line => line.trim() !== '');
+					await this.plugin.saveSettings();
+				}));
+
+		// --- Destination ---
+		const destSection = this.createSection(profileContainer, 'Destination');
+
+		new Setting(destSection)
+			.setName('Publish mechanism')
+			.addDropdown(dropdown => dropdown
+				.addOption('AWS', 'AWS')
+				.addOption('Local', 'Local')
+				.setValue(profile.publishMechanism)
+				.onChange(async (value: 'AWS' | 'Local') => {
+					this.plugin.settings.publishingProfiles[index].publishMechanism = value;
+					await this.plugin.saveSettings();
+					this.renderActiveProfile();
+				}));
+
+		new Setting(destSection)
+			.setName('Base URL')
+			.setDesc('Base URL for published notes')
+			.addText(text => text
+				.setValue(profile.baseUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].baseUrl = value;
+					await this.plugin.saveSettings();
+				}));
+
+		if (profile.publishMechanism === 'AWS') {
+			this.displayAWSDestinationSettings(destSection, profile, index);
+
+			// --- Authentication & Delivery ---
+			const authSection = this.createSection(profileContainer, 'Authentication & Delivery');
+			this.displayAWSAuthSettings(authSection, profile, index);
+		} else {
+			this.displayLocalSettings(destSection, profile, index);
+		}
+
+		// --- Danger Zone ---
+		const dangerSection = this.createSection(profileContainer, 'Danger Zone');
+		const deleteButtonContainer = dangerSection.createDiv({ cls: 'cpn-profile-delete-container' });
 
 		new Setting(deleteButtonContainer)
 			.addButton(button => {
@@ -113,12 +213,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						evt.preventDefault();
 
 						if (!isConfirmState) {
-							// First click - show confirmation state
 							button.setButtonText('Click again to confirm deletion');
 							button.setClass('mod-error');
 							isConfirmState = true;
 
-							// Reset after 3 seconds if not clicked
 							setTimeout(() => {
 								if (isConfirmState) {
 									button.setButtonText('Delete profile');
@@ -126,7 +224,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 									isConfirmState = false;
 								}
 							}, 3000);
-						} else { // Second click - perform deletion
+						} else {
 							profileContainer.addClass('removing');
 
 							setTimeout(async () => {
@@ -144,105 +242,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		if (this.plugin.settings.publishingProfiles.length <= 1) {
 			deleteButtonContainer.querySelector('button')?.setAttribute('disabled', 'true');
 			deleteButtonContainer.setAttribute('title', 'Cannot delete the last remaining profile');
-		}
-
-		// container for header and delete button
-		const headerContainer = profileContainer.createDiv({
-			cls: 'profile-header'
-		});
-		headerContainer.style.display = 'flex';
-		headerContainer.style.justifyContent = 'space-between';
-		headerContainer.style.alignItems = 'center';
-		headerContainer.style.marginBottom = '1em';
-
-		new Setting(profileContainer)
-			.setName('Profile name')
-			.addText(text => text
-				.setValue(profile.name)
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].name = value;
-					await this.plugin.saveSettings();
-				})
-				.inputEl.addEventListener('blur', () => {
-					this.plugin.registerProfileCommands();
-					if (this.profileDropdown) {
-						const option = this.profileDropdown.selectEl.options[index];
-						if (option) option.text = this.plugin.settings.publishingProfiles[index].name;
-					}
-				}));
-
-		new Setting(profileContainer)
-			.setName('Profile ID')
-			.setDesc('Unique identifier used in frontmatter')
-			.addText(text => text
-				.setValue(profile.id)
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].id = value;
-					await this.plugin.saveSettings();
-					this.plugin.registerProfileCommands();
-				}));
-
-		this.displayIndicatorSettings(profileContainer, profile, index);
-
-		new Setting(profileContainer)
-			.setName('Publish mechanism')
-			.addDropdown(dropdown => dropdown
-				.addOption('AWS', 'AWS')
-				.addOption('Local', 'Local')
-				.setValue(profile.publishMechanism)
-				.onChange(async (value: 'AWS' | 'Local') => {
-					this.plugin.settings.publishingProfiles[index].publishMechanism = value;
-					await this.plugin.saveSettings();
-					// Refresh the settings display to show/hide mechanism-specific settings
-					this.display();
-				}));
-
-		new Setting(profileContainer)
-			.setName('Base URL')
-			.setDesc('Base URL for published notes')
-			.addText(text => text
-				.setValue(profile.baseUrl)
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].baseUrl = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(profileContainer)
-			.setName('Home Page')
-			.setDesc('Path to the note that should serve as the home page')
-			.addText(text => text
-				.setPlaceholder('path/to/home-page.md')
-				.setValue(profile.homeNotePath || '')
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].homeNotePath = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(profileContainer)
-			.setName('Include site-wide content search')
-			.setDesc('Choose whether to upload central content index data set to enable search on your published notes')
-			.addToggle(toggle => toggle
-				.setValue(profile.publishContentIndex ?? false)
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].publishContentIndex = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(profileContainer)
-			.setName('Excluded directories')
-			.setDesc('One directory per line (e.g., private/)')
-			.addTextArea(text => text
-				.setValue(profile.excludedDirectories.join('\n'))
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].excludedDirectories = 
-						value.split('\n').filter(line => line.trim() !== '');
-					await this.plugin.saveSettings();
-				}));
-
-		if (profile.publishMechanism === 'AWS') {
-			this.displayAWSSettings(profileContainer, profile, index);
-		} else {
-			this.displayLocalSettings(profileContainer, profile, index);
 		}
     }
 
@@ -295,7 +294,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private displayAWSSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
+	private initAWSSettings(profile: PublishingProfile): void {
 		if (!profile.awsSettings) {
 			profile.awsSettings = {
 				awsAccountId: '',
@@ -308,8 +307,44 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				awsCliPath: ''
 			};
 		}
+	}
 
-		if (profile.awsSettings.awsCliPath) {
+	private displayAWSDestinationSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
+		this.initAWSSettings(profile);
+
+		new Setting(containerEl)
+			.setName('S3 bucket name')
+			.setDesc('The name of the S3 bucket to upload to')
+			.addText(text => text
+				.setPlaceholder('my-notes-bucket')
+				.setValue(profile.awsSettings?.bucketName || '')
+				.onChange(async (value) => {
+					if (profile.awsSettings) {
+						profile.awsSettings.bucketName = value;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		new Setting(containerEl)
+			.setName('S3 prefix')
+			.setDesc('Optional prefix path in the S3 bucket (e.g., "site/"). Leave empty to use bucket root.')
+			.addText(text => text
+				.setPlaceholder('notes/')
+				.setValue(profile.awsSettings?.s3Prefix || '')
+				.onChange(async (value) => {
+					if (profile.awsSettings) {
+						profile.awsSettings.s3Prefix = value ?
+							(value.endsWith('/') ? value : `${value}/`) :
+							'';
+						await this.plugin.saveSettings();
+					}
+				}));
+	}
+
+	private displayAWSAuthSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
+		this.initAWSSettings(profile);
+
+		if (profile.awsSettings!.awsCliPath) {
 			new Setting(containerEl)
 				.setName('AWS CLI Path (deprecated)')
 				.setDesc('This setting is no longer used. The plugin now uses the AWS SDK directly. You can clear this field.')
@@ -345,35 +380,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('S3 bucket name')
-			.setDesc('The name of the S3 bucket to upload to')
-			.addText(text => text
-				.setPlaceholder('my-notes-bucket')
-				.setValue(profile.awsSettings?.bucketName || '')
-				.onChange(async (value) => {
-					if (profile.awsSettings) {
-						profile.awsSettings.bucketName = value;
-						await this.plugin.saveSettings();
-					}
-				}));
-
-		new Setting(containerEl)
-			.setName('S3 prefix')
-			.setDesc('Optional prefix path in the S3 bucket (e.g., "site/"). Leave empty to use bucket root.')
-			.addText(text => text
-				.setPlaceholder('notes/')
-				.setValue(profile.awsSettings?.s3Prefix || '')
-				.onChange(async (value) => {
-					if (profile.awsSettings) {
-						// Ensure the prefix ends with a forward slash if not empty
-						profile.awsSettings.s3Prefix = value ?
-							(value.endsWith('/') ? value : `${value}/`) :
-							'';
-						await this.plugin.saveSettings();
-					}
-				}));
-
-		new Setting(containerEl)
 			.setName('AWS region')
 			.setDesc('The AWS region where your bucket is located')
 			.addText(text => text
@@ -385,6 +391,36 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}
 				}));
+
+		new Setting(containerEl)
+			.setName('Credential mode')
+			.setDesc('SDK uses the standard credential chain (env vars, shared credentials, SSO). Custom command runs shell commands to refresh credentials.')
+			.addDropdown(dropdown => dropdown
+				.addOption('sdk', 'SDK (default)')
+				.addOption('custom-command', 'Custom command')
+				.setValue(profile.awsSettings?.credentialMode || 'sdk')
+				.onChange(async (value: 'sdk' | 'custom-command') => {
+					if (profile.awsSettings) {
+						profile.awsSettings.credentialMode = value;
+						await this.plugin.saveSettings();
+						this.renderActiveProfile();
+					}
+				}));
+
+		if (profile.awsSettings!.credentialMode === 'custom-command') {
+			new Setting(containerEl)
+				.setName('Credential refresh commands')
+				.setDesc('Enter the commands to refresh AWS credentials (one per line). You can use ${awsAccountId} and ${awsProfile} as variables.')
+				.addTextArea(text => text
+					.setPlaceholder('aws sso login --profile notes')
+					.setValue(profile.awsSettings?.credentialRefreshCommands || '')
+					.onChange(async (value) => {
+						if (profile.awsSettings) {
+							profile.awsSettings.credentialRefreshCommands = value;
+							await this.plugin.saveSettings();
+						}
+					}));
+		}
 
 		new Setting(containerEl)
 			.setName('CloudFront invalidation scheme')
@@ -415,36 +451,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}
 				}));
-
-		new Setting(containerEl)
-			.setName('Credential mode')
-			.setDesc('SDK uses the standard credential chain (env vars, shared credentials, SSO). Custom command runs shell commands to refresh credentials.')
-			.addDropdown(dropdown => dropdown
-				.addOption('sdk', 'SDK (default)')
-				.addOption('custom-command', 'Custom command')
-				.setValue(profile.awsSettings?.credentialMode || 'sdk')
-				.onChange(async (value: 'sdk' | 'custom-command') => {
-					if (profile.awsSettings) {
-						profile.awsSettings.credentialMode = value;
-						await this.plugin.saveSettings();
-						this.display();
-					}
-				}));
-
-		if (profile.awsSettings.credentialMode === 'custom-command') {
-			new Setting(containerEl)
-				.setName('Credential refresh commands')
-				.setDesc('Enter the commands to refresh AWS credentials (one per line). You can use ${awsAccountId} and ${awsProfile} as variables.')
-				.addTextArea(text => text
-					.setPlaceholder('aws sso login --profile notes')
-					.setValue(profile.awsSettings?.credentialRefreshCommands || '')
-					.onChange(async (value) => {
-						if (profile.awsSettings) {
-							profile.awsSettings.credentialRefreshCommands = value;
-							await this.plugin.saveSettings();
-						}
-					}));
-		}
 	}
 
 	private displayLocalSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
