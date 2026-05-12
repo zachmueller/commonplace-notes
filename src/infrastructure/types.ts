@@ -16,12 +16,15 @@ export interface InfrastructureState {
 	status: DeploymentStatus;
 	customDomain?: string;
 	useRoute53: boolean;
+	hostedZoneId?: string;
+	hostedZoneName?: string;
 	certificateArn?: string;
 	lastDeployTimestamp?: number;
 	region?: string;
 	variantName?: string;
 	originAccessMethod: OriginAccessMethod;
 	imported?: boolean;
+	authLambdaEdgeArn?: string;
 }
 
 export interface DeploymentConfig {

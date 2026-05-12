@@ -143,6 +143,14 @@ export class DeploymentWizardModal extends Modal {
 		}
 
 		new Setting(container)
+			.setName('Auth Lambda@Edge ARN')
+			.setDesc('Optional: ARN of a Lambda@Edge viewer-request function for authentication (e.g., from cpn-internal-auth)')
+			.addText(text => text
+				.setValue(this.config.authLambdaEdgeArn || '')
+				.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
+				.onChange(v => { this.config.authLambdaEdgeArn = v; }));
+
+		new Setting(container)
 			.addButton(btn => btn
 				.setButtonText('Next')
 				.setCta()
@@ -606,11 +614,14 @@ export class DeploymentWizardModal extends Modal {
 				: undefined,
 			customDomain: this.config.customDomain || undefined,
 			useRoute53: this.config.useRoute53 || false,
+			hostedZoneId: this.config.hostedZoneId || undefined,
+			hostedZoneName: this.config.hostedZoneName || undefined,
 			certificateArn: this.certArn || undefined,
 			lastDeployTimestamp: Date.now(),
 			region: this.config.region,
 			variantName: this.config.variantName,
 			originAccessMethod: this.config.originAccessMethod || 'oac',
+			authLambdaEdgeArn: this.config.authLambdaEdgeArn || undefined,
 		};
 
 		await this.plugin.saveSettings();

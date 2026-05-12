@@ -543,6 +543,15 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				.setName('Origin Access')
 				.setDesc(state.originAccessMethod === 'oac' ? 'OAC (Modern)' : 'OAI (Legacy)');
 
+			new Setting(containerEl)
+				.setName('Auth Lambda@Edge')
+				.setDesc(state.authLambdaEdgeArn || 'Not configured')
+				.addButton(btn => btn
+					.setButtonText(state.authLambdaEdgeArn ? 'Update' : 'Configure')
+					.onClick(() => {
+						this.openAuthLambdaModal(profile);
+					}));
+
 			if (state.imported) {
 				new Setting(containerEl)
 					.setDesc('This stack was imported and is managed externally via CDK.');
@@ -663,6 +672,98 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						} catch (err: any) {
 							Logger.error('Error importing stack:', err);
 							new Notice(`Import failed: ${err.message}`);
+						}
+					}));
+		};
+
+		modal.open();
+	}
+
+	private openAuthLambdaModal(profile: PublishingProfile): void {
+		const state = profile.infrastructureState;
+		if (!state || !profile.awsSettings) return;
+
+		const modal = new Modal(this.app);
+		let arnValue = state.authLambdaEdgeArn || '';
+
+		modal.onOpen = () => {
+			modal.titleEl.setText('Update Auth Lambda@Edge');
+
+			modal.contentEl.createEl('p', {
+				text: 'Provide the ARN of a Lambda@Edge viewer-request function to gate this site behind authentication. Leave empty to remove authentication.',
+				cls: 'cpn-wizard-description',
+			});
+
+			new Setting(modal.contentEl)
+				.setName('Lambda@Edge ARN')
+				.setDesc('Must be a versioned ARN in us-east-1')
+				.addText(text => text
+					.setValue(arnValue)
+					.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
+					.onChange(v => { arnValue = v; }));
+
+			const statusEl = modal.contentEl.createDiv();
+
+			new Setting(modal.contentEl)
+				.addButton(btn => btn
+					.setButtonText('Cancel')
+					.onClick(() => modal.close()))
+				.addButton(btn => btn
+					.setButtonText('Update Stack')
+					.setCta()
+					.onClick(async () => {
+						btn.setDisabled(true);
+						btn.setButtonText('Updating...');
+						statusEl.empty();
+						try {
+							const config = {
+								profileId: profile.id,
+								variantName: state.variantName || '',
+								s3Prefix: profile.awsSettings!.s3Prefix || '',
+								customDomain: state.customDomain || '',
+								certificateArn: state.certificateArn || '',
+								useRoute53: state.useRoute53,
+								hostedZoneId: state.hostedZoneId || '',
+								hostedZoneName: state.hostedZoneName || '',
+								region: state.region || profile.awsSettings!.region,
+								awsProfile: profile.awsSettings!.awsProfile,
+								originAccessMethod: state.originAccessMethod,
+								authLambdaEdgeArn: arnValue,
+							};
+
+							await this.plugin.cloudFormationManager.updateFullStack(config);
+
+							const finalStatus = await this.plugin.cloudFormationManager.pollStackUntilComplete(
+								state.fullStackName!,
+								profile,
+								(event) => {
+									const line = statusEl.createDiv({ cls: 'cpn-wizard-event-line' });
+									if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+										line.addClass('cpn-event-error');
+									} else if (event.status.includes('COMPLETE')) {
+										line.addClass('cpn-event-success');
+									}
+									line.setText(`${event.logicalResourceId} - ${event.status}`);
+								},
+								state.region,
+							);
+
+							if (finalStatus === 'UPDATE_COMPLETE') {
+								state.authLambdaEdgeArn = arnValue || undefined;
+								await this.plugin.saveSettings();
+								modal.close();
+								this.renderActiveProfile();
+								new Notice('Infrastructure updated successfully.');
+							} else {
+								new Notice(`Stack update ended with status: ${finalStatus}`);
+								btn.setDisabled(false);
+								btn.setButtonText('Update Stack');
+							}
+						} catch (err: any) {
+							Logger.error('Error updating auth lambda:', err);
+							new Notice(`Update failed: ${err.message}`);
+							btn.setDisabled(false);
+							btn.setButtonText('Update Stack');
 						}
 					}));
 		};
