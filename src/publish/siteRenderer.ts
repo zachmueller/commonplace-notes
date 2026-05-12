@@ -15,8 +15,9 @@ function getCustomization(profile: PublishingProfile): SiteCustomization {
 	};
 }
 
-function renderHeaderLinksHtml(headerLinks: HeaderLink[]): string {
-	const homeLink = '<a href="#/pindex" class="home-link">Home</a>';
+function renderHeaderLinksHtml(headerLinks: HeaderLink[], homeNoteUid?: string): string {
+	const homeHref = homeNoteUid ? `#/u${homeNoteUid}` : '#/pindex';
+	const homeLink = `<a href="${homeHref}" class="home-link">Home</a>`;
 	if (headerLinks.length === 0) return homeLink;
 
 	const customLinks = headerLinks.map(link => {
@@ -30,12 +31,20 @@ function renderHeaderLinksHtml(headerLinks: HeaderLink[]): string {
 	return `${homeLink}\n\t\t\t${customLinks}`;
 }
 
-export function renderIndexHtml(profile: PublishingProfile): string {
+export function renderIndexHtml(profile: PublishingProfile, homeNoteUid?: string): string {
 	const custom = getCustomization(profile);
 
 	let html = SITE_INDEX_TEMPLATE;
 	html = html.replace('{{SITE_TITLE}}', custom.siteTitle || DEFAULT_SITE_TITLE);
-	html = html.replace('{{HEADER_LINKS_HTML}}', renderHeaderLinksHtml(custom.headerLinks));
+	html = html.replace('{{HEADER_LINKS_HTML}}', renderHeaderLinksHtml(custom.headerLinks, homeNoteUid));
+
+	if (homeNoteUid) {
+		html = html.replace('{{HOME_NOTE_UID_SCRIPT}}',
+			`<script>window.__CPN_HOME_UID__ = "${homeNoteUid}";</script>`);
+	} else {
+		html = html.replace('{{HOME_NOTE_UID_SCRIPT}}', '');
+	}
+
 	return html;
 }
 
@@ -53,10 +62,14 @@ export function renderAppJs(): string {
 	return SITE_APP_JS;
 }
 
-export function renderConfigJson(profile: PublishingProfile): string {
+export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: string): string {
 	const custom = getCustomization(profile);
 
 	const config: Record<string, unknown> = { version: 1 };
+
+	if (homeNoteUid) {
+		config.homeNoteUid = homeNoteUid;
+	}
 
 	if (custom.fontFamily && custom.fontFamily !== DEFAULT_FONT_FAMILY) {
 		config.fontFamily = custom.fontFamily;

@@ -85,6 +85,7 @@ const indexTemplate = `<!DOCTYPE html>
 \t<div class="panels-container" id="panels"></div>
 
 \t<script>${CONFIG_BOOTSTRAP}</script>
+\t{{HOME_NOTE_UID_SCRIPT}}
 \t<script src="flexsearch.min.js"></script>
 \t<script src="app.js"></script>
 </body>

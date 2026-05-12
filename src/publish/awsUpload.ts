@@ -1,5 +1,6 @@
 import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, S3ServiceException } from '@aws-sdk/client-s3';
 import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
+import { TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
@@ -269,10 +270,19 @@ export async function pushSiteAssetsToS3(
 		const bucket = profile.awsSettings.bucketName;
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
+		// Resolve home note UID from the configured home note path
+		let homeNoteUid: string | undefined;
+		if (profile.homeNotePath) {
+			const homeFile = plugin.app.vault.getAbstractFileByPath(profile.homeNotePath);
+			if (homeFile instanceof TFile) {
+				homeNoteUid = plugin.frontmatterManager.getNoteUID(homeFile) || undefined;
+			}
+		}
+
 		const assets: { key: string; body: string; contentType: string; cacheControl: string }[] = [
 			{
 				key: `${s3Prefix}index.html`,
-				body: renderIndexHtml(profile),
+				body: renderIndexHtml(profile, homeNoteUid),
 				contentType: 'text/html',
 				cacheControl: 'no-cache',
 			},
@@ -296,7 +306,7 @@ export async function pushSiteAssetsToS3(
 			},
 			{
 				key: `${s3Prefix}config.json`,
-				body: renderConfigJson(profile),
+				body: renderConfigJson(profile, homeNoteUid),
 				contentType: 'application/json',
 				cacheControl: 'no-cache',
 			},

@@ -1,10 +1,35 @@
-import { App, DropdownComponent, Modal, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, DropdownComponent, Modal, Notice, PluginSettingTab, Setting, SuggestModal, TFile } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from './types';
 import { Logger } from './utils/logging';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from './publish/awsUpload';
+
+class HomeNoteSuggestModal extends SuggestModal<TFile> {
+	private files: TFile[];
+	private onChoose: (file: TFile) => void;
+
+	constructor(app: App, files: TFile[], onChoose: (file: TFile) => void) {
+		super(app);
+		this.files = files;
+		this.onChoose = onChoose;
+		this.setPlaceholder('Search for a publishable note...');
+	}
+
+	getSuggestions(query: string): TFile[] {
+		const lower = query.toLowerCase();
+		return this.files.filter(f => f.path.toLowerCase().includes(lower));
+	}
+
+	renderSuggestion(file: TFile, el: HTMLElement) {
+		el.createEl('div', { text: file.path });
+	}
+
+	onChooseSuggestion(file: TFile) {
+		this.onChoose(file);
+	}
+}
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
     plugin: CommonplaceNotesPlugin;
@@ -137,12 +162,26 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		new Setting(contentSection)
 			.setName('Home Page')
 			.setDesc('Path to the note that should serve as the home page')
-			.addText(text => text
-				.setPlaceholder('path/to/home-page.md')
-				.setValue(profile.homeNotePath || '')
-				.onChange(async (value) => {
-					this.plugin.settings.publishingProfiles[index].homeNotePath = value;
-					await this.plugin.saveSettings();
+			.addText(text => {
+				text.setPlaceholder('path/to/home-page.md')
+					.setValue(profile.homeNotePath || '')
+					.onChange(async (value) => {
+						this.plugin.settings.publishingProfiles[index].homeNotePath = value;
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.setAttribute('data-home-input', profile.id);
+				return text;
+			})
+			.addButton(button => button
+				.setButtonText('Browse')
+				.onClick(async () => {
+					const files = await this.plugin.publisher.getAllPublishableNotes(profile.id);
+					new HomeNoteSuggestModal(this.app, files, async (file) => {
+						this.plugin.settings.publishingProfiles[index].homeNotePath = file.path;
+						await this.plugin.saveSettings();
+						const input = containerEl.querySelector(`[data-home-input="${profile.id}"]`) as HTMLInputElement | null;
+						if (input) input.value = file.path;
+					}).open();
 				}));
 
 		new Setting(contentSection)
