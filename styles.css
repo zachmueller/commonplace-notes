@@ -50,3 +50,14 @@
 .cpn-profile-container.removing {
 	opacity: 0;
 }
+
+.cpn-active-profile-container {
+	margin-top: 1em;
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: 1em;
+}
+
+.cpn-no-profiles-message {
+	color: var(--text-muted);
+	font-style: italic;
+}

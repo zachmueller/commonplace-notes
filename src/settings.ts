@@ -1,10 +1,13 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, AWSProfileSettings, IndicatorStyle } from './types';
 import { Logger } from './utils/logging';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
     plugin: CommonplaceNotesPlugin;
+    private activeProfileIndex: number = 0;
+    private profileDropdown: DropdownComponent | null = null;
+    private profileContainerEl: HTMLElement | null = null;
 
     constructor(app: App, plugin: CommonplaceNotesPlugin) {
         super(app, plugin);
@@ -12,41 +15,73 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
     }
 
     display(): void {
-        Logger.debug('Starting settings display refresh');
 		const {containerEl} = this;
-        Logger.debug('Clearing container');
 		containerEl.empty();
 
-		Logger.debug('Creating header');
 		containerEl.createEl('h2', {text: 'Publishing profiles'});
 
-		// Add button to create new profile
-		Logger.debug('Adding new profile button');
+		// Profile selector dropdown
+		new Setting(containerEl)
+			.setName('Active profile')
+			.addDropdown(dropdown => {
+				this.profileDropdown = dropdown;
+				const profiles = this.plugin.settings.publishingProfiles;
+				profiles.forEach((profile, index) => {
+					dropdown.addOption(String(index), profile.name);
+				});
+				this.activeProfileIndex = this.clampProfileIndex(this.activeProfileIndex);
+				dropdown.setValue(String(this.activeProfileIndex));
+				dropdown.onChange(value => {
+					this.activeProfileIndex = parseInt(value, 10);
+					this.renderActiveProfile();
+				});
+			});
+
+		// Add new profile button
 		new Setting(containerEl)
 			.setName('Add new profile')
 			.addButton(button => button
 				.setButtonText('Add profile')
 				.onClick(async () => {
-					Logger.debug('Add profile button clicked');
 					await this.addNewProfile();
 				}));
 
-		// Display existing profiles
-		Logger.debug(`Displaying ${this.plugin.settings.publishingProfiles.length} profiles`);
-		this.plugin.settings.publishingProfiles.forEach((profile, index) => {
-			Logger.debug(`Processing profile ${index}: ${profile.name}`);
-			try {
-				this.displayProfileSettings(containerEl, profile, index);
-				Logger.debug(`Successfully displayed profile ${profile.name}`);
-			} catch (error) {
-				Logger.error(`Error displaying profile ${profile.name}:`, error);
-			}
-		});
-		Logger.debug('Completed settings display refresh');
+		// Profile settings container (single profile at a time)
+		this.profileContainerEl = containerEl.createDiv({ cls: 'cpn-active-profile-container' });
+		this.renderActiveProfile();
+	}
+
+	private renderActiveProfile(): void {
+		if (!this.profileContainerEl) return;
+		this.profileContainerEl.empty();
+
+		const profiles = this.plugin.settings.publishingProfiles;
+		if (profiles.length === 0) {
+			this.profileContainerEl.createEl('p', {
+				text: 'No profiles configured. Click "Add profile" to create one.',
+				cls: 'cpn-no-profiles-message'
+			});
+			return;
+		}
+
+		this.activeProfileIndex = this.clampProfileIndex(this.activeProfileIndex);
+		const profile = profiles[this.activeProfileIndex];
+		const index = this.activeProfileIndex;
+
+		try {
+			this.displayProfileSettings(this.profileContainerEl, profile, index);
+		} catch (error) {
+			Logger.error(`Error displaying profile ${profile.name}:`, error);
+		}
+	}
+
+	private clampProfileIndex(index: number): number {
+		const length = this.plugin.settings.publishingProfiles.length;
+		if (length === 0) return 0;
+		return Math.max(0, Math.min(index, length - 1));
 	}
 
 	private displayProfileSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
-		Logger.debug(`Starting to display settings for profile ${profile.name} (${profile.id})`);
 		const profileContainer = containerEl.createDiv({cls: 'cpn-profile-container'});
 		profileContainer.createEl('h3', {text: profile.name});
 
@@ -92,25 +127,21 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 								}
 							}, 3000);
 						} else { // Second click - perform deletion
-							// Add removing class for animation
 							profileContainer.addClass('removing');
 
-							// Wait for animation to complete before actual removal
 							setTimeout(async () => {
 								this.plugin.settings.publishingProfiles.splice(index, 1);
-								await this.plugin.saveSettings().then(() => {
-									this.plugin.registerProfileCommands();
-									this.display();
-								});
-							}, 200); // match CSS transition duration: .cpn-profile-container
+								await this.plugin.saveSettings();
+								this.plugin.registerProfileCommands();
+								this.activeProfileIndex = this.clampProfileIndex(this.activeProfileIndex);
+								this.display();
+							}, 200);
 						}
 					});
 				return button;
 			});
 
-		// Don't allow deletion of the last profile
 		if (this.plugin.settings.publishingProfiles.length <= 1) {
-			Logger.debug(`Disabling delete button for last remaining profile ${profile.name}`);
 			deleteButtonContainer.querySelector('button')?.setAttribute('disabled', 'true');
 			deleteButtonContainer.setAttribute('title', 'Cannot delete the last remaining profile');
 		}
@@ -132,10 +163,12 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					this.plugin.settings.publishingProfiles[index].name = value;
 					await this.plugin.saveSettings();
 				})
-				.inputEl.addEventListener('blur', async () => {
-					// Refresh display to update name
+				.inputEl.addEventListener('blur', () => {
 					this.plugin.registerProfileCommands();
-					this.display();
+					if (this.profileDropdown) {
+						const option = this.profileDropdown.selectEl.options[index];
+						if (option) option.text = this.plugin.settings.publishingProfiles[index].name;
+					}
 				}));
 
 		new Setting(profileContainer)
@@ -149,7 +182,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					this.plugin.registerProfileCommands();
 				}));
 
-		this.displayIndicatorSettings(containerEl, profile, index);
+		this.displayIndicatorSettings(profileContainer, profile, index);
 
 		new Setting(profileContainer)
 			.setName('Publish mechanism')
@@ -447,6 +480,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		this.plugin.settings.publishingProfiles.push(newProfile);
 		await this.plugin.saveSettings();
+		this.activeProfileIndex = this.plugin.settings.publishingProfiles.length - 1;
 		this.display();
 	}
 }
