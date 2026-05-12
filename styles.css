@@ -138,10 +138,11 @@
 }
 
 .cpn-wizard-error {
-	color: var(--text-error);
-	padding: 8px;
+	color: var(--text-normal);
+	padding: 12px;
 	border-radius: 4px;
-	background: var(--background-modifier-error);
+	border-left: 4px solid var(--text-error);
+	background: var(--background-secondary);
 	margin-bottom: 12px;
 }
 
