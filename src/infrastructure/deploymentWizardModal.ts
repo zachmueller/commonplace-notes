@@ -369,7 +369,7 @@ export class DeploymentWizardModal extends Modal {
 		try {
 			const stackName = await this.cfManager.deployCertificateStack(this.config as DeploymentConfig);
 
-			this.updateInfraState({
+			await this.updateInfraState({
 				certStackName: stackName,
 				status: 'cert-deploying',
 				customDomain: this.config.customDomain,
@@ -387,7 +387,7 @@ export class DeploymentWizardModal extends Modal {
 			if (finalStatus === 'CREATE_COMPLETE') {
 				this.certArn = await this.cfManager.getCertificateArn(stackName, this.activeProfile);
 				this.config.certificateArn = this.certArn;
-				this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn });
+				await this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn });
 
 				if (this.config.useRoute53) {
 					this.step = 4;
@@ -396,11 +396,11 @@ export class DeploymentWizardModal extends Modal {
 				}
 				this.renderStep();
 			} else {
-				this.updateInfraState({ status: 'failed' });
+				await this.updateInfraState({ status: 'failed' });
 				this.showError(container, `Certificate stack deployment failed: ${finalStatus}`);
 			}
 		} catch (err: any) {
-			this.updateInfraState({ status: 'failed' });
+			await this.updateInfraState({ status: 'failed' });
 			this.showError(container, `Error deploying certificate: ${err.message}`);
 		}
 	}
@@ -413,7 +413,7 @@ export class DeploymentWizardModal extends Modal {
 			cls: 'cpn-wizard-description',
 		});
 
-		this.updateInfraState({ status: 'waiting-dns' });
+		await this.updateInfraState({ status: 'waiting-dns' });
 
 		try {
 			const records = await this.cfManager.getCertificateValidationRecords(this.certArn, this.activeProfile);
@@ -478,7 +478,7 @@ export class DeploymentWizardModal extends Modal {
 		try {
 			const stackName = await this.cfManager.deployFullStack(this.config as DeploymentConfig);
 
-			this.updateInfraState({
+			await this.updateInfraState({
 				fullStackName: stackName,
 				status: 'deploying',
 				region: this.config.region,
@@ -497,15 +497,15 @@ export class DeploymentWizardModal extends Modal {
 
 			if (finalStatus === 'CREATE_COMPLETE') {
 				this.stackOutputs = await this.cfManager.getStackOutputs(stackName, this.activeProfile, this.config.region);
-				this.updateInfraState({ status: 'deployed', lastDeployTimestamp: Date.now() });
+				await this.updateInfraState({ status: 'deployed', lastDeployTimestamp: Date.now() });
 				this.step = 5;
 				this.renderStep();
 			} else {
-				this.updateInfraState({ status: 'failed' });
+				await this.updateInfraState({ status: 'failed' });
 				this.showError(container, `Stack deployment failed: ${finalStatus}`);
 			}
 		} catch (err: any) {
-			this.updateInfraState({ status: 'failed' });
+			await this.updateInfraState({ status: 'failed' });
 			this.showError(container, `Error deploying infrastructure: ${err.message}`);
 		}
 	}
@@ -559,10 +559,26 @@ export class DeploymentWizardModal extends Modal {
 		profile.awsSettings.bucketName = this.stackOutputs.bucketName;
 		profile.awsSettings.cloudFrontDistributionId = this.stackOutputs.distributionId;
 		profile.awsSettings.region = this.config.region!;
+		profile.awsSettings.awsProfile = this.config.awsProfile!;
 		if (this.config.s3Prefix) {
 			profile.awsSettings.s3Prefix = this.config.s3Prefix;
 		}
 		profile.baseUrl = `https://${this.stackOutputs.siteUrl}/`;
+
+		profile.infrastructureState = {
+			status: 'deployed',
+			fullStackName: this.cfManager.getStackName(this.config.variantName || '', 'full'),
+			certStackName: this.config.customDomain
+				? this.cfManager.getStackName(this.config.variantName || '', 'cert')
+				: undefined,
+			customDomain: this.config.customDomain || undefined,
+			useRoute53: this.config.useRoute53 || false,
+			certificateArn: this.certArn || undefined,
+			lastDeployTimestamp: Date.now(),
+			region: this.config.region,
+			variantName: this.config.variantName,
+			originAccessMethod: this.config.originAccessMethod || 'oac',
+		};
 
 		await this.plugin.saveSettings();
 		new Notice('Profile settings updated from stack outputs.');
@@ -579,7 +595,7 @@ export class DeploymentWizardModal extends Modal {
 		};
 	}
 
-	private updateInfraState(partial: Record<string, any>): void {
+	private async updateInfraState(partial: Record<string, any>): Promise<void> {
 		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === this.profile.id);
 		if (!profile) return;
 
@@ -590,7 +606,7 @@ export class DeploymentWizardModal extends Modal {
 			...profile.infrastructureState,
 			...partial,
 		};
-		this.plugin.saveSettings();
+		await this.plugin.saveSettings();
 	}
 
 	private appendEvent(container: HTMLElement, event: StackEvent): void {
