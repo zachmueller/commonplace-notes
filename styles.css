@@ -150,6 +150,16 @@
 	margin-bottom: 16px;
 }
 
+.cpn-outputs-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.cpn-outputs-header h3 {
+	margin: 0;
+}
+
 .cpn-output-row {
 	display: flex;
 	gap: 8px;

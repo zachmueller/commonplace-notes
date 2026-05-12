@@ -520,7 +520,27 @@ export class DeploymentWizardModal extends Modal {
 
 		if (this.stackOutputs) {
 			const outputsDiv = container.createDiv({ cls: 'cpn-wizard-outputs' });
-			outputsDiv.createEl('h3', { text: 'Stack Outputs' });
+			const outputsHeader = outputsDiv.createDiv({ cls: 'cpn-outputs-header' });
+			outputsHeader.createEl('h3', { text: 'Stack Outputs' });
+			const copyBtn = outputsHeader.createEl('button', {
+				cls: 'cpn-copy-btn',
+				attr: { 'aria-label': 'Copy all outputs to clipboard' },
+			});
+			copyBtn.setText('Copy All');
+			copyBtn.addEventListener('click', () => {
+				const text = [
+					`Bucket Name: ${this.stackOutputs!.bucketName}`,
+					`Distribution ID: ${this.stackOutputs!.distributionId}`,
+					`Distribution Domain: ${this.stackOutputs!.distributionDomainName}`,
+					`Site URL: ${this.stackOutputs!.siteUrl}`,
+					`Region: ${this.config.region}`,
+					`S3 Prefix: ${this.config.s3Prefix || '(none)'}`,
+					`Stack Name: ${this.cfManager.getStackName(this.config.variantName || '', 'full')}`,
+					`Origin Access: ${this.config.originAccessMethod === 'oac' ? 'OAC' : 'OAI'}`,
+				].join('\n');
+				navigator.clipboard.writeText(text);
+				new Notice('Stack outputs copied to clipboard.');
+			});
 
 			const entries: [string, string][] = [
 				['Bucket Name', this.stackOutputs.bucketName],
