@@ -58,3 +58,8 @@ export interface StackEvent {
 	reason?: string;
 	timestamp: Date;
 }
+
+export interface HostedZoneInfo {
+	id: string;
+	name: string;
+}

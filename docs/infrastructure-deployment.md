@@ -16,7 +16,7 @@ The deploying user/role needs at minimum:
 - `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutBucketPolicy`, `s3:PutPublicAccessBlock`
 - `cloudfront:CreateDistribution`, `cloudfront:CreateOriginAccessControl` (or `CreateCloudFrontOriginAccessIdentity` for OAI)
 - If using custom domains: `acm:RequestCertificate`, `acm:DescribeCertificate`
-- If using Route53: `route53:ChangeResourceRecordSets`
+- If using Route53: `route53:ListHostedZones`, `route53:ChangeResourceRecordSets`, `route53:CreateHostedZone` (only if creating a new zone)
 
 ---
 
@@ -44,9 +44,19 @@ The wizard presents a configuration form:
 | S3 Prefix | No | Path prefix within the bucket if you want notes stored under a subdirectory |
 | Origin Access Method | Yes | **OAC** (recommended, modern) or **OAI** (legacy, compatible with older setups) |
 | Custom Domain | No | A domain you own (e.g., `notes.example.com`). Requires DNS configuration. |
-| Use Route53 | No | If you have a Route53 hosted zone, the plugin can create DNS records automatically |
-| Hosted Zone ID | Conditional | Required if Route53 is enabled |
-| Hosted Zone Name | Conditional | Required if Route53 is enabled (e.g., `example.com`) |
+| Use Route53 | No | Automatically manage DNS records via Route53 (see below) |
+
+#### Route53 Setup (Automatic)
+
+When you enable **Use Route53**, the wizard automatically queries your AWS account for hosted zones:
+
+- **Matching zone found:** If a hosted zone matching your custom domain exists (e.g., you entered `notes.example.com` and a zone for `example.com` exists), it is pre-selected in a dropdown. No manual input needed.
+- **No matching zone:** The wizard offers two options:
+  - **Create Zone** — creates a new Route53 hosted zone for your domain's parent (e.g., `example.com`). After creation, you'll need to update your domain registrar's nameservers to point to the Route53 nameservers.
+  - **Select from existing zones** — pick any zone in your account from a dropdown.
+- **Manual override:** You can always switch to "Enter manually..." in the dropdown to type a Hosted Zone ID and Name directly.
+
+If the wizard cannot access Route53 (e.g., missing permissions), it falls back to manual text inputs.
 
 Click **Next** to proceed.
 

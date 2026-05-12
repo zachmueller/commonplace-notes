@@ -9,6 +9,11 @@ import {
 	ACMClient,
 	DescribeCertificateCommand,
 } from '@aws-sdk/client-acm';
+import {
+	Route53Client,
+	ListHostedZonesCommand,
+	CreateHostedZoneCommand,
+} from '@aws-sdk/client-route-53';
 import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { PublishingProfile } from '../types';
@@ -21,6 +26,7 @@ import {
 import type {
 	DeploymentConfig,
 	DnsValidationRecord,
+	HostedZoneInfo,
 	StackEvent,
 	StackOutputs,
 } from './types';
@@ -43,6 +49,7 @@ export class CloudFormationManager {
 	private plugin: CommonplaceNotesPlugin;
 	private cfClients: Map<string, CloudFormationClient> = new Map();
 	private acmClients: Map<string, ACMClient> = new Map();
+	private route53Clients: Map<string, Route53Client> = new Map();
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
@@ -207,6 +214,51 @@ export class CloudFormationManager {
 		return this.getStackOutputs(stackName, profile, region);
 	}
 
+	async listHostedZones(profile: PublishingProfile): Promise<HostedZoneInfo[]> {
+		const client = this.getRoute53Client(profile);
+		const zones: HostedZoneInfo[] = [];
+		let marker: string | undefined;
+
+		do {
+			const response = await client.send(new ListHostedZonesCommand({
+				Marker: marker,
+			}));
+			for (const zone of response.HostedZones || []) {
+				zones.push({
+					id: zone.Id!.replace('/hostedzone/', ''),
+					name: zone.Name!.replace(/\.$/, ''),
+				});
+			}
+			marker = response.IsTruncated ? response.NextMarker : undefined;
+		} while (marker);
+
+		return zones;
+	}
+
+	async findHostedZoneForDomain(profile: PublishingProfile, domain: string): Promise<HostedZoneInfo | null> {
+		const zones = await this.listHostedZones(profile);
+		const domainParts = domain.split('.');
+
+		for (let i = 0; i < domainParts.length - 1; i++) {
+			const candidate = domainParts.slice(i).join('.');
+			const match = zones.find(z => z.name === candidate);
+			if (match) return match;
+		}
+		return null;
+	}
+
+	async createHostedZone(profile: PublishingProfile, domain: string): Promise<HostedZoneInfo> {
+		const client = this.getRoute53Client(profile);
+		const response = await client.send(new CreateHostedZoneCommand({
+			Name: domain,
+			CallerReference: `cpn-${Date.now()}`,
+		}));
+		return {
+			id: response.HostedZone!.Id!.replace('/hostedzone/', ''),
+			name: response.HostedZone!.Name!.replace(/\.$/, ''),
+		};
+	}
+
 	getStackName(variantName: string, type: 'cert' | 'full'): string {
 		const suffix = variantName || 'default';
 		return type === 'cert' ? `cpn-cert-${suffix}` : `cpn-${suffix}`;
@@ -215,8 +267,10 @@ export class CloudFormationManager {
 	dispose(): void {
 		for (const client of this.cfClients.values()) client.destroy();
 		for (const client of this.acmClients.values()) client.destroy();
+		for (const client of this.route53Clients.values()) client.destroy();
 		this.cfClients.clear();
 		this.acmClients.clear();
+		this.route53Clients.clear();
 	}
 
 	private getCloudFormationClient(config: DeploymentConfig, region: string): CloudFormationClient {
@@ -244,6 +298,20 @@ export class CloudFormationManager {
 			credentials: this.buildCredentialProvider(awsProfile),
 		});
 		this.cfClients.set(key, client);
+		return client;
+	}
+
+	private getRoute53Client(profile: PublishingProfile): Route53Client {
+		const awsProfile = profile.awsSettings!.awsProfile;
+		const key = awsProfile;
+		const existing = this.route53Clients.get(key);
+		if (existing) return existing;
+
+		const client = new Route53Client({
+			region: 'us-east-1',
+			credentials: this.buildCredentialProvider(awsProfile),
+		});
+		this.route53Clients.set(key, client);
 		return client;
 	}
 
