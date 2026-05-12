@@ -4,6 +4,7 @@ import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from
 import { Logger } from './utils/logging';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
+import { pushSiteAssetsToS3, createCloudFrontInvalidation } from './publish/awsUpload';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
     plugin: CommonplaceNotesPlugin;
@@ -638,6 +639,22 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			fontFamily: '',
 			themeOverrides: {},
 		};
+
+		new Setting(containerEl)
+			.setName('Push site assets')
+			.setDesc('Upload index.html, styles, scripts, and config to S3 without re-publishing notes')
+			.addButton(button => button
+				.setButtonText('Push site assets')
+				.onClick(async () => {
+					button.setDisabled(true);
+					button.setButtonText('Pushing...');
+					const success = await pushSiteAssetsToS3(this.plugin, profile.id);
+					if (success) {
+						await createCloudFrontInvalidation(this.plugin, profile.id);
+					}
+					button.setDisabled(false);
+					button.setButtonText('Push site assets');
+				}));
 
 		new Setting(containerEl)
 			.setName('Site title')
