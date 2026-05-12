@@ -36,6 +36,7 @@ export interface DeploymentConfig {
 	region: string;
 	awsProfile: string;
 	originAccessMethod: OriginAccessMethod;
+	authLambdaEdgeArn?: string;
 }
 
 export interface StackOutputs {

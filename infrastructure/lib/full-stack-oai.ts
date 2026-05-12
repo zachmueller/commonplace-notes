@@ -52,6 +52,12 @@ export class FullStackOai extends cdk.Stack {
 			description: 'Route53 Hosted Zone Name (required if UseRoute53=true)',
 		});
 
+		const authLambdaEdgeArn = new cdk.CfnParameter(this, 'AuthLambdaEdgeArn', {
+			type: 'String',
+			default: '',
+			description: 'Optional ARN of a Lambda@Edge function for viewer-request authentication',
+		});
+
 		// Conditions
 		const hasVariantName = new cdk.CfnCondition(this, 'HasVariantName', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(variantName.valueAsString, '')),
@@ -74,6 +80,10 @@ export class FullStackOai extends cdk.Stack {
 				cdk.Fn.conditionEquals(useRoute53.valueAsString, 'true'),
 				cdk.Fn.conditionNot(cdk.Fn.conditionEquals(hostedZoneId.valueAsString, '')),
 			),
+		});
+
+		const hasAuthLambda = new cdk.CfnCondition(this, 'HasAuthLambda', {
+			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(authLambdaEdgeArn.valueAsString, '')),
 		});
 
 		// S3 Bucket
@@ -131,6 +141,11 @@ export class FullStackOai extends cdk.Stack {
 					compress: true,
 					cachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6', // CachingOptimized
 					forwardedValues: undefined,
+					lambdaFunctionAssociations: cdk.Fn.conditionIf(
+						'HasAuthLambda',
+						[{ EventType: 'viewer-request', LambdaFunctionARN: authLambdaEdgeArn.valueAsString }],
+						cdk.Aws.NO_VALUE,
+					) as any,
 				},
 				origins: [
 					{

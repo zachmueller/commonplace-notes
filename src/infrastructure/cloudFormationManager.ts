@@ -1,6 +1,7 @@
 import {
 	CloudFormationClient,
 	CreateStackCommand,
+	UpdateStackCommand,
 	DeleteStackCommand,
 	DescribeStacksCommand,
 	DescribeStackEventsCommand,
@@ -92,6 +93,37 @@ export class CloudFormationManager {
 				{ ParameterKey: 'UseRoute53', ParameterValue: config.useRoute53 ? 'true' : 'false' },
 				{ ParameterKey: 'HostedZoneId', ParameterValue: config.hostedZoneId },
 				{ ParameterKey: 'HostedZoneName', ParameterValue: config.hostedZoneName },
+				{ ParameterKey: 'AuthLambdaEdgeArn', ParameterValue: config.authLambdaEdgeArn || '' },
+			],
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	async updateFullStack(config: DeploymentConfig): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'full');
+		const client = this.getCloudFormationClient(config, config.region);
+		const template = config.originAccessMethod === 'oac'
+			? FULL_STACK_OAC_TEMPLATE
+			: FULL_STACK_OAI_TEMPLATE;
+
+		await client.send(new UpdateStackCommand({
+			StackName: stackName,
+			TemplateBody: template,
+			Parameters: [
+				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
+				{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix },
+				{ ParameterKey: 'CustomDomain', ParameterValue: config.customDomain },
+				{ ParameterKey: 'CertificateArn', ParameterValue: config.certificateArn || '' },
+				{ ParameterKey: 'UseRoute53', ParameterValue: config.useRoute53 ? 'true' : 'false' },
+				{ ParameterKey: 'HostedZoneId', ParameterValue: config.hostedZoneId },
+				{ ParameterKey: 'HostedZoneName', ParameterValue: config.hostedZoneName },
+				{ ParameterKey: 'AuthLambdaEdgeArn', ParameterValue: config.authLambdaEdgeArn || '' },
 			],
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
