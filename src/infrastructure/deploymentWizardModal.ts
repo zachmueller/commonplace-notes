@@ -170,7 +170,7 @@ export class DeploymentWizardModal extends Modal {
 		const loadingEl = container.createEl('p', { text: 'Looking up hosted zones...', cls: 'cpn-wizard-description' });
 
 		try {
-			const zones = await this.cfManager.listHostedZones(this.profile);
+			const zones = await this.cfManager.listHostedZones(this.activeProfile);
 			if (this.aborted) return;
 			loadingEl.remove();
 
@@ -233,7 +233,7 @@ export class DeploymentWizardModal extends Modal {
 						.setCta()
 						.onClick(async () => {
 							try {
-								const newZone = await this.cfManager.createHostedZone(this.profile, parentDomain);
+								const newZone = await this.cfManager.createHostedZone(this.activeProfile, parentDomain);
 								this.config.hostedZoneId = newZone.id;
 								this.config.hostedZoneName = newZone.name;
 								new Notice(`Created hosted zone: ${newZone.name} (${newZone.id})`);
@@ -294,7 +294,7 @@ export class DeploymentWizardModal extends Modal {
 							.setCta()
 							.onClick(async () => {
 								try {
-									const newZone = await this.cfManager.createHostedZone(this.profile, parentDomain);
+									const newZone = await this.cfManager.createHostedZone(this.activeProfile, parentDomain);
 									this.config.hostedZoneId = newZone.id;
 									this.config.hostedZoneName = newZone.name;
 									new Notice(`Created hosted zone: ${newZone.name} (${newZone.id})`);
@@ -361,7 +361,7 @@ export class DeploymentWizardModal extends Modal {
 
 			const finalStatus = await this.cfManager.pollStackUntilComplete(
 				stackName,
-				this.profile,
+				this.activeProfile,
 				(event) => this.appendEvent(eventLog, event),
 				'us-east-1',
 			);
@@ -369,7 +369,7 @@ export class DeploymentWizardModal extends Modal {
 			if (this.aborted) return;
 
 			if (finalStatus === 'CREATE_COMPLETE') {
-				this.certArn = await this.cfManager.getCertificateArn(stackName, this.profile);
+				this.certArn = await this.cfManager.getCertificateArn(stackName, this.activeProfile);
 				this.config.certificateArn = this.certArn;
 				this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn });
 
@@ -400,7 +400,7 @@ export class DeploymentWizardModal extends Modal {
 		this.updateInfraState({ status: 'waiting-dns' });
 
 		try {
-			const records = await this.cfManager.getCertificateValidationRecords(this.certArn, this.profile);
+			const records = await this.cfManager.getCertificateValidationRecords(this.certArn, this.activeProfile);
 
 			if (records.length === 0) {
 				container.createEl('p', { text: 'Waiting for validation records to become available...' });
@@ -436,7 +436,7 @@ export class DeploymentWizardModal extends Modal {
 					.setButtonText('Check Status')
 					.setCta()
 					.onClick(async () => {
-						const status = await this.cfManager.checkCertificateStatus(this.certArn, this.profile);
+						const status = await this.cfManager.checkCertificateStatus(this.certArn, this.activeProfile);
 						if (status === 'ISSUED') {
 							this.step = 4;
 							this.renderStep();
@@ -472,7 +472,7 @@ export class DeploymentWizardModal extends Modal {
 
 			const finalStatus = await this.cfManager.pollStackUntilComplete(
 				stackName,
-				this.profile,
+				this.activeProfile,
 				(event) => this.appendEvent(eventLog, event),
 				this.config.region,
 			);
@@ -480,7 +480,7 @@ export class DeploymentWizardModal extends Modal {
 			if (this.aborted) return;
 
 			if (finalStatus === 'CREATE_COMPLETE') {
-				this.stackOutputs = await this.cfManager.getStackOutputs(stackName, this.profile, this.config.region);
+				this.stackOutputs = await this.cfManager.getStackOutputs(stackName, this.activeProfile, this.config.region);
 				this.updateInfraState({ status: 'deployed', lastDeployTimestamp: Date.now() });
 				this.step = 5;
 				this.renderStep();
@@ -550,6 +550,17 @@ export class DeploymentWizardModal extends Modal {
 
 		await this.plugin.saveSettings();
 		new Notice('Profile settings updated from stack outputs.');
+	}
+
+	private get activeProfile(): PublishingProfile {
+		return {
+			...this.profile,
+			awsSettings: {
+				...this.profile.awsSettings!,
+				awsProfile: this.config.awsProfile || this.profile.awsSettings!.awsProfile,
+				region: this.config.region || this.profile.awsSettings!.region,
+			},
+		};
 	}
 
 	private updateInfraState(partial: Record<string, any>): void {
