@@ -1,4 +1,5 @@
 import { App, Modal, Setting, Notice } from 'obsidian';
+import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
@@ -585,6 +586,17 @@ export class DeploymentWizardModal extends Modal {
 		}
 		profile.baseUrl = `https://${this.stackOutputs.siteUrl}/`;
 
+		// Fetch the AWS account ID via STS
+		try {
+			const stsClient = this.plugin.awsSdkManager.getSTSClient(this.activeProfile);
+			const identity = await stsClient.send(new GetCallerIdentityCommand({}));
+			if (identity.Account) {
+				profile.awsSettings.awsAccountId = identity.Account;
+			}
+		} catch {
+			// Non-fatal — account ID is informational
+		}
+
 		profile.infrastructureState = {
 			status: 'deployed',
 			fullStackName: this.cfManager.getStackName(this.config.variantName || '', 'full'),
@@ -601,7 +613,15 @@ export class DeploymentWizardModal extends Modal {
 		};
 
 		await this.plugin.saveSettings();
+		this.refreshSettingsTab();
 		new Notice('Profile settings updated from stack outputs.');
+	}
+
+	private refreshSettingsTab(): void {
+		const setting = (this.app as any).setting;
+		if (setting?.activeTab?.display) {
+			setting.activeTab.display();
+		}
 	}
 
 	private get activeProfile(): PublishingProfile {
