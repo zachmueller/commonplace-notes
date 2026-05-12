@@ -1,4 +1,5 @@
 import { TFile } from 'obsidian';
+import { InfrastructureState } from './infrastructure/types';
 
 export interface CommonplaceNotesSettings {
     publishingProfiles: PublishingProfile[];
@@ -19,6 +20,7 @@ export interface PublishingProfile {
     publishMechanism: 'AWS' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;
+	infrastructureState?: InfrastructureState;
 	indicator: PublishingIndicator;
 }
 

@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, App, TFile } from 'obsidian';
+import { Plugin, MarkdownView, App, TFile, Modal, Setting } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
 import { 
 	CommonplaceNotesSettings,
@@ -20,6 +20,8 @@ import { AwsSdkManager } from './utils/awsSdk';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 import { formatNoteUrl } from './utils/urlScheme';
+import { CloudFormationManager } from './infrastructure/cloudFormationManager';
+import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 
 // defining interfaces to facilitate deregistering commands
 interface Command {
@@ -78,6 +80,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	templateManager: TemplateManager;
 	publisher: Publisher;
 	awsSdkManager: AwsSdkManager;
+	cloudFormationManager: CloudFormationManager;
 
 	async onload() {
 		// Initialize settings
@@ -94,6 +97,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.publisher = new Publisher(this);
 		this.templateManager = new TemplateManager(this);
 		this.awsSdkManager = new AwsSdkManager(this);
+		this.cloudFormationManager = new CloudFormationManager(this);
 
 		// Initialize indicator updates
 		// Targeted indicator refresh upon file open events
@@ -236,6 +240,72 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				} catch (error) {
 					Logger.error('Error copying note URL:', error);
 					throw new Error('Error copying note URL, check console');
+				}
+			}
+		});
+
+		this.addCommand({
+			id: 'deploy-infrastructure',
+			name: 'Deploy publishing infrastructure',
+			callback: async () => {
+				const profile = await this.publisher.promptForProfile();
+				if (!profile) return;
+				if (profile.publishMechanism !== 'AWS') {
+					NoticeManager.showNotice('Infrastructure deployment is only available for AWS profiles.');
+					return;
+				}
+				new DeploymentWizardModal(
+					this.app,
+					this,
+					this.cloudFormationManager,
+					profile,
+				).open();
+			}
+		});
+
+		this.addCommand({
+			id: 'destroy-infrastructure',
+			name: 'Destroy publishing infrastructure',
+			callback: async () => {
+				const profile = await this.publisher.promptForProfile();
+				if (!profile) return;
+				const state = profile.infrastructureState;
+				if (!state || state.status === 'none') {
+					NoticeManager.showNotice('No infrastructure deployed for this profile.');
+					return;
+				}
+				if (state.imported) {
+					NoticeManager.showNotice('Imported stacks cannot be destroyed from the plugin. Manage them via CDK.');
+					return;
+				}
+				const confirmed = await new Promise<boolean>(resolve => {
+					const confirmModal = new Modal(this.app);
+					confirmModal.onOpen = () => {
+						confirmModal.contentEl.createEl('h3', { text: 'Destroy Infrastructure' });
+						confirmModal.contentEl.createEl('p', {
+							text: `This will delete the CloudFormation stacks for profile "${profile.name}". The S3 bucket will be retained (not deleted). This action cannot be undone.`,
+						});
+						new Setting(confirmModal.contentEl)
+							.addButton(btn => btn.setButtonText('Cancel').onClick(() => { resolve(false); confirmModal.close(); }))
+							.addButton(btn => btn.setButtonText('Destroy').setWarning().onClick(() => { resolve(true); confirmModal.close(); }));
+					};
+					confirmModal.onClose = () => resolve(false);
+					confirmModal.open();
+				});
+				if (!confirmed) return;
+
+				try {
+					if (state.fullStackName) {
+						await this.cloudFormationManager.deleteStack(state.fullStackName, profile, state.region);
+					}
+					if (state.certStackName) {
+						await this.cloudFormationManager.deleteStack(state.certStackName, profile, 'us-east-1');
+					}
+					profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
+					await this.saveSettings();
+					NoticeManager.showNotice('Infrastructure destruction initiated.');
+				} catch (err: any) {
+					NoticeManager.showNotice(`Error: ${err.message}`);
 				}
 			}
 		});
@@ -469,6 +539,7 @@ cpn.rebuildContentIndex();
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
 		this.awsSdkManager.dispose();
+		this.cloudFormationManager.dispose();
 		NoticeManager.cleanup();
 	}
 

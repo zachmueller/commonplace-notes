@@ -10,7 +10,8 @@
 		"e2e": "npx playwright test --config=e2e/playwright.config.ts",
 		"e2e:run": "npx tsx e2e/run-and-collect.ts",
 		"e2e:run:quick": "npx tsx e2e/run-and-collect.ts --duration 10",
-		"e2e:setup-vault": "npx tsx e2e/scripts/setup-vault.ts"
+		"e2e:setup-vault": "npx tsx e2e/scripts/setup-vault.ts",
+		"synth": "cd infrastructure && npm install && npx ts-node bin/synth.ts"
 	},
 	"keywords": [],
 	"author": "Zach Mueller",
@@ -49,6 +50,8 @@
 		"typescript": "^5.0.4"
 	},
 	"dependencies": {
+		"@aws-sdk/client-acm": "^3.1045.0",
+		"@aws-sdk/client-cloudformation": "^3.1045.0",
 		"@aws-sdk/client-cloudfront": "^3.1045.0",
 		"@aws-sdk/client-s3": "^3.x.x",
 		"@aws-sdk/client-sts": "^3.1045.0",

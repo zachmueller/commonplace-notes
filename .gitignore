@@ -29,3 +29,7 @@ e2e/test-vault/
 e2e/test-user-data/
 e2e/results/
 e2e/dist/
+
+# Infrastructure build artifacts (CDK synthesis)
+infrastructure/node_modules
+infrastructure/cdk.out

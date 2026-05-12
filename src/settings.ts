@@ -2,6 +2,8 @@ import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, IndicatorStyle } from './types';
 import { Logger } from './utils/logging';
+import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
+import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
     plugin: CommonplaceNotesPlugin;
@@ -190,6 +192,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		if (profile.publishMechanism === 'AWS') {
 			this.displayAWSDestinationSettings(destSection, profile, index);
+
+			// --- Infrastructure ---
+			const infraSection = this.createSection(profileContainer, 'Infrastructure');
+			this.displayInfrastructureSettings(infraSection, profile, index);
 
 			// --- Authentication & Delivery ---
 			const authSection = this.createSection(profileContainer, 'Authentication & Delivery');
@@ -451,6 +457,133 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}
 				}));
+	}
+
+	private displayInfrastructureSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
+		const state = profile.infrastructureState;
+		const status = state?.status || 'none';
+
+		const statusLabels: Record<string, string> = {
+			'none': 'Not deployed',
+			'cert-deploying': 'Deploying certificate...',
+			'cert-deployed': 'Certificate deployed',
+			'waiting-dns': 'Waiting for DNS validation',
+			'deploying': 'Deploying...',
+			'deployed': 'Deployed',
+			'failed': 'Failed',
+			'destroying': 'Destroying...',
+		};
+
+		const statusSetting = new Setting(containerEl)
+			.setName('Status')
+			.setDesc(statusLabels[status] || status);
+
+		const badgeEl = statusSetting.nameEl.createSpan({ cls: 'cpn-infra-status-badge' });
+		if (status === 'deployed') badgeEl.addClass('cpn-infra-status-deployed');
+		else if (status === 'failed') badgeEl.addClass('cpn-infra-status-failed');
+		else if (status === 'none') badgeEl.addClass('cpn-infra-status-none');
+		else badgeEl.addClass('cpn-infra-status-pending');
+
+		if (status === 'deployed' && state) {
+			if (state.fullStackName) {
+				new Setting(containerEl)
+					.setName('Stack')
+					.setDesc(`${state.fullStackName} (${state.region || 'unknown region'})`);
+			}
+			if (state.customDomain) {
+				new Setting(containerEl)
+					.setName('Domain')
+					.setDesc(state.customDomain);
+			}
+			new Setting(containerEl)
+				.setName('Origin Access')
+				.setDesc(state.originAccessMethod === 'oac' ? 'OAC (Modern)' : 'OAI (Legacy)');
+
+			if (state.imported) {
+				new Setting(containerEl)
+					.setDesc('This stack was imported and is managed externally via CDK.');
+			}
+
+			new Setting(containerEl)
+				.addButton(btn => btn
+					.setButtonText('Sync settings from stack')
+					.onClick(async () => {
+						try {
+							const outputs = await this.plugin.cloudFormationManager.getStackOutputs(
+								state.fullStackName!,
+								profile,
+								state.region,
+							);
+							profile.awsSettings!.bucketName = outputs.bucketName;
+							profile.awsSettings!.cloudFrontDistributionId = outputs.distributionId;
+							profile.baseUrl = `https://${outputs.siteUrl}/`;
+							await this.plugin.saveSettings();
+							this.renderActiveProfile();
+						} catch (err: any) {
+							Logger.error('Error syncing stack outputs:', err);
+						}
+					}));
+
+			if (state.status === 'waiting-dns' || state.certificateArn) {
+				new Setting(containerEl)
+					.addButton(btn => btn
+						.setButtonText('Manage DNS')
+						.onClick(() => {
+							new DnsAssistantModal(
+								this.app,
+								this.plugin.cloudFormationManager,
+								profile,
+							).open();
+						}));
+			}
+		}
+
+		if (status === 'none') {
+			new Setting(containerEl)
+				.addButton(btn => btn
+					.setButtonText('Deploy Infrastructure')
+					.setCta()
+					.onClick(() => {
+						new DeploymentWizardModal(
+							this.app,
+							this.plugin,
+							this.plugin.cloudFormationManager,
+							profile,
+						).open();
+					}));
+
+			if (profile.awsSettings?.bucketName && profile.awsSettings?.cloudFrontDistributionId) {
+				new Setting(containerEl)
+					.setName('Import existing stack')
+					.setDesc('Import a stack deployed via CDK to track it here')
+					.addButton(btn => btn
+						.setButtonText('Import')
+						.onClick(async () => {
+							const stackName = prompt('Stack name:', 'PublishedCommonplaceNotesStack') || '';
+							if (!stackName) return;
+							const region = prompt('Region:', profile.awsSettings!.region) || '';
+							if (!region) return;
+							try {
+								const outputs = await this.plugin.cloudFormationManager.importStack(stackName, profile, region);
+								profile.infrastructureState = {
+									status: 'deployed',
+									imported: true,
+									fullStackName: stackName,
+									region,
+									useRoute53: false,
+									originAccessMethod: 'oai',
+								};
+								profile.awsSettings!.bucketName = outputs.bucketName;
+								profile.awsSettings!.cloudFrontDistributionId = outputs.distributionId;
+								profile.baseUrl = `https://${outputs.siteUrl}/`;
+								await this.plugin.saveSettings();
+								this.renderActiveProfile();
+							} catch (err: any) {
+								Logger.error('Error importing stack:', err);
+							}
+						}));
+			}
+		}
 	}
 
 	private displayLocalSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {

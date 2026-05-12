@@ -76,3 +76,148 @@
 	padding-bottom: 0.25em;
 	border-bottom: 1px solid var(--background-modifier-border);
 }
+
+/* Infrastructure Deployment Wizard */
+.cpn-wizard-modal .modal-content {
+	max-width: 600px;
+}
+
+.cpn-wizard-step-indicator {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 16px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cpn-wizard-step-dot {
+	font-size: 11px;
+	padding: 2px 8px;
+	border-radius: 12px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+}
+
+.cpn-wizard-step-dot.cpn-wizard-step-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.cpn-wizard-step-dot.cpn-wizard-step-done {
+	background: var(--background-modifier-success);
+	color: var(--text-on-accent);
+}
+
+.cpn-wizard-description {
+	color: var(--text-muted);
+	margin-bottom: 12px;
+}
+
+.cpn-wizard-event-log {
+	max-height: 250px;
+	overflow-y: auto;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	padding: 8px;
+	border-radius: 4px;
+	background: var(--background-secondary);
+	margin-bottom: 12px;
+}
+
+.cpn-wizard-event-line {
+	padding: 2px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cpn-wizard-event-line.cpn-event-error {
+	color: var(--text-error);
+}
+
+.cpn-wizard-event-line.cpn-event-success {
+	color: var(--text-success);
+}
+
+.cpn-wizard-error {
+	color: var(--text-error);
+	padding: 8px;
+	border-radius: 4px;
+	background: var(--background-modifier-error);
+	margin-bottom: 12px;
+}
+
+.cpn-wizard-outputs {
+	margin-bottom: 16px;
+}
+
+.cpn-output-row {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	padding: 4px 0;
+}
+
+.cpn-output-row code {
+	font-size: 12px;
+	background: var(--background-secondary);
+	padding: 2px 6px;
+	border-radius: 3px;
+}
+
+/* DNS Validation */
+.cpn-dns-record-row {
+	padding: 8px;
+	margin-bottom: 8px;
+	border-radius: 4px;
+	background: var(--background-secondary);
+}
+
+.cpn-dns-record-row strong {
+	display: block;
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-top: 4px;
+}
+
+.cpn-dns-record-row code {
+	display: inline-block;
+	font-size: 12px;
+	word-break: break-all;
+	margin-right: 8px;
+}
+
+.cpn-copy-btn {
+	font-size: 11px;
+	padding: 2px 6px;
+	cursor: pointer;
+}
+
+.cpn-dns-status {
+	padding: 8px;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* Infrastructure Status Badge */
+.cpn-infra-status-badge {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	margin-left: 8px;
+}
+
+.cpn-infra-status-deployed {
+	background: var(--text-success);
+}
+
+.cpn-infra-status-failed {
+	background: var(--text-error);
+}
+
+.cpn-infra-status-none {
+	background: var(--text-muted);
+}
+
+.cpn-infra-status-pending {
+	background: var(--text-warning);
+}
