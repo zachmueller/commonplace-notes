@@ -236,7 +236,7 @@ export class Publisher {
 
 			// Upload to destination
 			let uploadSuccess = false;
-			if (profile.publishMechanism === 'AWS CLI') {
+			if (profile.publishMechanism === 'AWS') {
 				uploadSuccess = await pushLocalJsonsToS3(this.plugin, profile.id, triggerCloudFrontInvalidation);
 			} else if (profile.publishMechanism === 'Local') {
 				uploadSuccess = await publishLocalNotes(this.plugin, profile.id);
@@ -450,8 +450,8 @@ export class Publisher {
 		const profile = await this.promptForProfile();
 		if (!profile) return;
 
-		if (profile.publishMechanism !== 'AWS CLI' || !profile.awsSettings) {
-			NoticeManager.showNotice('Delete is only supported for AWS CLI publishing profiles');
+		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
+			NoticeManager.showNotice('Delete is only supported for AWS publishing profiles');
 			return;
 		}
 

@@ -16,7 +16,7 @@ export interface PublishingProfile {
 	homeNotePath: string;
     isPublic: boolean;
 	publishContentIndex: boolean;
-    publishMechanism: 'AWS CLI' | 'Local';
+    publishMechanism: 'AWS' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;
 	indicator: PublishingIndicator;
@@ -30,7 +30,9 @@ export interface AWSProfileSettings {
 	s3Prefix?: string;
     cloudFrontInvalidationScheme: 'individual' | 'connected' | 'sinceLast' | 'all' | 'manual';
 	cloudFrontDistributionId?: string;
+	credentialMode: 'sdk' | 'custom-command';
     credentialRefreshCommands: string;
+	/** @deprecated No longer used — SDK runs natively. Will be removed in a future version. */
 	awsCliPath?: string;
 }
 

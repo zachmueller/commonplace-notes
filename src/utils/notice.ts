@@ -69,6 +69,50 @@ export class NoticeManager {
 		}
 	}
 
+	static async showProgressWithCounter<T>(
+		baseMessage: string,
+		total: number,
+		executor: (updateProgress: (current: number) => void) => Promise<T>,
+		successMessage?: string,
+		errorMessage?: string
+	): Promise<{ success: boolean; result?: T; error?: Error }> {
+		const notice = new Notice(`${baseMessage} (0/${total})`, 0);
+		this.startLoadingAnimation(notice, `${baseMessage} (0/${total})`);
+
+		const updateProgress = (current: number) => {
+			const msg = `${baseMessage} (${current}/${total})`;
+			this.stopLoadingAnimation(notice);
+			this.startLoadingAnimation(notice, msg);
+		};
+
+		try {
+			const result = await executor(updateProgress);
+
+			this.stopLoadingAnimation(notice);
+			if (successMessage) {
+				notice.setMessage(`✓ ${successMessage}`);
+				setTimeout(() => notice.hide(), 4000);
+			} else {
+				notice.hide();
+			}
+
+			return { success: true, result };
+		} catch (error) {
+			this.stopLoadingAnimation(notice);
+			Logger.error(error.message);
+			if (errorMessage) {
+				notice.setMessage(`❌ ${errorMessage}`);
+				setTimeout(() => notice.hide(), 8000);
+			} else {
+				notice.setMessage(`❌ Error: ${error.message}`);
+				setTimeout(() => notice.hide(), 8000);
+			}
+
+			Logger.error('Operation failed:', error);
+			return { success: false, error };
+		}
+	}
+
 	static cleanup() {
 		for (const [notice, interval] of this.animationIntervals) {
 			clearInterval(interval);

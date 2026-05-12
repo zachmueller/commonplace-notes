@@ -1,8 +1,35 @@
-import * as path from 'path';
-import { execAsync } from '../utils/shell';
+import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, S3ServiceException } from '@aws-sdk/client-s3';
+import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
+
+const MAX_CONCURRENCY = 5;
+
+async function runWithConcurrency<T>(
+	items: T[],
+	fn: (item: T) => Promise<void>,
+	concurrency: number,
+	onComplete?: () => void
+): Promise<void> {
+	let index = 0;
+	const execute = async (): Promise<void> => {
+		while (index < items.length) {
+			const current = index++;
+			await fn(items[current]);
+			if (onComplete) onComplete();
+		}
+	};
+	const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => execute());
+	await Promise.all(workers);
+}
+
+function isCredentialError(error: unknown): boolean {
+	if (error instanceof S3ServiceException) {
+		return ['AccessDenied', 'ExpiredToken', 'ExpiredTokenException', 'InvalidAccessKeyId', 'AuthFailure'].includes(error.name);
+	}
+	return false;
+}
 
 export async function pushLocalJsonsToS3(
 	plugin: CommonplaceNotesPlugin,
@@ -10,74 +37,82 @@ export async function pushLocalJsonsToS3(
 	triggerCloudFrontInvalidation: boolean = false
 ): Promise<boolean> {
 	try {
-		// Get the chosen profile
 		const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
 		if (!profile) {
 			throw new Error('No publishing profile provided');
 		}
 
-		if (profile.publishMechanism !== 'AWS CLI' || !profile.awsSettings) {
+		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
 			throw new Error('Selected profile is not configured for AWS publishing');
 		}
 
-		// Get the AWS CLI command
-		const awsCommand = plugin.awsCliManager.getAwsCliCommandFromProfile(profile);
+		const s3Client = plugin.awsSdkManager.getS3Client(profile);
+		const bucket = profile.awsSettings.bucketName;
+		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
-		// TODO::extract this directory setup into the main plugin class for standard access pattern::
-		const basePath = (plugin.app.vault.adapter as any).basePath;
 		const stagedNotesDir = plugin.profileManager.getStagedNotesDir(profileId);
-		const mappingDir = plugin.profileManager.getMappingDir(profileId);
-		const contentIndexLoc = plugin.profileManager.getContentIndexPath(profileId);
-		const contentIndexPath = `"${path.resolve(path.join(basePath, contentIndexLoc))}"`;
 
-		// Verify directories and files exist
-		if (!plugin.app.vault.adapter.exists(stagedNotesDir)) {
+		if (!await plugin.app.vault.adapter.exists(stagedNotesDir)) {
 			throw new Error(`Staged notes directory does not exist: ${stagedNotesDir}`);
 		}
-		if (!plugin.app.vault.adapter.exists(mappingDir)) {
-			throw new Error(`Mapping directory does not exist: ${mappingDir}`);
+
+		const listing = await plugin.app.vault.adapter.list(stagedNotesDir);
+		const noteFiles = listing.files.filter(f => f.endsWith('.json'));
+
+		if (noteFiles.length === 0) {
+			Logger.debug('No staged note files to upload');
+			NoticeManager.showNotice('No staged notes to upload');
+			return true;
 		}
 
-		const notesPath = `"${path.resolve(path.join(basePath, stagedNotesDir))}"`;
-		// Add prefix to S3 paths if configured
-		const s3Prefix = profile.awsSettings.s3Prefix || '';
-		const notesS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}notes/`;
-		const mappingPath = `"${path.resolve(path.join(basePath, mappingDir))}"`;
-		const mappingS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/mapping/`;
+		const { success, error } = await NoticeManager.showProgressWithCounter(
+			'Uploading notes to S3',
+			noteFiles.length,
+			async (updateProgress) => {
+				let completed = 0;
+				await runWithConcurrency(noteFiles, async (filePath) => {
+					const content = await plugin.app.vault.adapter.read(filePath);
+					const fileName = filePath.split('/').pop()!;
+					const key = `${s3Prefix}notes/${fileName}`;
 
-		// standard options to send to the shell
-		const options = { cwd: basePath };
+					await s3Client.send(new PutObjectCommand({
+						Bucket: bucket,
+						Key: key,
+						Body: content,
+						ContentType: 'application/json',
+					}));
 
-		// Upload notes
-		const cmdNotes = `${awsCommand} s3 cp ${notesPath} ${notesS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-		Logger.debug('Executing command:', cmdNotes);
-
-		const { success: notesSuccess, result: notesResult, error: notesError } = await NoticeManager.showProgress(
-			`Uploading notes from local to S3`,
-			execAsync(cmdNotes, options),
-			`Successfully uploaded notes to S3`,
+					completed++;
+					updateProgress(completed);
+					Logger.debug(`Uploaded ${key}`);
+				}, MAX_CONCURRENCY);
+			},
+			`Successfully uploaded ${noteFiles.length} notes to S3`,
 			`Notes upload failed, check console for error details`
 		);
-		if (notesResult && notesResult?.stderr) {
-			// TODO::generalize aws CLI calls to standardize error handling::
-			Logger.debug(`stdout from aws command: ${notesResult?.stdout}`);
-			throw new Error(`Notes upload failed: ${notesResult?.stderr}`);
-		}
-		Logger.debug('Notes upload output:', notesResult?.stdout);
 
-		// Upload mapping files and content index
+		if (!success) {
+			if (isCredentialError(error)) {
+				NoticeManager.showNotice('S3 permission error — please refresh your AWS credentials and try again.', 10000);
+			}
+			return false;
+		}
+
 		await pushMappingAndIndexToS3(plugin, profileId);
 
-		// Trigger CloudFront cache invalidation if configured to
 		if (triggerCloudFrontInvalidation) {
 			await createCloudFrontInvalidation(plugin, profileId);
 		}
 
 		return true;
 	} catch (error) {
-		Logger.error('Error executing AWS command:', error);
-		NoticeManager.showNotice(`Upload failed: ${error.message}`);
+		Logger.error('Error during S3 upload:', error);
+		if (isCredentialError(error)) {
+			NoticeManager.showNotice('S3 permission error — please refresh your AWS credentials and try again.', 10000);
+		} else {
+			NoticeManager.showNotice(`Upload failed: ${error.message}`);
+		}
 		return false;
 	}
 }
@@ -91,67 +126,74 @@ export async function pushMappingAndIndexToS3(
 		throw new Error('Selected profile is not configured for AWS publishing');
 	}
 
-	const awsCommand = plugin.awsCliManager.getAwsCliCommandFromProfile(profile);
-	const basePath = (plugin.app.vault.adapter as any).basePath;
-	const mappingDir = plugin.profileManager.getMappingDir(profileId);
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
-	const mappingPath = `"${path.resolve(path.join(basePath, mappingDir))}"`;
-	const mappingS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/mapping/`;
-	const options = { cwd: basePath };
 
-	// Upload mapping files
-	const cmdMapping = `${awsCommand} s3 cp ${mappingPath} ${mappingS3Prefix} --recursive --profile ${profile.awsSettings.awsProfile}`;
-	Logger.debug('Executing command:', cmdMapping);
-
-	const { result: mapResult } = await NoticeManager.showProgress(
-		`Uploading mappings from local to S3`,
-		execAsync(cmdMapping, options),
-		`Mapping files successfully uploaded to S3`,
-		`Mapping upload failed, check console for error details`
-	);
-	if (mapResult && mapResult?.stderr) {
-		Logger.debug(`stdout from aws command: ${mapResult?.stdout}`);
-		throw new Error(`Mapping upload failed: ${mapResult?.stderr}`);
+	const mappingDir = plugin.profileManager.getMappingDir(profileId);
+	if (!await plugin.app.vault.adapter.exists(mappingDir)) {
+		throw new Error(`Mapping directory does not exist: ${mappingDir}`);
 	}
-	Logger.debug('Mappings upload output:', mapResult?.stdout);
 
-	// Upload content index if enabled
+	const listing = await plugin.app.vault.adapter.list(mappingDir);
+	const mappingFiles = listing.files;
+
+	if (mappingFiles.length > 0) {
+		const { success } = await NoticeManager.showProgressWithCounter(
+			'Uploading mappings to S3',
+			mappingFiles.length,
+			async (updateProgress) => {
+				let completed = 0;
+				await runWithConcurrency(mappingFiles, async (filePath) => {
+					const content = await plugin.app.vault.adapter.read(filePath);
+					const fileName = filePath.split('/').pop()!;
+					const key = `${s3Prefix}static/mapping/${fileName}`;
+
+					await s3Client.send(new PutObjectCommand({
+						Bucket: bucket,
+						Key: key,
+						Body: content,
+						ContentType: 'application/json',
+					}));
+
+					completed++;
+					updateProgress(completed);
+					Logger.debug(`Uploaded mapping: ${key}`);
+				}, MAX_CONCURRENCY);
+			},
+			`Mapping files successfully uploaded to S3`,
+			`Mapping upload failed, check console for error details`
+		);
+
+		if (!success) throw new Error('Mapping upload failed');
+	}
+
 	if (profile.publishContentIndex) {
-		const contentIndexLoc = plugin.profileManager.getContentIndexPath(profileId);
-		const contentIndexPath = `"${path.resolve(path.join(basePath, contentIndexLoc))}"`;
+		const contentIndexPath = plugin.profileManager.getContentIndexPath(profileId);
 
-		if (!plugin.app.vault.adapter.exists(contentIndexPath)) {
+		if (!await plugin.app.vault.adapter.exists(contentIndexPath)) {
 			Logger.warn(`Content index file does not exist: ${contentIndexPath}`);
 			NoticeManager.showNotice('No content index file found to upload');
 		} else {
-			const contentIndexS3Prefix = `s3://${profile.awsSettings.bucketName}/${s3Prefix}static/content/`;
-			const cmdContentIndex = `${awsCommand} s3 cp ${contentIndexPath} ${contentIndexS3Prefix}contentIndex.json --profile ${profile.awsSettings.awsProfile}`;
-			Logger.debug('Executing command:', cmdContentIndex);
+			const content = await plugin.app.vault.adapter.read(contentIndexPath);
+			const key = `${s3Prefix}static/content/contentIndex.json`;
 
-			const { result: contentResult } = await NoticeManager.showProgress(
-				`Uploading content index from local to S3`,
-				execAsync(cmdContentIndex, options),
+			const { success } = await NoticeManager.showProgress(
+				`Uploading content index to S3`,
+				s3Client.send(new PutObjectCommand({
+					Bucket: bucket,
+					Key: key,
+					Body: content,
+					ContentType: 'application/json',
+				})),
 				`Content index successfully uploaded to S3`,
 				`Content index upload failed, check console for error details`
 			);
-			if (contentResult && contentResult?.stderr) {
-				Logger.debug(`stdout from aws command: ${contentResult?.stdout}`);
-				throw new Error(`Content index upload failed: ${contentResult?.stderr}`);
-			}
+
+			if (!success) throw new Error('Content index upload failed');
+			Logger.debug(`Uploaded content index: ${key}`);
 		}
 	}
-}
-
-const S3_PERMISSION_ERROR_PATTERNS = [
-	'AccessDenied',
-	'ExpiredToken',
-	'InvalidAccessKeyId',
-	'403 Forbidden',
-	'AuthFailure'
-];
-
-function isPermissionError(stderr: string): boolean {
-	return S3_PERMISSION_ERROR_PATTERNS.some(pattern => stderr.includes(pattern));
 }
 
 export async function deleteNoteHashesFromS3(
@@ -164,46 +206,47 @@ export async function deleteNoteHashesFromS3(
 		throw new Error('Selected profile is not configured for AWS publishing');
 	}
 
-	const awsCommand = plugin.awsCliManager.getAwsCliCommandFromProfile(profile);
-	const basePath = (plugin.app.vault.adapter as any).basePath;
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
-	const options = { cwd: basePath };
 
-	for (const hash of hashes) {
-		const s3Key = `s3://${profile.awsSettings.bucketName}/${s3Prefix}notes/${hash}.json`;
-		const cmd = `${awsCommand} s3 rm ${s3Key} --profile ${profile.awsSettings.awsProfile}`;
-		Logger.debug('Executing S3 delete command:', cmd);
+	try {
+		if (hashes.length <= 5) {
+			for (const hash of hashes) {
+				const key = `${s3Prefix}notes/${hash}.json`;
+				await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+				Logger.debug(`Deleted ${key}`);
+			}
+		} else {
+			const objects = hashes.map(hash => ({ Key: `${s3Prefix}notes/${hash}.json` }));
+			const response = await s3Client.send(new DeleteObjectsCommand({
+				Bucket: bucket,
+				Delete: { Objects: objects },
+			}));
 
-		try {
-			const result = await execAsync(cmd, options);
-			if (result.stderr) {
-				if (isPermissionError(result.stderr)) {
-					NoticeManager.showNotice(
-						'S3 permission error — please refresh your AWS credentials and try again.',
-						10000
-					);
-					Logger.error('S3 permission error during delete:', result.stderr);
-					return false;
+			if (response.Errors && response.Errors.length > 0) {
+				for (const err of response.Errors) {
+					Logger.error(`Failed to delete ${err.Key}: ${err.Code} - ${err.Message}`);
 				}
-				Logger.warn(`Non-fatal stderr during S3 delete of ${hash}: ${result.stderr}`);
+				throw new Error(`Batch delete had ${response.Errors.length} error(s)`);
 			}
-			Logger.debug(`Successfully deleted ${s3Key}`);
-		} catch (error) {
-			const errorMsg = error.message || error.toString();
-			if (isPermissionError(errorMsg)) {
-				NoticeManager.showNotice(
-					'S3 permission error — please refresh your AWS credentials and try again.',
-					10000
-				);
-				Logger.error('S3 permission error during delete:', errorMsg);
-				return false;
-			}
-			Logger.error(`Error deleting ${s3Key}:`, error);
-			throw error;
-		}
-	}
 
-	return true;
+			Logger.debug(`Batch deleted ${hashes.length} objects`);
+		}
+
+		return true;
+	} catch (error) {
+		if (isCredentialError(error)) {
+			NoticeManager.showNotice(
+				'S3 permission error — please refresh your AWS credentials and try again.',
+				10000
+			);
+			Logger.error('S3 permission error during delete:', error);
+			return false;
+		}
+		Logger.error('Error deleting from S3:', error);
+		throw error;
+	}
 }
 
 export async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugin, profileId: string): Promise<boolean> {
@@ -214,21 +257,25 @@ export async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugi
 			return false;
 		}
 
-		const awsCommand = plugin.awsCliManager.getAwsCliCommand(profileId);
-		const cmd = `${awsCommand} cloudfront create-invalidation --distribution-id ${profile.awsSettings.cloudFrontDistributionId} --paths "/*" --profile ${profile.awsSettings.awsProfile}`;
+		const cfClient = plugin.awsSdkManager.getCloudFrontClient(profile);
 
-		const { success, result, error } = await NoticeManager.showProgress(
+		const { success, error } = await NoticeManager.showProgress(
 			`Creating CloudFront invalidation`,
-			execAsync(cmd),
+			cfClient.send(new CreateInvalidationCommand({
+				DistributionId: profile.awsSettings.cloudFrontDistributionId,
+				InvalidationBatch: {
+					Paths: { Quantity: 1, Items: ['/*'] },
+					CallerReference: Date.now().toString(),
+				},
+			})),
 			`CloudFront invalidation created successfully`,
 			`CloudFront invalidation failed, check console for error details`
 		);
-		if (result && result?.stderr) {
-			Logger.error('CloudFront invalidation error:', result?.stderr);
-			throw new Error(`CloudFront invalidation failed: ${result?.stderr}`);
+
+		if (!success) {
+			throw error;
 		}
 
-		Logger.debug('CloudFront invalidation created:', result?.stdout);
 		return true;
 	} catch (error) {
 		Logger.error('Failed to create CloudFront invalidation:', error);

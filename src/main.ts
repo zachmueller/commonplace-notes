@@ -6,9 +6,7 @@ import {
 	BulkPublishContextConfig,
 	PublishContextChange
 } from './types';
-import { execAsync } from './utils/shell';
 import { PathUtils } from './utils/path';
-import { pushLocalJsonsToS3 } from './publish/awsUpload';
 import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
 import { IndicatorManager } from './utils/indicators';
@@ -18,7 +16,7 @@ import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
 import { NoticeManager } from './utils/notice';
 import { TemplateManager } from './utils/templateManager';
-import { AwsCliManager } from './utils/awsCli';
+import { AwsSdkManager } from './utils/awsSdk';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 import { formatNoteUrl } from './utils/urlScheme';
@@ -50,7 +48,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 		homeNotePath: '',
         isPublic: false,
 		publishContentIndex: true,
-        publishMechanism: 'AWS CLI',
+        publishMechanism: 'AWS',
         indicator: {
 			style: 'color',
 			color: '#3366cc'
@@ -61,6 +59,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
             bucketName: 'my-bucket',
             region: 'us-east-1',
             cloudFrontInvalidationScheme: 'individual',
+			credentialMode: 'sdk',
             credentialRefreshCommands: '',
 			awsCliPath: ''
         }
@@ -78,7 +77,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	mappingManager: MappingManager;
 	templateManager: TemplateManager;
 	publisher: Publisher;
-	awsCliManager: AwsCliManager;
+	awsSdkManager: AwsSdkManager;
 
 	async onload() {
 		// Initialize settings
@@ -94,7 +93,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);
 		this.templateManager = new TemplateManager(this);
-		this.awsCliManager = new AwsCliManager(this);
+		this.awsSdkManager = new AwsSdkManager(this);
 
 		// Initialize indicator updates
 		// Targeted indicator refresh upon file open events
@@ -246,6 +245,29 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		await this.migrateSettings();
+	}
+
+	private async migrateSettings() {
+		let needsSave = false;
+
+		for (const profile of this.settings.publishingProfiles) {
+			if ((profile.publishMechanism as string) === 'AWS CLI') {
+				profile.publishMechanism = 'AWS';
+				needsSave = true;
+			}
+
+			if (profile.awsSettings && !profile.awsSettings.credentialMode) {
+				profile.awsSettings.credentialMode = profile.awsSettings.credentialRefreshCommands
+					? 'custom-command'
+					: 'sdk';
+				needsSave = true;
+			}
+		}
+
+		if (needsSave) {
+			await this.saveData(this.settings);
+		}
 	}
 
 	async saveSettings() {
@@ -446,6 +468,7 @@ cpn.rebuildContentIndex();
 
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
+		this.awsSdkManager.dispose();
 		NoticeManager.cleanup();
 	}
 

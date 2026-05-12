@@ -154,10 +154,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		new Setting(profileContainer)
 			.setName('Publish mechanism')
 			.addDropdown(dropdown => dropdown
-				.addOption('AWS CLI', 'AWS CLI')
+				.addOption('AWS', 'AWS')
 				.addOption('Local', 'Local')
 				.setValue(profile.publishMechanism)
-				.onChange(async (value: 'AWS CLI' | 'Local') => {
+				.onChange(async (value: 'AWS' | 'Local') => {
 					this.plugin.settings.publishingProfiles[index].publishMechanism = value;
 					await this.plugin.saveSettings();
 					// Refresh the settings display to show/hide mechanism-specific settings
@@ -206,7 +206,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		if (profile.publishMechanism === 'AWS CLI') {
+		if (profile.publishMechanism === 'AWS') {
 			this.displayAWSSettings(profileContainer, profile, index);
 		} else {
 			this.displayLocalSettings(profileContainer, profile, index);
@@ -263,7 +263,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	}
 
 	private displayAWSSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
-		// Display AWS-specific settings...
 		if (!profile.awsSettings) {
 			profile.awsSettings = {
 				awsAccountId: '',
@@ -271,23 +270,20 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				region: '',
 				bucketName: '',
 				cloudFrontInvalidationScheme: 'individual',
+				credentialMode: 'sdk',
 				credentialRefreshCommands: '',
 				awsCliPath: ''
 			};
 		}
 
-		new Setting(containerEl)
-			.setName('AWS CLI Path')
-			.setDesc('Custom path to AWS CLI executable (leave empty to use default "aws" command). Example: /usr/local/bin/aws')
-			.addText(text => text
-				.setPlaceholder('/usr/local/bin/aws')
-				.setValue(profile.awsSettings?.awsCliPath || '')
-				.onChange(async (value) => {
-					if (profile.awsSettings) {
-						profile.awsSettings.awsCliPath = value;
-						await this.plugin.saveSettings();
-					}
-				}));
+		if (profile.awsSettings.awsCliPath) {
+			new Setting(containerEl)
+				.setName('AWS CLI Path (deprecated)')
+				.setDesc('This setting is no longer used. The plugin now uses the AWS SDK directly. You can clear this field.')
+				.addText(text => text
+					.setValue(profile.awsSettings?.awsCliPath || '')
+					.setDisabled(true));
+		}
 
 		new Setting(containerEl)
 			.setName('AWS account ID')
@@ -388,17 +384,34 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Credential refresh commands')
-			.setDesc('Enter the commands to refresh AWS credentials (one per line). You can use ${awsAccountId} and ${awsProfile} as variables.')
-			.addTextArea(text => text
-				.setPlaceholder('aws sso login --profile notes')
-				.setValue(profile.awsSettings?.credentialRefreshCommands || '')
-				.onChange(async (value) => {
+			.setName('Credential mode')
+			.setDesc('SDK uses the standard credential chain (env vars, shared credentials, SSO). Custom command runs shell commands to refresh credentials.')
+			.addDropdown(dropdown => dropdown
+				.addOption('sdk', 'SDK (default)')
+				.addOption('custom-command', 'Custom command')
+				.setValue(profile.awsSettings?.credentialMode || 'sdk')
+				.onChange(async (value: 'sdk' | 'custom-command') => {
 					if (profile.awsSettings) {
-						profile.awsSettings.credentialRefreshCommands = value;
+						profile.awsSettings.credentialMode = value;
 						await this.plugin.saveSettings();
+						this.display();
 					}
 				}));
+
+		if (profile.awsSettings.credentialMode === 'custom-command') {
+			new Setting(containerEl)
+				.setName('Credential refresh commands')
+				.setDesc('Enter the commands to refresh AWS credentials (one per line). You can use ${awsAccountId} and ${awsProfile} as variables.')
+				.addTextArea(text => text
+					.setPlaceholder('aws sso login --profile notes')
+					.setValue(profile.awsSettings?.credentialRefreshCommands || '')
+					.onChange(async (value) => {
+						if (profile.awsSettings) {
+							profile.awsSettings.credentialRefreshCommands = value;
+							await this.plugin.saveSettings();
+						}
+					}));
+		}
 	}
 
 	private displayLocalSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
@@ -415,7 +428,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			homeNotePath: '',
 			isPublic: false,
 			publishContentIndex: true,
-			publishMechanism: 'AWS CLI',
+			publishMechanism: 'AWS',
 			indicator: {
 				style: 'color',
 				color: '#3366cc'
@@ -426,6 +439,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				region: '',
 				bucketName: '',
 				cloudFrontInvalidationScheme: 'individual',
+				credentialMode: 'sdk',
 				credentialRefreshCommands: '',
 				awsCliPath: ''
 			}
