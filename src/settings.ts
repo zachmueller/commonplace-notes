@@ -1,4 +1,4 @@
-import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
+import { App, DropdownComponent, Modal, Notice, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, IndicatorStyle } from './types';
 import { Logger } from './utils/logging';
@@ -558,32 +558,72 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.setDesc('Import a stack deployed via CDK to track it here')
 					.addButton(btn => btn
 						.setButtonText('Import')
-						.onClick(async () => {
-							const stackName = prompt('Stack name:', 'PublishedCommonplaceNotesStack') || '';
-							if (!stackName) return;
-							const region = prompt('Region:', profile.awsSettings!.region) || '';
-							if (!region) return;
-							try {
-								const outputs = await this.plugin.cloudFormationManager.importStack(stackName, profile, region);
-								profile.infrastructureState = {
-									status: 'deployed',
-									imported: true,
-									fullStackName: stackName,
-									region,
-									useRoute53: false,
-									originAccessMethod: 'oai',
-								};
-								profile.awsSettings!.bucketName = outputs.bucketName;
-								profile.awsSettings!.cloudFrontDistributionId = outputs.distributionId;
-								profile.baseUrl = `https://${outputs.siteUrl}/`;
-								await this.plugin.saveSettings();
-								this.renderActiveProfile();
-							} catch (err: any) {
-								Logger.error('Error importing stack:', err);
-							}
+						.onClick(() => {
+							this.openImportStackModal(profile);
 						}));
 			}
 		}
+	}
+
+	private openImportStackModal(profile: PublishingProfile): void {
+		const modal = new Modal(this.app);
+		let stackName = 'PublishedCommonplaceNotesStack';
+		let region = profile.awsSettings?.region || 'us-east-1';
+
+		modal.onOpen = () => {
+			modal.titleEl.setText('Import Existing Stack');
+
+			new Setting(modal.contentEl)
+				.setName('Stack name')
+				.setDesc('The CloudFormation stack name to import')
+				.addText(text => text
+					.setValue(stackName)
+					.onChange(v => { stackName = v; }));
+
+			new Setting(modal.contentEl)
+				.setName('Region')
+				.setDesc('AWS region where the stack is deployed')
+				.addText(text => text
+					.setValue(region)
+					.onChange(v => { region = v; }));
+
+			new Setting(modal.contentEl)
+				.addButton(btn => btn
+					.setButtonText('Cancel')
+					.onClick(() => modal.close()))
+				.addButton(btn => btn
+					.setButtonText('Import')
+					.setCta()
+					.onClick(async () => {
+						if (!stackName || !region) {
+							new Notice('Stack name and region are required.');
+							return;
+						}
+						try {
+							const outputs = await this.plugin.cloudFormationManager.importStack(stackName, profile, region);
+							profile.infrastructureState = {
+								status: 'deployed',
+								imported: true,
+								fullStackName: stackName,
+								region,
+								useRoute53: false,
+								originAccessMethod: 'oai',
+							};
+							profile.awsSettings!.bucketName = outputs.bucketName;
+							profile.awsSettings!.cloudFrontDistributionId = outputs.distributionId;
+							profile.baseUrl = `https://${outputs.siteUrl}/`;
+							await this.plugin.saveSettings();
+							modal.close();
+							this.renderActiveProfile();
+							new Notice('Stack imported successfully.');
+						} catch (err: any) {
+							Logger.error('Error importing stack:', err);
+							new Notice(`Import failed: ${err.message}`);
+						}
+					}));
+		};
+
+		modal.open();
 	}
 
 	private displayLocalSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
