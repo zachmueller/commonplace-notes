@@ -753,6 +753,23 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		custom: SiteCustomization,
 		index: number
 	) {
+		const defaults: Record<'light' | 'dark', Record<string, string>> = {
+			light: {
+				bgPrimary: '#ffffff',
+				bgSecondary: '#f6f8fa',
+				textPrimary: '#24292e',
+				linkColor: '#0366d6',
+				borderColor: '#dddddd',
+			},
+			dark: {
+				bgPrimary: '#0d1117',
+				bgSecondary: '#161b22',
+				textPrimary: '#e6edf3',
+				linkColor: '#58a6ff',
+				borderColor: '#30363d',
+			},
+		};
+
 		const colors = custom.themeOverrides[mode] ?? {};
 		const fields: { name: string; key: keyof typeof colors }[] = [
 			{ name: 'Background (primary)', key: 'bgPrimary' },
@@ -763,12 +780,13 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		];
 
 		for (const field of fields) {
+			const defaultColor = defaults[mode][field.key];
 			new Setting(containerEl)
 				.setName(field.name)
 				.addText(text => {
 					text.inputEl.type = 'color';
 					text.inputEl.style.width = '50px';
-					text.setValue(colors[field.key] || '#000000')
+					text.setValue(colors[field.key] || defaultColor)
 						.onChange(async (value) => {
 							const siteCustom = this.ensureSiteCustomization(index);
 							if (!siteCustom.themeOverrides[mode]) {
@@ -787,7 +805,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 							delete siteCustom.themeOverrides[mode]![field.key];
 						}
 						await this.plugin.saveSettings();
-						this.renderActiveProfile();
+						const colorInput = button.buttonEl.parentElement?.querySelector('input[type="color"]') as HTMLInputElement | null;
+						if (colorInput) {
+							colorInput.value = defaultColor;
+						}
 					}));
 		}
 	}
