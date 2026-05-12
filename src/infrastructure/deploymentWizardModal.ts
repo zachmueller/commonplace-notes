@@ -174,37 +174,52 @@ export class DeploymentWizardModal extends Modal {
 			if (this.aborted) return;
 			loadingEl.remove();
 
-			const domain = this.config.customDomain || '';
-			const domainParts = domain.split('.');
+			if (zones.length === 0) {
+				this.renderNoZonesSection(container);
+				return;
+			}
 
-			// Find zones that could serve this domain (matching suffix)
-			const matchingZones = zones.filter(z => {
-				return domain === z.name || domain.endsWith('.' + z.name);
-			});
+			const domain = this.config.customDomain || '';
+
+			// Find zones that could serve the custom domain (matching suffix)
+			const matchingZones = domain
+				? zones.filter(z => domain === z.name || domain.endsWith('.' + z.name))
+				: [];
+
+			// Determine which zones to show in the dropdown
+			const dropdownZones = matchingZones.length > 0 ? matchingZones : zones;
+
+			// Auto-select: best match if available, otherwise first zone
+			if (!this.config.hostedZoneId) {
+				const autoSelect = matchingZones.length > 0
+					? matchingZones.sort((a, b) => b.name.length - a.name.length)[0]
+					: zones[0];
+				this.config.hostedZoneId = autoSelect.id;
+				this.config.hostedZoneName = autoSelect.name;
+			}
 
 			if (matchingZones.length > 0) {
-				// Auto-select the best match (longest zone name = most specific)
-				const bestMatch = matchingZones.sort((a, b) => b.name.length - a.name.length)[0];
-				if (!this.config.hostedZoneId) {
-					this.config.hostedZoneId = bestMatch.id;
-					this.config.hostedZoneName = bestMatch.name;
-				}
-
 				new Setting(container)
 					.setName('Hosted Zone')
-					.setDesc('Select the Route53 hosted zone for your domain')
+					.setDesc('Auto-detected zone matching your domain')
 					.addDropdown(dd => {
 						for (const zone of matchingZones) {
 							dd.addOption(zone.id, `${zone.name} (${zone.id})`);
 						}
+						if (zones.length > matchingZones.length) {
+							dd.addOption('__all__', 'Show all zones...');
+						}
 						dd.addOption('__manual__', 'Enter manually...');
-						dd.setValue(this.config.hostedZoneId || bestMatch.id);
+						dd.setValue(this.config.hostedZoneId || '');
 						dd.onChange(v => {
 							if (v === '__manual__') {
 								this.config.hostedZoneId = '';
 								this.config.hostedZoneName = '';
 								container.empty();
 								this.renderRoute53ManualInputs(container);
+							} else if (v === '__all__') {
+								container.empty();
+								this.renderAllZonesDropdown(container, zones);
 							} else {
 								const selected = matchingZones.find(z => z.id === v);
 								if (selected) {
@@ -214,106 +229,15 @@ export class DeploymentWizardModal extends Modal {
 							}
 						});
 					});
-			} else if (zones.length > 0 && domain) {
-				// No matching zone found — offer to create one or pick from all zones
-				container.createEl('p', {
-					text: `No hosted zone found matching "${domain}". You can create one or select an existing zone.`,
-					cls: 'cpn-wizard-description',
-				});
-
-				const parentDomain = domainParts.length >= 2
-					? domainParts.slice(-2).join('.')
-					: domain;
-
-				new Setting(container)
-					.setName('Create hosted zone')
-					.setDesc(`Create a new hosted zone for "${parentDomain}"`)
-					.addButton(btn => btn
-						.setButtonText('Create Zone')
-						.setCta()
-						.onClick(async () => {
-							try {
-								const newZone = await this.cfManager.createHostedZone(this.activeProfile, parentDomain);
-								this.config.hostedZoneId = newZone.id;
-								this.config.hostedZoneName = newZone.name;
-								new Notice(`Created hosted zone: ${newZone.name} (${newZone.id})`);
-								container.empty();
-								container.createEl('p', {
-									text: `Using hosted zone: ${newZone.name} (${newZone.id})`,
-									cls: 'cpn-wizard-description',
-								});
-								container.createEl('p', {
-									text: 'Note: You will need to update your domain registrar\'s nameservers to point to the Route53 nameservers for this zone.',
-									cls: 'cpn-wizard-description',
-								});
-							} catch (err: any) {
-								new Notice(`Error creating zone: ${err.message}`);
-							}
-						}));
-
-				new Setting(container)
-					.setName('Use existing zone')
-					.addDropdown(dd => {
-						dd.addOption('', 'Select a zone...');
-						for (const zone of zones) {
-							dd.addOption(zone.id, `${zone.name} (${zone.id})`);
-						}
-						dd.addOption('__manual__', 'Enter manually...');
-						dd.onChange(v => {
-							if (v === '__manual__') {
-								this.config.hostedZoneId = '';
-								this.config.hostedZoneName = '';
-								container.empty();
-								this.renderRoute53ManualInputs(container);
-							} else if (v) {
-								const selected = zones.find(z => z.id === v);
-								if (selected) {
-									this.config.hostedZoneId = selected.id;
-									this.config.hostedZoneName = selected.name;
-								}
-							}
-						});
-					});
 			} else {
-				// No zones at all — offer to create or enter manually
+				// No matching zones but zones exist — show all in dropdown
 				if (domain) {
-					const parentDomain = domainParts.length >= 2
-						? domainParts.slice(-2).join('.')
-						: domain;
-
 					container.createEl('p', {
-						text: 'No Route53 hosted zones found in this account.',
+						text: `No zone exactly matching "${domain}" found. Select from your existing zones or create a new one.`,
 						cls: 'cpn-wizard-description',
 					});
-
-					new Setting(container)
-						.setName('Create hosted zone')
-						.setDesc(`Create a new hosted zone for "${parentDomain}"`)
-						.addButton(btn => btn
-							.setButtonText('Create Zone')
-							.setCta()
-							.onClick(async () => {
-								try {
-									const newZone = await this.cfManager.createHostedZone(this.activeProfile, parentDomain);
-									this.config.hostedZoneId = newZone.id;
-									this.config.hostedZoneName = newZone.name;
-									new Notice(`Created hosted zone: ${newZone.name} (${newZone.id})`);
-									container.empty();
-									container.createEl('p', {
-										text: `Using hosted zone: ${newZone.name} (${newZone.id})`,
-										cls: 'cpn-wizard-description',
-									});
-									container.createEl('p', {
-										text: 'Note: You will need to update your domain registrar\'s nameservers to point to the Route53 nameservers for this zone.',
-										cls: 'cpn-wizard-description',
-									});
-								} catch (err: any) {
-									new Notice(`Error creating zone: ${err.message}`);
-								}
-							}));
-				} else {
-					this.renderRoute53ManualInputs(container);
 				}
+				this.renderAllZonesDropdown(container, zones);
 			}
 		} catch (err: any) {
 			loadingEl.remove();
@@ -323,6 +247,98 @@ export class DeploymentWizardModal extends Modal {
 			});
 			this.renderRoute53ManualInputs(container);
 		}
+	}
+
+	private renderAllZonesDropdown(container: HTMLElement, zones: HostedZoneInfo[]): void {
+		if (!this.config.hostedZoneId && zones.length > 0) {
+			this.config.hostedZoneId = zones[0].id;
+			this.config.hostedZoneName = zones[0].name;
+		}
+
+		new Setting(container)
+			.setName('Hosted Zone')
+			.setDesc('Select a Route53 hosted zone')
+			.addDropdown(dd => {
+				for (const zone of zones) {
+					dd.addOption(zone.id, `${zone.name} (${zone.id})`);
+				}
+				dd.addOption('__create__', 'Create new zone...');
+				dd.addOption('__manual__', 'Enter manually...');
+				dd.setValue(this.config.hostedZoneId || '');
+				dd.onChange(v => {
+					if (v === '__manual__') {
+						this.config.hostedZoneId = '';
+						this.config.hostedZoneName = '';
+						container.empty();
+						this.renderRoute53ManualInputs(container);
+					} else if (v === '__create__') {
+						container.empty();
+						this.renderCreateZoneSection(container);
+					} else {
+						const selected = zones.find(z => z.id === v);
+						if (selected) {
+							this.config.hostedZoneId = selected.id;
+							this.config.hostedZoneName = selected.name;
+						}
+					}
+				});
+			});
+	}
+
+	private renderNoZonesSection(container: HTMLElement): void {
+		const domain = this.config.customDomain || '';
+		container.createEl('p', {
+			text: 'No Route53 hosted zones found in this account.',
+			cls: 'cpn-wizard-description',
+		});
+
+		if (domain) {
+			this.renderCreateZoneSection(container);
+		} else {
+			this.renderRoute53ManualInputs(container);
+		}
+	}
+
+	private renderCreateZoneSection(container: HTMLElement): void {
+		const domain = this.config.customDomain || '';
+		const domainParts = domain.split('.');
+		const parentDomain = domainParts.length >= 2
+			? domainParts.slice(-2).join('.')
+			: domain || 'example.com';
+
+		new Setting(container)
+			.setName('Create hosted zone')
+			.setDesc(`Create a new Route53 hosted zone for "${parentDomain}"`)
+			.addButton(btn => btn
+				.setButtonText('Create Zone')
+				.setCta()
+				.onClick(async () => {
+					try {
+						const newZone = await this.cfManager.createHostedZone(this.activeProfile, parentDomain);
+						this.config.hostedZoneId = newZone.id;
+						this.config.hostedZoneName = newZone.name;
+						new Notice(`Created hosted zone: ${newZone.name} (${newZone.id})`);
+						container.empty();
+						container.createEl('p', {
+							text: `Using hosted zone: ${newZone.name} (${newZone.id})`,
+							cls: 'cpn-wizard-description',
+						});
+						container.createEl('p', {
+							text: 'Note: Update your domain registrar\'s nameservers to point to the Route53 nameservers for this zone.',
+							cls: 'cpn-wizard-description',
+						});
+					} catch (err: any) {
+						new Notice(`Error creating zone: ${err.message}`);
+					}
+				}));
+
+		new Setting(container)
+			.addButton(btn => btn
+				.setButtonText('Enter manually instead')
+				.onClick(() => {
+					container.empty();
+					this.renderRoute53ManualInputs(container);
+				}));
 	}
 
 	private renderRoute53ManualInputs(container: HTMLElement): void {
