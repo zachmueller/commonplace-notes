@@ -90,9 +90,15 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 		});
 
 		await Promise.all(promises);
-		replacements.forEach(({ index, parent, nodes }) => {
-			parent.children.splice(index, 1, ...nodes);
-		});
+		// Apply splices in descending index order. Each splice expands one text
+		// node into several, shifting the indices of later siblings; processing
+		// highest-index-first keeps every remaining (lower) index valid. Splices
+		// on different parents are independent, so a single global sort suffices.
+		replacements
+			.sort((a, b) => b.index - a.index)
+			.forEach(({ index, parent, nodes }) => {
+				parent.children.splice(index, 1, ...nodes);
+			});
 	};
 };
 
