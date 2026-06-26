@@ -39,7 +39,7 @@ interface ObsidianApp extends App {
 }
 
 const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
-	uidLength: 10,
+	uidLength: 8,
 	urlScheme: 'current',
     publishingProfiles: [{
         name: 'Default AWS Profile',

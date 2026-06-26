@@ -46,6 +46,46 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const {containerEl} = this;
 		containerEl.empty();
 
+		// Global (non-profile) settings
+		containerEl.createEl('h2', {text: 'General'});
+
+		new Setting(containerEl)
+			.setName('UID length')
+			.setDesc('Number of characters for newly generated note UIDs (Crockford Base32). 8 characters provides ~1 trillion unique IDs. Most users should leave this at the default. Only affects newly generated UIDs — existing notes are unchanged.')
+			.addText(text => text
+				.setPlaceholder('8')
+				.setValue(String(this.plugin.settings.uidLength ?? 8))
+				.onChange(async (value) => {
+					const num = parseInt(value, 10);
+					if (!isNaN(num) && num >= 4 && num <= 26) {
+						this.plugin.settings.uidLength = num;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		new Setting(containerEl)
+			.setName('Debug mode')
+			.setDesc('Enable verbose debug logging to the developer console.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.debugMode ?? false)
+				.onChange(async (value) => {
+					this.plugin.settings.debugMode = value;
+					Logger.setDebugMode(value);
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('URL scheme')
+			.setDesc('Format used when generating note links. "Current" produces #/uABC123; "Original" produces #u=ABC123. Parsing always accepts both.')
+			.addDropdown(dropdown => dropdown
+				.addOption('current', 'Current (#/uABC123)')
+				.addOption('original', 'Original (#u=ABC123)')
+				.setValue(this.plugin.settings.urlScheme ?? 'current')
+				.onChange(async (value: 'current' | 'original') => {
+					this.plugin.settings.urlScheme = value;
+					await this.plugin.saveSettings();
+				}));
+
 		containerEl.createEl('h2', {text: 'Publishing profiles'});
 
 		// Profile selector dropdown
