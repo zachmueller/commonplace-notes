@@ -315,6 +315,17 @@ a[href^="#"].note-opened:hover {
 	text-decoration: none;
 }
 
+/* brief flash applied to a heading when navigated to via a section link */
+@keyframes heading-flash {
+	0%   { background-color: var(--link-bg-active); }
+	100% { background-color: transparent; }
+}
+
+.heading-target {
+	animation: heading-flash 2s ease-out;
+	border-radius: 3px;
+}
+
 /* unpublished note links */
 .unpublished-link {
 	background-color: var(--unpublished-bg);
@@ -1015,11 +1026,37 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			});
 		}
 
-		function scrollToPanel(uid) {
-			const panel = document.querySelector(`.panel[data-uid="${uid}"]`);
+		function scrollToPanel(panelId) {
+			// panelId has the form `${type}-${value}` (e.g. "u-<uid>"). The value
+			// (uid/slug/hash) can itself contain '-', so split on the first '-' only;
+			// the single-char type prefix makes this unambiguous. We match on the
+			// param datasets that callers actually pass — data-uid holds the bare uid,
+			// which would never match panelId.
+			const sep = panelId.indexOf('-');
+			const paramType = panelId.slice(0, sep);
+			const paramValue = panelId.slice(sep + 1);
+			const panel = document.querySelector(
+				`.panel[data-param-type="${paramType}"][data-param-value="${CSS.escape(paramValue)}"]`
+			);
 			if (panel) {
 				panel.scrollIntoView({ behavior: 'smooth', inline: 'start' });
 			}
+			return panel || null;
+		}
+
+		// Scroll a panel to one of its heading ids and briefly highlight it.
+		// Scoped to the given panel because heading ids are only unique within a
+		// single note's rendered HTML (the same note, or two notes with colliding
+		// slugs, may be open in multiple panels at once).
+		function scrollToHeading(panelEl, headingSlug) {
+			if (!panelEl || !headingSlug) return;
+			// CSS.escape guards slugs that start with a digit or contain selector-
+			// special characters (e.g. a "## 2024 plans" heading -> id "2024-plans").
+			const target = panelEl.querySelector('#' + CSS.escape(headingSlug));
+			if (!target) return; // missing/renamed heading -> graceful no-op
+			target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			target.classList.add('heading-target');
+			setTimeout(() => target.classList.remove('heading-target'), 2000);
 		}
 
 		function createPanel(noteData, position, isError = false) {
@@ -1096,25 +1133,38 @@ ${closeButton}
 				newLink.addEventListener('click', (e) => {
 					e.preventDefault();
 					e.stopPropagation(); // Stop event bubbling
-					
+
+					// Section-anchor target (if any), set by remarkObsidianLinks and
+					// preserved across the cloneNode above.
+					const headingSlug = newLink.dataset.heading || null;
+
+					// Same-note link [[#Heading]]: scroll within THIS panel (the one
+					// containing the link). Its href is just "#", so handle it before
+					// the URL-fragment parsing below (which would yield no params).
+					if (newLink.dataset.sameNote === 'true') {
+						if (headingSlug) scrollToHeading(panel, headingSlug);
+						return;
+					}
+
 					const href = newLink.getAttribute('href').slice(1);
 					console.log('Raw href:', href);
-					
+
 					const params = parseURLFragment(href);
 					console.log('Parsed params:', params);
-					
+
 					if (params.length > 0) {
 						const { type, value } = params[0];
 						console.log('Using type:', type, 'value:', value);
-						
+
 						// If panel is already loaded, scroll to it
 						const panelId = `${type}-${value}`;
 						if (loadedPanels.has(panelId)) {
-							scrollToPanel(panelId);
+							const openPanel = scrollToPanel(panelId);
+							if (headingSlug && openPanel) scrollToHeading(openPanel, headingSlug);
 						} else {
 							// Wrap in setTimeout to ensure it runs after current call stack
 							setTimeout(() => {
-								addPanel(type, value, panel);
+								addPanel(type, value, panel, headingSlug);
 							}, 0);
 						}
 					}
@@ -1172,16 +1222,17 @@ ${closeButton}
 			return panel;
 		}
 
-		async function addPanel(paramType, paramValue, afterPanel = null) {
+		async function addPanel(paramType, paramValue, afterPanel = null, headingSlug = null) {
 			console.log('addPanel called with:', paramType, paramValue);
 
 			// Create a unique identifier for the panel
 			const panelId = `${paramType}-${paramValue}`;
-			
+
 			// Check if panel is already loaded
 			if (loadedPanels.has(panelId)) {
 				console.log('Panel already loaded, scrolling to:', panelId);
-				scrollToPanel(panelId);
+				const openPanel = scrollToPanel(panelId);
+				if (headingSlug && openPanel) scrollToHeading(openPanel, headingSlug);
 				return;
 			}
 
@@ -1207,7 +1258,16 @@ ${closeButton}
 				panel.scrollIntoView({ behavior: 'smooth', inline: 'start' });
 				updateOpenedNoteLinks();
 				updateURL();
-				
+
+				// If a section anchor was requested, scroll to it after the panel's
+				// content (and its heading ids) are in the DOM. createPanel set the
+				// innerHTML synchronously, so the target exists; defer one frame so the
+				// vertical scroll runs after layout settles and doesn't fight the
+				// horizontal panel.scrollIntoView above (different scroll containers).
+				if (headingSlug) {
+					requestAnimationFrame(() => scrollToHeading(panel, headingSlug));
+				}
+
 			} catch (error) {
 				const container = document.getElementById('panels');
 				
