@@ -8,13 +8,12 @@ import { formatNoteUrl, UrlScheme } from '../utils/urlScheme';
 export interface ResolvedNoteInfo {
 	uid: string;
 	title: string;
-	displayText?: string;
 	published: boolean;
 }
 
 export interface ObsidianLinksOptions {
 	frontmatterManager: FrontmatterManager;
-	resolveInternalLinks: (linkText: string) => Promise<ResolvedNoteInfo | null>;
+	resolveInternalLinks: (notePath: string) => Promise<ResolvedNoteInfo | null>;
 	urlScheme: UrlScheme;
 }
 
@@ -50,25 +49,28 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					const [notePath, heading] = link.split('#');
 
 					const displayText = alias || heading || notePath;
-					const resolved = await options.resolveInternalLinks(linkText);
 
-					if (resolved) {
-						if (resolved.published) {
-							// For resolved and published notes
-							children.push({
-								type: 'link',
-								url: formatNoteUrl('u', resolved.uid, options.urlScheme),
-								children: [{ type: 'text', value: resolved.displayText || resolved.title }]
-							});
-						} else {
-							// For resolved but unpublished notes
-							children.push({
-								type: 'html',
-								value: `<span class="unpublished-link">${displayText}</span>`
-							});
+					// Same-note heading links (e.g. [[#Heading]]) have no note path to
+					// resolve against; render them as a non-clickable span until
+					// section-anchor navigation lands.
+					const resolved = notePath ? await options.resolveInternalLinks(notePath) : null;
+
+					if (resolved && resolved.published) {
+						// For resolved and published notes. The heading (if any) is
+						// dropped from navigation for now but stashed on the link as a
+						// data-heading attribute so future scroll/highlight behavior can
+						// build on it without re-parsing.
+						const linkNode: Link = {
+							type: 'link',
+							url: formatNoteUrl('u', resolved.uid, options.urlScheme),
+							children: [{ type: 'text', value: displayText }]
+						};
+						if (heading) {
+							linkNode.data = { hProperties: { 'data-heading': heading } };
 						}
+						children.push(linkNode);
 					} else {
-						// For unresolved notes (same as before)
+						// For resolved-but-unpublished, unresolved, and same-note links
 						children.push({
 							type: 'html',
 							value: `<span class="unpublished-link">${displayText}</span>`

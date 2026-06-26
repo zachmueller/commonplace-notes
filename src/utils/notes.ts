@@ -132,9 +132,8 @@ export class NoteManager {
 			.use(remarkObsidianLinks, {
 				frontmatterManager: this.plugin.frontmatterManager,
 				urlScheme,
-				resolveInternalLinks: async (linkText: string): Promise<ResolvedNoteInfo | null> => {
-					const [link, alias] = linkText.split('|');
-					const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(link, currentFile.path);
+				resolveInternalLinks: async (notePath: string): Promise<ResolvedNoteInfo | null> => {
+					const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(notePath, currentFile.path);
 
 					if (targetFile instanceof TFile && targetFile.extension === 'md') {
 						try {
@@ -146,7 +145,6 @@ export class NoteManager {
 								return {
 									uid,
 									title: this.plugin.frontmatterManager.getNoteTitle(targetFile),
-									displayText: alias || link,
 									published: true
 								};
 							}
