@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const INPUT_PATH = path.resolve(__dirname, '../../../published-commonplace-notes-cdk/assets/index/index.html');
+const INPUT_PATH = path.resolve(__dirname, '../assets/index/index.html');
 const OUTPUT_PATH = path.resolve(__dirname, '../../src/publish/siteAssets.ts');
 
 if (!fs.existsSync(INPUT_PATH)) {
