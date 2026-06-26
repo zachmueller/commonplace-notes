@@ -104,19 +104,38 @@ function ensureTestVault(vaultPath: string): void {
 }
 
 // Custom fixture types
+type ObsidianSession = {
+	page: Page;
+	collector: LogCollector;
+};
+
 type ObsidianFixtures = {
 	obsidianPage: Page;
 	logCollector: LogCollector;
 };
 
-export const test = base.extend<ObsidianFixtures>({
-	obsidianPage: async ({}, use) => {
+type InternalFixtures = {
+	/**
+	 * Owns the full Obsidian lifecycle for a test: launch, CDP connect, attach
+	 * the log collector, then settle. The collector is attached BEFORE the settle
+	 * wait so it captures the plugin's startup (onload) console output — a console
+	 * listener only sees events emitted after it is registered, and the plugin
+	 * logs while the page loads. The public obsidianPage / logCollector fixtures
+	 * are thin accessors onto this session so both share one launch.
+	 */
+	obsidianSession: ObsidianSession;
+};
+
+export const test = base.extend<ObsidianFixtures & InternalFixtures>({
+	obsidianSession: async ({}, use) => {
 		const vaultPath = getVaultPath();
 		ensureTestVault(vaultPath);
 
 		const cdpPort = parseInt(process.env.CDP_PORT ?? "9222", 10);
 		let obsidian: ObsidianProcess | undefined;
 		let browser: Browser | undefined;
+		const outputDir = path.resolve(__dirname, "..", "results", "logs");
+		const collector = new LogCollector({ outputDir });
 
 		try {
 			obsidian = await launchObsidian({
@@ -135,11 +154,15 @@ export const test = base.extend<ObsidianFixtures>({
 				throw new Error("Could not get a page from Obsidian's browser context");
 			}
 
+			// Attach before settling so we capture the plugin's startup logs.
+			collector.attach(page);
+
 			await page.waitForLoadState("domcontentloaded");
 			await page.waitForTimeout(3000);
 
-			await use(page);
+			await use({ page, collector });
 		} finally {
+			await collector.dispose().catch(() => {});
 			if (browser) {
 				await browser.close().catch(() => {});
 			}
@@ -149,14 +172,12 @@ export const test = base.extend<ObsidianFixtures>({
 		}
 	},
 
-	logCollector: async ({ obsidianPage }, use) => {
-		const outputDir = path.resolve(__dirname, "..", "results", "logs");
-		const collector = new LogCollector({ outputDir });
-		collector.attach(obsidianPage);
+	obsidianPage: async ({ obsidianSession }, use) => {
+		await use(obsidianSession.page);
+	},
 
-		await use(collector);
-
-		await collector.dispose();
+	logCollector: async ({ obsidianSession }, use) => {
+		await use(obsidianSession.collector);
 	},
 });
 

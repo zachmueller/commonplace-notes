@@ -34,6 +34,12 @@ test.describe("Plugin smoke tests", () => {
 		const pluginLogs = allLogs.filter((entry) => entry.source === "plugin");
 		console.log(`Plugin log entries: ${pluginLogs.length}`);
 
+		// The collector attaches before the page settles, so the plugin's startup
+		// logs should be captured. Asserting this guards against the attach-timing
+		// regression where 0 entries were collected. (Requires debugMode in the
+		// test vault, which emits [CPN Debug] lines during onload.)
+		expect(pluginLogs.length).toBeGreaterThan(0);
+
 		// Verify no plugin errors during startup
 		const pluginErrors = allLogs.filter(
 			(entry) => entry.source === "plugin" && entry.level === "error"
