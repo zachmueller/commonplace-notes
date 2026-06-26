@@ -24,13 +24,7 @@ import { CloudFormationManager } from './infrastructure/cloudFormationManager';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 
 // defining interfaces to facilitate deregistering commands
-interface Command {
-	id: string;
-	name: string;
-}
-
 interface Commands {
-	listCommands(): Command[];
 	removeCommand(id: string): void;
 }
 
@@ -81,6 +75,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	publisher: Publisher;
 	awsSdkManager: AwsSdkManager;
 	cloudFormationManager: CloudFormationManager;
+	private registeredProfileCommandIds: string[] = [];
 
 	async onload() {
 		// Initialize settings
@@ -347,34 +342,34 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	registerProfileCommands() {
 		Logger.debug('Starting to register profile commands');
 
-		// Clear any existing profile commands first
+		// Remove the profile commands we previously registered, tracked by id.
+		// We intentionally avoid app.commands.listCommands() here: it evaluates every
+		// registered command's checkCallback to filter the list, which throws for core
+		// commands when called during onload (before the workspace layout is ready).
 		const app = this.app as ObsidianApp;
-		const existingCommands = app.commands.listCommands()
-			.filter((cmd: Command) => cmd.id.startsWith('commonplace-notes:toggle-profile-'));
-		Logger.debug(`Found ${existingCommands.length} existing profile commands to remove`);
-
-		// Attempt to deregister each command individually
-		existingCommands.forEach((cmd: Command) => {
-			Logger.debug(`Deregistering command ${cmd.id}`);
+		Logger.debug(`Found ${this.registeredProfileCommandIds.length} existing profile commands to remove`);
+		for (const id of this.registeredProfileCommandIds) {
+			Logger.debug(`Deregistering command ${id}`);
 			try {
-				app.commands.removeCommand(cmd.id);
+				app.commands.removeCommand(id);
 			} catch (error) {
-				Logger.error(`Error removing command ${cmd.id}:`, error);
+				Logger.error(`Error removing command ${id}:`, error);
 			}
-		});
+		}
+		this.registeredProfileCommandIds = [];
 
 		// Register a command for each profile
 		Logger.debug(`Registering commands for ${this.settings.publishingProfiles.length} profiles`);
 		this.settings.publishingProfiles.forEach(profile => {
 			Logger.debug(`Registering command for profile: ${profile.name} (${profile.id})`);
 			try {
-				this.addCommand({
+				const command = this.addCommand({
 					id: `toggle-profile-${profile.id}`,
 					name: `Toggle publishing context: ${profile.name}`,
 					checkCallback: (checking: boolean) => {
 						const activeFile = this.app.workspace.getActiveFile();
 						if (!activeFile) return false;
-						
+
 						if (checking) return true;
 
 						// Toggle the publish context
@@ -382,6 +377,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 						return true;
 					}
 				});
+				this.registeredProfileCommandIds.push(command.id);
 				Logger.debug(`Successfully registered command for profile ${profile.name}`);
 			} catch (error) {
 				Logger.error(`Error registering command for profile ${profile.name}:`, error);
