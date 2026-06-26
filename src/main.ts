@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, App, TFile, Modal, Setting } from 'obsidian';
+import { Plugin, MarkdownView, App, TFile, Modal, Setting, Notice, WorkspaceLeaf } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
 import { 
 	CommonplaceNotesSettings,
@@ -19,7 +19,7 @@ import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
 import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
-import { formatNoteUrl } from './utils/urlScheme';
+import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 
@@ -35,6 +35,7 @@ interface ObsidianApp extends App {
 const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 	uidLength: 8,
 	urlScheme: 'current',
+	urlStackWindowSeconds: 10,
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -76,6 +77,19 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	awsSdkManager: AwsSdkManager;
 	cloudFormationManager: CloudFormationManager;
 	private registeredProfileCommandIds: string[] = [];
+
+	// Transient state for append-mode URL stacking. Holds the in-progress
+	// stack, the sliding-window timers, and the live countdown Notice.
+	// Null whenever no stack is being assembled.
+	private urlStackState: {
+		profileId: string;
+		baseUrl: string;           // already normalized with a trailing slash
+		uids: string[];            // ordered, de-duped
+		expiresAt: number;         // epoch ms when the window lapses
+		timer: number;             // expiry setTimeout id
+		countdownInterval: number; // 1s tick refreshing the Notice
+		notice: Notice;            // persistent countdown Notice (duration 0)
+	} | null = null;
 
 	async onload() {
 		// Initialize settings
@@ -202,6 +216,53 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					return;
 				}
 
+				const urlScheme = this.settings.urlScheme || 'current';
+
+				// --- Continue an active stack -------------------------------
+				// A stack is only ever active under the 'current' scheme, so if
+				// one exists we append to it without re-prompting for a profile.
+				if (this.urlStackState) {
+					const state = this.urlStackState;
+
+					// The note must belong to the same publish context as the stack.
+					const fileContexts = await this.publisher.getPublishContextsForFile(file);
+					if (!fileContexts.includes(state.profileId)) {
+						NoticeManager.showNotice(`Skipped '${file.basename}' — not in publish context`, 3000);
+						this.resetUrlStackWindow(); // give the user time to navigate elsewhere
+						return;
+					}
+
+					// Resolve the UID; skip (but keep the stack alive) if missing.
+					const uid = this.frontmatterManager.getNoteUID(file);
+					if (!uid) {
+						NoticeManager.showNotice(`Did not find UID for note '${file.basename}'`);
+						this.resetUrlStackWindow();
+						return;
+					}
+
+					// De-dupe, then rewrite the clipboard with the full stack.
+					if (!state.uids.includes(uid)) {
+						state.uids.push(uid);
+					}
+					const fragment = formatNoteStackUrl(
+						state.uids.map(u => ({ type: 'u', value: u })),
+						'current'
+					);
+					const url = `${state.baseUrl}${fragment}`;
+					try {
+						await navigator.clipboard.writeText(url);
+					} catch (error) {
+						Logger.error('Error copying note URL:', error);
+						throw new Error('Error copying note URL, check console');
+					}
+
+					this.resetUrlStackWindow();
+					this.renderUrlStackNotice();
+					return;
+				}
+
+				// --- First invocation (no active stack) ---------------------
+
 				// check publishing contexts
 				const contexts = await this.publisher.getPublishContextsForFile(file);
 				if (contexts.length === 0) {
@@ -226,15 +287,120 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					return;
 				}
 				const base = profile.baseUrl.replace(/\/?$/, '/');
-				const urlScheme = this.settings.urlScheme || 'current';
-				const fragment = formatNoteUrl('u', uid, urlScheme);
+
+				// The 'original' scheme does not compose into a multi-segment
+				// stack, so fall back to the legacy single-note copy.
+				if (urlScheme !== 'current') {
+					const fragment = formatNoteUrl('u', uid, urlScheme);
+					const url = `${base}${fragment}`;
+					try {
+						await navigator.clipboard.writeText(url);
+						NoticeManager.showNotice('Note URL copied (switch to the "Current" URL scheme to stack notes)');
+					} catch (error) {
+						Logger.error('Error copying note URL:', error);
+						throw new Error('Error copying note URL, check console');
+					}
+					return;
+				}
+
+				// Start a new stack: copy the single-note URL now, then open the
+				// sliding window so subsequent invocations append to it.
+				const fragment = formatNoteStackUrl([{ type: 'u', value: uid }], 'current');
 				const url = `${base}${fragment}`;
 				try {
 					await navigator.clipboard.writeText(url);
-					NoticeManager.showNotice('Note URL copied');
 				} catch (error) {
 					Logger.error('Error copying note URL:', error);
 					throw new Error('Error copying note URL, check console');
+				}
+
+				this.urlStackState = {
+					profileId: profile.id,
+					baseUrl: base,
+					uids: [uid],
+					expiresAt: 0,
+					timer: 0,
+					countdownInterval: 0,
+					notice: new Notice('', 0)
+				};
+				this.resetUrlStackWindow();
+				this.renderUrlStackNotice();
+			}
+		});
+
+		this.addCommand({
+			id: 'copy-open-notes-stacked-url',
+			name: 'Copy open notes as stacked URL',
+			callback: async () => {
+				const urlScheme = this.settings.urlScheme || 'current';
+				if (urlScheme !== 'current') {
+					NoticeManager.showNotice('Stacked URLs require the "Current" URL scheme (see settings)');
+					return;
+				}
+
+				// Collect Markdown leaves in the main editor area, left-to-right.
+				const files = this.getMainAreaMarkdownFiles();
+				if (files.length === 0) {
+					NoticeManager.showNotice('No open notes in the main editor area');
+					return;
+				}
+
+				// Gather the union of all open notes' publish contexts to drive
+				// the profile prompt.
+				const contextSet = new Set<string>();
+				for (const file of files) {
+					const contexts = await this.publisher.getPublishContextsForFile(file);
+					for (const c of contexts) contextSet.add(c);
+				}
+				if (contextSet.size === 0) {
+					NoticeManager.showNotice('None of the open notes have publishing contexts defined');
+					return;
+				}
+
+				const profile = await this.publisher.promptForProfile([...contextSet]);
+				if (!profile) return;
+				if (!profile.baseUrl) {
+					NoticeManager.showNotice(`No baseUrl defined for profile ${profile.id}`);
+					return;
+				}
+
+				// Build the stack in tab order, skipping notes outside the chosen
+				// context (or without a UID) and recording them for the user.
+				const uids: string[] = [];
+				const skipped: string[] = [];
+				for (const file of files) {
+					const contexts = await this.publisher.getPublishContextsForFile(file);
+					if (!contexts.includes(profile.id)) {
+						skipped.push(file.basename);
+						continue;
+					}
+					const uid = this.frontmatterManager.getNoteUID(file);
+					if (!uid) {
+						skipped.push(file.basename);
+						continue;
+					}
+					if (!uids.includes(uid)) uids.push(uid);
+				}
+
+				if (uids.length === 0) {
+					NoticeManager.showNotice(`No open notes are in the "${profile.name}" publish context`);
+					return;
+				}
+
+				const base = profile.baseUrl.replace(/\/?$/, '/');
+				const fragment = formatNoteStackUrl(uids.map(u => ({ type: 'u', value: u })), 'current');
+				const url = `${base}${fragment}`;
+				try {
+					await navigator.clipboard.writeText(url);
+					const noun = uids.length === 1 ? 'note' : 'notes';
+					NoticeManager.showNotice(`Stacked URL copied (${uids.length} ${noun})`);
+				} catch (error) {
+					Logger.error('Error copying note URL:', error);
+					throw new Error('Error copying note URL, check console');
+				}
+
+				if (skipped.length > 0) {
+					NoticeManager.showNotice(`Skipped (not in context): ${skipped.join(', ')}`, 6000);
 				}
 			}
 		});
@@ -337,6 +503,65 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	// --- Append-mode URL stacking helpers ---------------------------------
+
+	private get urlStackWindowMs(): number {
+		const seconds = this.settings.urlStackWindowSeconds ?? 10;
+		return Math.max(1, seconds) * 1000;
+	}
+
+	// (Re)start the sliding window: refresh the expiry timeout and ensure the
+	// 1s countdown tick is running. Called on every successful append AND on a
+	// skip, so the user always gets a fresh window to navigate to a note.
+	private resetUrlStackWindow() {
+		if (!this.urlStackState) return;
+		const state = this.urlStackState;
+
+		state.expiresAt = Date.now() + this.urlStackWindowMs;
+
+		window.clearTimeout(state.timer);
+		state.timer = window.setTimeout(() => this.clearUrlStack(), this.urlStackWindowMs);
+
+		if (!state.countdownInterval) {
+			state.countdownInterval = window.setInterval(() => this.renderUrlStackNotice(), 1000);
+		}
+	}
+
+	// Refresh the persistent Notice text with the current note count and the
+	// remaining seconds in the window.
+	private renderUrlStackNotice() {
+		if (!this.urlStackState) return;
+		const state = this.urlStackState;
+		const remaining = Math.max(0, Math.ceil((state.expiresAt - Date.now()) / 1000));
+		const count = state.uids.length;
+		const noun = count === 1 ? 'note' : 'notes';
+		state.notice.setMessage(`Stacking URL (${count} ${noun}) — ${remaining}s left`);
+	}
+
+	// Enumerate the files backing Markdown leaves in the main editor area
+	// (rootSplit), excluding sidebars, in left-to-right tab order. Obsidian's
+	// iterateRootLeaves walks the main split in visual order.
+	private getMainAreaMarkdownFiles(): TFile[] {
+		const files: TFile[] = [];
+		this.app.workspace.iterateRootLeaves((leaf: WorkspaceLeaf) => {
+			const view = leaf.view;
+			if (view instanceof MarkdownView && view.file) {
+				files.push(view.file);
+			}
+		});
+		return files;
+	}
+
+	// Tear down the stack: clear both timers, hide the Notice, drop the state.
+	private clearUrlStack() {
+		if (!this.urlStackState) return;
+		const state = this.urlStackState;
+		window.clearTimeout(state.timer);
+		if (state.countdownInterval) window.clearInterval(state.countdownInterval);
+		state.notice.hide();
+		this.urlStackState = null;
 	}
 
 	registerProfileCommands() {
@@ -534,6 +759,7 @@ cpn.rebuildContentIndex();
 
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
+		this.clearUrlStack();
 		this.awsSdkManager.dispose();
 		this.cloudFormationManager.dispose();
 		NoticeManager.cleanup();

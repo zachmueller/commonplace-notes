@@ -86,6 +86,20 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		new Setting(containerEl)
+			.setName('URL stack window (seconds)')
+			.setDesc('When using "Copy link to current note URL" repeatedly, each invocation within this window appends the active note to a growing stacked URL on the clipboard. The window resets on every copy. Only applies under the "Current" URL scheme.')
+			.addText(text => text
+				.setPlaceholder('10')
+				.setValue(String(this.plugin.settings.urlStackWindowSeconds ?? 10))
+				.onChange(async (value) => {
+					const num = parseInt(value, 10);
+					if (!isNaN(num) && num >= 1 && num <= 120) {
+						this.plugin.settings.urlStackWindowSeconds = num;
+						await this.plugin.saveSettings();
+					}
+				}));
+
 		containerEl.createEl('h2', {text: 'Publishing profiles'});
 
 		// Profile selector dropdown

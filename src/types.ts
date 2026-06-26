@@ -6,6 +6,7 @@ export interface CommonplaceNotesSettings {
 	debugMode?: boolean;
 	uidLength?: number;
 	urlScheme?: 'current' | 'original';
+	urlStackWindowSeconds?: number;
 }
 
 export interface PublishingProfile {
