@@ -1,0 +1,12 @@
+{
+  "plain-paragraph": "<p class=\"line\" data-line=\"1\">Just a plain paragraph with some text.</p>",
+  "single-wikilink": "<p class=\"line\" data-line=\"1\">See <a href=\"#/uUID-a\">a</a> for details.</p>",
+  "multi-wikilink-with-formatting": "<p class=\"line\" data-line=\"1\"><a href=\"#/uUID-a\">a</a> <strong class=\"line\" data-line=\"1\">bold</strong> <a href=\"#/uUID-b\">b</a> <em class=\"line\" data-line=\"1\">em</em> <a href=\"#/uUID-c\">c</a></p>",
+  "mixed-resolution": "<p class=\"line\" data-line=\"1\"><a href=\"#/uUID-a\">a</a> and <strong class=\"line\" data-line=\"1\">x</strong> <span class=\"unpublished-link\">missing</span> and <a href=\"#/uUID-b\">b</a></p>",
+  "heading-and-section-wikilink": "<h2 class=\"line\" data-line=\"1\" id=\"section\">Section</h2>\n<p class=\"line\" data-line=\"3\"><a href=\"#/uUID-a\">Display</a> then <strong class=\"line\" data-line=\"3\">y</strong> then <a href=\"#/uUID-b\" data-heading=\"section\">Section</a></p>",
+  "same-note-anchor": "<h2 class=\"line\" data-line=\"1\" id=\"my-heading\">My Heading</h2>\n<p class=\"line\" data-line=\"3\">Jump to <a href=\"#\" data-heading=\"my-heading\" data-same-note=\"true\">My Heading</a>.</p>",
+  "duplicate-headings": "<h2 class=\"line\" data-line=\"1\" id=\"dup\">Dup</h2>\n<p class=\"line\" data-line=\"3\">text</p>\n<h2 class=\"line\" data-line=\"5\" id=\"dup-1\">Dup</h2>\n<p class=\"line\" data-line=\"7\">more</p>",
+  "gfm-table-and-strikethrough": "<table class=\"line\" data-line=\"1\">\n<thead>\n<tr class=\"line\" data-line=\"1\">\n<th class=\"line\" data-line=\"1\">a</th>\n<th class=\"line\" data-line=\"1\">b</th>\n</tr>\n</thead>\n<tbody>\n<tr class=\"line\" data-line=\"3\">\n<td class=\"line\" data-line=\"3\">1</td>\n<td class=\"line\" data-line=\"3\">2</td>\n</tr>\n</tbody>\n</table>\n<p class=\"line\" data-line=\"5\"><del class=\"line\" data-line=\"5\">struck</del> and a list:</p>\n<ul class=\"line\" data-line=\"7\">\n<li class=\"line\" data-line=\"7\"><input type=\"checkbox\" disabled> todo</li>\n<li class=\"line\" data-line=\"8\"><input type=\"checkbox\" checked disabled> done</li>\n</ul>",
+  "explicit-markdown-link-adjacent": "<p class=\"line\" data-line=\"1\"><a href=\"https://example.com\" class=\"line\" data-line=\"1\">text</a> <a href=\"#/uUID-a\">a</a> <a href=\"#/uUID-b\">b</a></p>",
+  "raw-html-passthrough": "<p class=\"line\" data-line=\"1\">Inline <kbd>Ctrl</kbd> and a <div class=\"x\">block</div>.</p>"
+}

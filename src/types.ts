@@ -7,6 +7,8 @@ export interface CommonplaceNotesSettings {
 	uidLength?: number;
 	urlScheme?: 'current' | 'original';
 	urlStackWindowSeconds?: number;
+	/** Vault folder for CPN extension files. Parser stages live in `<dir>/parsers/`. Default `cpn`. */
+	cpnDirectory?: string;
 }
 
 export interface PublishingProfile {

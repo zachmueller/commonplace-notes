@@ -11,6 +11,7 @@ import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
 import { IndicatorManager } from './utils/indicators';
 import { NoteManager } from './utils/notes';
+import { ParserExtensionManager } from './utils/parserExtensions';
 import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 	uidLength: 8,
 	urlScheme: 'current',
 	urlStackWindowSeconds: 10,
+	cpnDirectory: 'cpn',
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -69,6 +71,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	profileManager: ProfileManager;
 	indicatorManager: IndicatorManager;
 	noteManager: NoteManager;
+	parserExtensionManager: ParserExtensionManager;
 	frontmatterManager: FrontmatterManager;
 	contentIndexManager: ContentIndexManager;
 	mappingManager: MappingManager;
@@ -100,6 +103,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.profileManager = new ProfileManager(this);
 		this.indicatorManager = new IndicatorManager(this);
 		this.noteManager = new NoteManager(this);
+		this.parserExtensionManager = new ParserExtensionManager(this);
 		this.frontmatterManager = new FrontmatterManager(this);
 		this.contentIndexManager = new ContentIndexManager(this);
 		this.mappingManager = new MappingManager(this);
@@ -152,6 +156,22 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					throw new Error('No valid profile selected');
 				}
 				await refreshCredentials(this, profile.id);
+			}
+		});
+
+		this.addCommand({
+			id: 'export-parser-scaffolds',
+			name: 'Export all parser stage definitions to vault',
+			callback: async () => {
+				try {
+					const paths = await this.parserExtensionManager.exportAllScaffolds();
+					const dir = this.settings.cpnDirectory ?? 'cpn';
+					NoticeManager.showNotice(`Exported ${paths.length} parser stage(s) to ${dir}/parsers/`);
+				} catch (error) {
+					const msg = error instanceof Error ? error.message : String(error);
+					NoticeManager.showNotice(`Failed to export parser stages: ${msg}`);
+					Logger.error('Failed to export parser scaffolds:', error);
+				}
 			}
 		});
 

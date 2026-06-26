@@ -1,6 +1,9 @@
 import esbuild from "esbuild";
 import process from "process";
+import { createRequire } from "module";
 import builtins from "builtin-modules";
+
+const require = createRequire(import.meta.url);
 
 const banner =
 `/*
@@ -10,6 +13,36 @@ if you want to view the source, please visit the github repository of this plugi
 `;
 
 const prod = (process.argv[2] === "production");
+
+/**
+ * Use rehype-mathjax's BROWSER MathJax adaptor instead of its default Node one.
+ *
+ * rehype-mathjax/lib/create-adaptor.js imports jsdom (to synthesize a DOM under
+ * Node). jsdom is huge (~8MB) and, worse, its XMLHttpRequest-impl.js runs
+ * `require.resolve("./xhr-sync-worker.js")` at module-eval — a sidecar file
+ * esbuild can't inline, which would force shipping a second file alongside
+ * main.js (Obsidian requires all plugin JS in the single main.js).
+ *
+ * The package's own `browser` field already remaps that module to
+ * create-adaptor.browser.js, which uses MathJax's `browserAdaptor` against the
+ * REAL DOM — exactly right for Obsidian's Electron renderer. We build with
+ * platform:"node" (for the AWS SDK + Node built-ins), so the browser field
+ * isn't honored automatically; this plugin applies that single remap by hand.
+ * Net effect: no jsdom, no sidecar, smaller bundle, and MathJax still renders.
+ */
+const mathjaxBrowserAdaptorPlugin = {
+	name: "mathjax-browser-adaptor",
+	setup(build) {
+		const nodeAdaptor = require.resolve("rehype-mathjax/lib/create-adaptor.js");
+		const browserAdaptor = require.resolve("rehype-mathjax/lib/create-adaptor.browser.js");
+		build.onResolve({ filter: /create-adaptor\.js$/ }, (args) => {
+			// Only remap rehype-mathjax's adaptor (match by resolved absolute path).
+			const resolved = require.resolve(args.path, { paths: [args.resolveDir] });
+			if (resolved === nodeAdaptor) return { path: browserAdaptor };
+			return null;
+		});
+	},
+};
 
 const context = await esbuild.context({
 	banner: {
@@ -40,6 +73,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
+	plugins: [mathjaxBrowserAdaptorPlugin],
 });
 
 if (prod) {

@@ -215,6 +215,11 @@ export class Publisher {
 					await this.plugin.mappingManager.loadProfileMappings(profile.id);
 					await this.plugin.contentIndexManager.loadIndex(profile.id);
 
+					// Discover + compile parser stages once per batch (vault overrides
+					// + built-in scaffolds). markdownToHtml then assembles a per-note
+					// pipeline from these cached, compiled stages.
+					await this.plugin.parserExtensionManager.loadExtensions(profile.id);
+
 					// Queue all notes for processing
 					for (const file of files) {
 						await this.plugin.noteManager.queueNote(file, profile.id);

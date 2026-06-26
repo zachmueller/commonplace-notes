@@ -1,17 +1,11 @@
 import { TFile } from 'obsidian';
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import remarkRehype from 'remark-rehype';
-import rehypeSlug from 'rehype-slug';
-import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from './path';
-import remarkObsidianLinks, { ResolvedNoteInfo } from './remarkObsidianLinks';
-import remarkLineNumbers from './remarkLineNumbers';
+import { ResolvedNoteInfo } from './remarkObsidianLinks';
 import { Logger } from './logging';
 import { NoticeManager } from '../utils/notice';
 import { UrlScheme } from './urlScheme';
+import type { ParserContext } from './parser/types';
 
 interface NoteState {
 	file: TFile;
@@ -126,45 +120,46 @@ export class NoteManager {
 	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string): Promise<string> {
 		const urlScheme: UrlScheme = this.plugin.settings.urlScheme || 'current';
 
-		const processor = unified()
-			.use(remarkParse)
-			.use(remarkGfm)
-			.use(remarkLineNumbers)
-			.use(remarkObsidianLinks, {
-				frontmatterManager: this.plugin.frontmatterManager,
-				urlScheme,
-				resolveInternalLinks: async (notePath: string): Promise<ResolvedNoteInfo | null> => {
-					const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(notePath, currentFile.path);
+		// Per-note context handed to every parser stage. The resolveInternalLinks
+		// closure (formerly inline in this method) is lifted here so the built-in
+		// `remark-obsidian-links` stage — and any user override of it — consumes it
+		// from `context` without behavior change.
+		const context: ParserContext = {
+			file: currentFile,
+			profileId,
+			frontmatterManager: this.plugin.frontmatterManager,
+			urlScheme,
+			resolveInternalLinks: async (notePath: string): Promise<ResolvedNoteInfo | null> => {
+				const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(notePath, currentFile.path);
 
-					if (targetFile instanceof TFile && targetFile.extension === 'md') {
-						try {
-							const uid = this.plugin.frontmatterManager.getNoteUID(targetFile);
-							if (uid === null) return null;
-							const contexts = await this.plugin.publisher.getPublishContextsForFile(targetFile);
+				if (targetFile instanceof TFile && targetFile.extension === 'md') {
+					try {
+						const uid = this.plugin.frontmatterManager.getNoteUID(targetFile);
+						if (uid === null) return null;
+						const contexts = await this.plugin.publisher.getPublishContextsForFile(targetFile);
 
-							if (contexts.includes(profileId)) {
-								return {
-									uid,
-									title: this.plugin.frontmatterManager.getNoteTitle(targetFile),
-									published: true
-								};
-							}
-							return null;
-						} catch (error) {
-							Logger.error(`Failed to get UID for file ${targetFile.path}:`, error);
-							return null;
+						if (contexts.includes(profileId)) {
+							return {
+								uid,
+								title: this.plugin.frontmatterManager.getNoteTitle(targetFile),
+								published: true
+							};
 						}
+						return null;
+					} catch (error) {
+						Logger.error(`Failed to get UID for file ${targetFile.path}:`, error);
+						return null;
 					}
-					return null;
 				}
-			})
-			.use(remarkRehype, { allowDangerousHtml: true })
-			// Assign GitHub-style slug ids to every heading (with -1/-2 dedupe for
-			// repeated text) so published section anchors have scroll targets that
-			// match the data-heading slugs emitted by remarkObsidianLinks.
-			.use(rehypeSlug)
-			.use(rehypeStringify, { allowDangerousHtml: true });
+				return null;
+			}
+		};
 
+		// The manager merges built-in scaffolds with any vault overrides, sorts by
+		// order, and returns a ready unified() processor for this note. Stages are
+		// compiled once per publish batch (see Publisher.publishNotes →
+		// parserExtensionManager.loadExtensions); this only assembles the chain.
+		const processor = await this.plugin.parserExtensionManager.assemblePipeline(profileId, context);
 		const result = await processor.process(markdown);
 		return result.toString();
 	}
