@@ -1,7 +1,8 @@
-import { MarkdownRenderer } from 'obsidian';
+import { Component, MarkdownRenderer } from 'obsidian';
+import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';
 
-export async function convertMarkdownToPlaintext(markdown: string): Promise<string> {
+export async function convertMarkdownToPlaintext(markdown: string, plugin: CommonplaceNotesPlugin): Promise<string> {
 	try {
 		// Clean up problematic syntax
 		let cleanMarkdown = markdown;
@@ -11,18 +12,25 @@ export async function convertMarkdownToPlaintext(markdown: string): Promise<stri
 			// Remove HTML comments
 			.replace(/<!--[\s\S]*?-->/g, '')
 
-		// Convert to plaintext
+		// Convert to plaintext. Use a short-lived Component to own the lifecycle of
+		// any event handlers registered during the render, so they get cleaned up
+		// when we unload it (avoids the "not passing Component" memory-leak warning).
 		const element = document.createElement('div');
+		const component = new Component();
+		component.load();
 		try {
-			await MarkdownRenderer.renderMarkdown(
+			await MarkdownRenderer.render(
+				plugin.app,
 				cleanMarkdown,
 				element,
 				'',
-				this
+				component
 			);
 		} catch (renderError) {
 			Logger.warn(`Render error, falling back to basic cleanup:`, renderError);
 			return cleanMarkdown;
+		} finally {
+			component.unload();
 		}
 		// Extract text content
         const textContent = element.innerText || element.textContent || cleanMarkdown;

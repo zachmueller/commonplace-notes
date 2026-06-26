@@ -48,7 +48,7 @@ export class ContentIndexManager {
 			// Get plaintext content
 			let content;
 			try {
-				content = await convertMarkdownToPlaintext(rawMarkdown);
+				content = await convertMarkdownToPlaintext(rawMarkdown, this.plugin);
 			} catch (conversionError) {
 				Logger.warn(`Failed to convert content for ${title} (${uid}), using fallback:`, conversionError);
 				content = title; // Fallback to just using the title
