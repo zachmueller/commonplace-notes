@@ -18,11 +18,13 @@ test.describe("Plugin smoke tests", () => {
 		// Wait for the plugin to fully initialize
 		await obsidianPage.waitForTimeout(5000);
 
-		// Take a screenshot for visual inspection
+		// Take a screenshot for visual inspection. Guarded with .catch because
+		// Obsidian/Electron can throw "__name is not defined" during capture;
+		// the screenshot is informational and not required for assertions.
 		await obsidianPage.screenshot({
 			path: "e2e/results/screenshots/plugin-loaded.png",
 			fullPage: true,
-		});
+		}).catch((e) => console.debug(`[screenshot] plugin-loaded failed: ${e.message}`));
 
 		// Check we got some log entries
 		const allLogs = logCollector.getStructuredLogs();

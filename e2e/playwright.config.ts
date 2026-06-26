@@ -18,7 +18,10 @@ export default defineConfig({
 	use: {
 		// No default browserName — we connect via CDP in the test fixtures
 		trace: "retain-on-failure",
-		screenshot: "on",
+		// Disabled: Playwright's auto screenshot hits an Obsidian/Electron
+		// bug ("__name is not defined"). Tests take screenshots explicitly
+		// (guarded with .catch) where needed instead.
+		screenshot: "off",
 		video: "retain-on-failure",
 	},
 	outputDir: "results/artifacts",
