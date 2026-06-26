@@ -2,6 +2,7 @@ import { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 import { Link, Text, Parent, HTML } from 'mdast';
 import { TFile } from 'obsidian';
+import { slug as githubSlug } from 'github-slugger';
 import { FrontmatterManager } from '../utils/frontmatter';
 import { formatNoteUrl, UrlScheme } from '../utils/urlScheme';
 
@@ -51,26 +52,49 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					const displayText = alias || heading || notePath;
 
 					// Same-note heading links (e.g. [[#Heading]]) have no note path to
-					// resolve against; render them as a non-clickable span until
-					// section-anchor navigation lands.
+					// resolve against; they are handled as a clickable same-note anchor
+					// in the branch below rather than resolved here.
 					const resolved = notePath ? await options.resolveInternalLinks(notePath) : null;
 
 					if (resolved && resolved.published) {
 						// For resolved and published notes. The heading (if any) is
-						// dropped from navigation for now but stashed on the link as a
-						// data-heading attribute so future scroll/highlight behavior can
-						// build on it without re-parsing.
+						// not encoded in the router-consumed href; instead it rides on
+						// the link as a data-heading attribute that the published SPA
+						// reads to scroll to and highlight the target section. The slug
+						// is generated with github-slugger to match the heading `id`s
+						// that rehype-slug assigns at render time (see notes.ts).
 						const linkNode: Link = {
 							type: 'link',
 							url: formatNoteUrl('u', resolved.uid, options.urlScheme),
 							children: [{ type: 'text', value: displayText }]
 						};
 						if (heading) {
-							linkNode.data = { hProperties: { 'data-heading': heading } };
+							// NOTE: we slugify the raw wikilink heading text. This matches
+							// rehype-slug's id for plain/emphasis headings; it can diverge
+							// for headings containing inline links/entities, which degrades
+							// gracefully (the SPA simply doesn't scroll).
+							linkNode.data = { hProperties: { 'data-heading': githubSlug(heading) } };
 						}
 						children.push(linkNode);
+					} else if (!notePath && heading) {
+						// Same-note section link (e.g. [[#Heading]]): no note to resolve,
+						// but it should still be clickable and scroll within the current
+						// panel. Emit a clickable anchor carrying the slugged heading and a
+						// data-same-note marker; href="#" keeps it matched by both the CSS
+						// `a[href^="#"]` rules and the SPA's link click-binding selector.
+						children.push({
+							type: 'link',
+							url: '#',
+							children: [{ type: 'text', value: displayText }],
+							data: {
+								hProperties: {
+									'data-heading': githubSlug(heading),
+									'data-same-note': 'true'
+								}
+							}
+						});
 					} else {
-						// For resolved-but-unpublished, unresolved, and same-note links
+						// For resolved-but-unpublished and unresolved links
 						children.push({
 							type: 'html',
 							value: `<span class="unpublished-link">${displayText}</span>`

@@ -3,6 +3,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
+import rehypeSlug from 'rehype-slug';
 import rehypeStringify from 'rehype-stringify';
 import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from './path';
@@ -158,6 +159,10 @@ export class NoteManager {
 				}
 			})
 			.use(remarkRehype, { allowDangerousHtml: true })
+			// Assign GitHub-style slug ids to every heading (with -1/-2 dedupe for
+			// repeated text) so published section anchors have scroll targets that
+			// match the data-heading slugs emitted by remarkObsidianLinks.
+			.use(rehypeSlug)
 			.use(rehypeStringify, { allowDangerousHtml: true });
 
 		const result = await processor.process(markdown);

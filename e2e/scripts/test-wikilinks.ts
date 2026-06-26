@@ -24,10 +24,19 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
+import rehypeSlug from 'rehype-slug';
 import rehypeStringify from 'rehype-stringify';
-import remarkObsidianLinks, {
-	type ResolvedNoteInfo
-} from '../../src/utils/remarkObsidianLinks';
+import * as obsidianLinksModule from '../../src/utils/remarkObsidianLinks';
+import { type ResolvedNoteInfo } from '../../src/utils/remarkObsidianLinks';
+
+// The plugin uses `export default`. Under tsx's ESM loader the default can be
+// double-wrapped ({ default: { default: fn } }) so a plain default import yields
+// an object, not the attacher function — unified().use() then silently no-ops and
+// no wikilinks convert. Unwrap defensively so the harness exercises the real plugin.
+const remarkObsidianLinks: any =
+	(obsidianLinksModule as any).default?.default ??
+	(obsidianLinksModule as any).default ??
+	obsidianLinksModule;
 
 // ---------------------------------------------------------------------------
 // Test pipeline
@@ -55,6 +64,7 @@ async function render(markdown: string): Promise<string> {
 			}
 		})
 		.use(remarkRehype, { allowDangerousHtml: true })
+		.use(rehypeSlug)
 		.use(rehypeStringify, { allowDangerousHtml: true });
 
 	const result = await processor.process(markdown);
@@ -103,15 +113,47 @@ const CASES: Case[] = [
 		spans: 1
 	},
 	{
-		name: 'Alias + heading display text',
-		input: '[[a|Display]] then **y** then [[b#Section]]',
+		name: 'Alias + heading display text (slugged data-heading matches rendered id)',
+		input: '## Section\n\n[[a|Display]] then **y** then [[b#Section]]',
 		anchors: 2,
 		spans: 0,
 		extra: (html) => {
 			if (!html.includes('>Display<')) return 'missing alias display text "Display"';
 			if (!html.includes('>Section<')) return 'missing heading display text "Section"';
-			if (!html.includes('data-heading="Section"'))
-				return 'resolved heading link missing data-heading="Section"';
+			// data-heading is now slugged (lowercased) to match rehype-slug's id
+			if (!html.includes('data-heading="section"'))
+				return 'resolved heading link missing data-heading="section"';
+			// rehype-slug should assign id="section" to the rendered heading, and it
+			// must match the link's data-heading exactly (the central correctness goal)
+			if (!html.includes('id="section"'))
+				return 'rendered heading missing id="section"';
+			return null;
+		}
+	},
+	{
+		name: 'Same-note section link is clickable (not an unpublished span)',
+		input: '## My Heading\n\nJump to [[#My Heading]].',
+		anchors: 1,
+		spans: 0,
+		extra: (html) => {
+			if (!html.includes('id="my-heading"')) return 'rendered heading missing id="my-heading"';
+			if (!html.includes('data-same-note="true"'))
+				return 'same-note link missing data-same-note="true"';
+			if (!html.includes('data-heading="my-heading"'))
+				return 'same-note link missing slugged data-heading="my-heading"';
+			if (html.includes('class="unpublished-link"'))
+				return 'same-note link should be clickable, not an unpublished span';
+			return null;
+		}
+	},
+	{
+		name: 'Duplicate headings get -1/-2 dedupe ids (render side)',
+		input: '## Dup\n\ntext\n\n## Dup\n\nmore',
+		anchors: 0,
+		spans: 0,
+		extra: (html) => {
+			if (!html.includes('id="dup"')) return 'first duplicate heading missing id="dup"';
+			if (!html.includes('id="dup-1"')) return 'second duplicate heading missing id="dup-1"';
 			return null;
 		}
 	},
