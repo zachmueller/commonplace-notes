@@ -1,5 +1,5 @@
 import { PublishingProfile, HeaderLink, SiteCustomization } from '../types';
-import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, FLEXSEARCH_MIN_JS } from './siteAssets';
+import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, FLEXSEARCH_MIN_JS, VENDOR_JS } from './siteAssets';
 
 const DEFAULT_SITE_TITLE = 'Notes';
 const DEFAULT_PANEL_WIDTH = 600;
@@ -133,4 +133,8 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 
 export function getFlexSearchJs(): string {
 	return FLEXSEARCH_MIN_JS;
+}
+
+export function renderVendorJs(): string {
+	return VENDOR_JS;
 }

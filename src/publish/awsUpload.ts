@@ -4,7 +4,7 @@ import { TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
-import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs } from './siteRenderer';
+import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs, renderVendorJs } from './siteRenderer';
 
 const MAX_CONCURRENCY = 5;
 
@@ -301,6 +301,12 @@ export async function pushSiteAssetsToS3(
 			{
 				key: `${s3Prefix}flexsearch.min.js`,
 				body: getFlexSearchJs(),
+				contentType: 'application/javascript',
+				cacheControl: 'public, max-age=31536000, immutable',
+			},
+			{
+				key: `${s3Prefix}vendor.js`,
+				body: renderVendorJs(),
 				contentType: 'application/javascript',
 				cacheControl: 'public, max-age=31536000, immutable',
 			},

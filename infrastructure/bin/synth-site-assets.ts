@@ -27,9 +27,24 @@ if (!flexSearchMatch) {
 }
 const flexSearchJs = flexSearchMatch[1].trim();
 
-// Extract app JS: the second <script> block (after FlexSearch)
+// Extract the vendored diff libraries (jsdiff + diff2html): the <script> block
+// led by the `/*! CPN diff vendor` marker comment. Kept in its own block (with
+// its own real </script>) so the app-script extractor below stops at the right
+// boundary and a future lib update containing a stray </script> can't silently
+// truncate app.js.
+const vendorMatch = html.match(/<script>\s*(\/\*! CPN diff vendor[\s\S]*?)\s*<\/script>/);
+if (!vendorMatch) {
+	console.error('Could not find vendored diff-library <script> block in source HTML');
+	process.exit(1);
+}
+const vendorJs = vendorMatch[1].trim();
+
+// Extract app JS: the first <script> block AFTER both the FlexSearch and vendor
+// blocks. Use the later of the two end offsets so the app extractor is order-
+// independent (it doesn't matter whether vendor precedes or follows FlexSearch).
 const flexSearchEnd = html.indexOf('</script>', html.indexOf(flexSearchMatch[0])) + '</script>'.length;
-const remainingHtml = html.slice(flexSearchEnd);
+const vendorEnd = html.indexOf('</script>', html.indexOf(vendorMatch[0])) + '</script>'.length;
+const remainingHtml = html.slice(Math.max(flexSearchEnd, vendorEnd));
 const appScriptMatch = remainingHtml.match(/<script>([\s\S]*?)<\/script>/);
 if (!appScriptMatch) {
 	console.error('Could not find application <script> block in source HTML');
@@ -90,6 +105,7 @@ const indexTemplate = `<!DOCTYPE html>
 \t<script>${CONFIG_BOOTSTRAP}</script>
 \t{{HOME_NOTE_UID_SCRIPT}}
 \t<script src="flexsearch.min.js"></script>
+\t<script src="vendor.js"></script>
 \t<script src="app.js"></script>
 </body>
 </html>`;
@@ -105,6 +121,8 @@ export const SITE_STYLES_CSS = ${JSON.stringify(css)};
 export const SITE_APP_JS = ${JSON.stringify(appJs)};
 
 export const FLEXSEARCH_MIN_JS = ${JSON.stringify(flexSearchJs)};
+
+export const VENDOR_JS = ${JSON.stringify(vendorJs)};
 `;
 
 fs.writeFileSync(OUTPUT_PATH, output, 'utf-8');
@@ -113,3 +131,4 @@ console.log(`  Index template: ${(indexTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Styles CSS: ${(css.length / 1024).toFixed(1)} KB`);
 console.log(`  App JS: ${(appJs.length / 1024).toFixed(1)} KB`);
 console.log(`  FlexSearch JS: ${(flexSearchJs.length / 1024).toFixed(1)} KB`);
+console.log(`  Vendor JS (jsdiff + diff2html): ${(vendorJs.length / 1024).toFixed(1)} KB`);
