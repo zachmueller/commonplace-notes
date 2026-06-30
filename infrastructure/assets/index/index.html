@@ -393,6 +393,30 @@ a:not([href^="#"]):hover {
 	opacity: 1;
 }
 
+.prior-version-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-secondary);
+	cursor: pointer;
+	border-bottom: 1px dotted var(--text-secondary);
+	transition: all 0.2s ease;
+}
+
+.prior-version-link:hover {
+	color: var(--link-color);
+	border-bottom-color: var(--link-color);
+}
+
+.prior-version-link svg {
+	opacity: 0.7;
+	transition: opacity 0.2s ease;
+}
+
+.prior-version-link:hover svg {
+	opacity: 1;
+}
+
 .toast {
 	position: fixed;
 	bottom: 20px;
@@ -1080,7 +1104,7 @@ ${closeButton}
 				`;
 			} else {
 				// Only create metadata section if we have either lastUpdated or hash
-				const hasMetadata = noteData.lastUpdated || noteData.hash;
+				const hasMetadata = noteData.lastUpdated || noteData.hash || noteData.priorHash;
 				
 				// Format the timestamp if it exists
 				const lastUpdatedHtml = noteData.lastUpdated ? `
@@ -1103,6 +1127,20 @@ ${closeButton}
 					</div>
 				` : '';
 
+				// Prior-version link if a prior hash exists (opens prior note in a new panel
+				// via the existing #/p{hash} note-link handler — no extra JS needed)
+				const priorVersionHtml = noteData.priorHash ? `
+					<div>
+						<a class="prior-version-link" href="#/p${noteData.priorHash}" title="View previous version" role="button">
+							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+								<path d="M3 3v5h5"></path>
+								<path d="M12 7v5l4 2"></path>
+							</svg>
+						</a>
+					</div>
+				` : '';
+
 				panel.innerHTML = `
 					${closeButton}
 					<h1>${noteData.title}</h1>
@@ -1110,6 +1148,7 @@ ${closeButton}
 						<div class="note-metadata">
 							${lastUpdatedHtml}
 							${permanentLinkHtml}
+							${priorVersionHtml}
 						</div>
 						` : ''}
 					<div class="content">${noteData.content}</div>
