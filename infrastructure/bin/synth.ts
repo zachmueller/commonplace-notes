@@ -6,6 +6,7 @@ import { CognitoAuthStack } from '../lib/cognito-auth-stack';
 import { CommentStack } from '../lib/comment-stack';
 import { FullStackOac } from '../lib/full-stack-oac';
 import { FullStackOai } from '../lib/full-stack-oai';
+import { PasswordAuthStack } from '../lib/password-auth-stack';
 
 const app = new cdk.App();
 
@@ -15,6 +16,11 @@ new CertificateStack(app, 'CpnCertificateStack', {
 
 // Pinned to us-east-1: this stack owns a viewer-request Lambda@Edge function.
 new CognitoAuthStack(app, 'CpnCognitoAuthStack', {
+	env: { region: 'us-east-1' },
+});
+
+// Pinned to us-east-1: this stack owns a viewer-request Lambda@Edge function.
+new PasswordAuthStack(app, 'CpnPasswordAuthStack', {
 	env: { region: 'us-east-1' },
 });
 
@@ -85,6 +91,7 @@ function getTemplate(stackName: string): string {
 
 const certTemplate = getTemplate('CpnCertificateStack');
 const cognitoTemplate = getTemplate('CpnCognitoAuthStack');
+const passwordTemplate = getTemplate('CpnPasswordAuthStack');
 const oacTemplate = getTemplate('CpnFullStackOac');
 const oaiTemplate = getTemplate('CpnFullStackOai');
 const commentTemplate = getTemplate('CpnCommentStack');
@@ -98,6 +105,8 @@ export const CERTIFICATE_TEMPLATE = ${JSON.stringify(certTemplate)};
 
 export const COGNITO_AUTH_TEMPLATE = ${JSON.stringify(cognitoTemplate)};
 
+export const PASSWORD_AUTH_TEMPLATE = ${JSON.stringify(passwordTemplate)};
+
 export const FULL_STACK_OAC_TEMPLATE = ${JSON.stringify(oacTemplate)};
 
 export const FULL_STACK_OAI_TEMPLATE = ${JSON.stringify(oaiTemplate)};
@@ -109,6 +118,7 @@ fs.writeFileSync(outputPath, output, 'utf-8');
 console.log(`Templates written to ${outputPath}`);
 console.log(`  Certificate template: ${(certTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Cognito auth template: ${(cognitoTemplate.length / 1024).toFixed(1)} KB`);
+console.log(`  Password auth template: ${(passwordTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Full stack (OAC): ${(oacTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Full stack (OAI): ${(oaiTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Comment stack: ${(commentTemplate.length / 1024).toFixed(1)} KB`);
