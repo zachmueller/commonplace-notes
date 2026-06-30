@@ -7,6 +7,8 @@ export type DeploymentStatus =
 	| 'cognito-deployed'
 	| 'deploying'
 	| 'deployed'
+	| 'comment-deploying'
+	| 'comment-deployed'
 	| 'failed'
 	| 'destroying';
 
@@ -52,6 +54,24 @@ export interface CognitoAuthOutputs {
 	callbackApiDomain: string;
 }
 
+/** Deployment bookkeeping for the self-hosted comment stack. */
+export interface CommentState {
+	stackName: string;
+	enabled: boolean;
+	bucketName: string;
+	bucketDomainName: string;
+	apiDomain: string;
+	tableName: string;
+}
+
+/** Raw outputs read from a deployed comment stack. */
+export interface CommentStackOutputs {
+	bucketName: string;
+	bucketDomainName: string;
+	apiDomain: string;
+	tableName: string;
+}
+
 export interface InfrastructureState {
 	certStackName?: string;
 	fullStackName?: string;
@@ -68,6 +88,7 @@ export interface InfrastructureState {
 	imported?: boolean;
 	authLambdaEdgeArn?: string;
 	cognitoAuth?: CognitoAuthState;
+	comment?: CommentState;
 }
 
 export interface DeploymentConfig {
@@ -99,6 +120,15 @@ export interface DeploymentConfig {
 	commentBucketDomainName?: string;
 	/** API Gateway host for the /api/comments write origin (from the comment stack). */
 	commentApiDomainName?: string;
+	/** Deploy the self-hosted comment backend (requires commentIdentityEnabled). */
+	commentingEnabled?: boolean;
+	/** Comment-stack inputs sourced from the Cognito auth outputs. */
+	commentJwksUri?: string;
+	commentTokenIssuer?: string;
+	commentUserPoolClientId?: string;
+	/** Site distribution id / OAI id for the comment bucket's cross-stack read grant. */
+	siteDistributionId?: string;
+	siteOriginAccessIdentityId?: string;
 }
 
 export interface StackOutputs {
@@ -106,6 +136,8 @@ export interface StackOutputs {
 	distributionDomainName: string;
 	distributionId: string;
 	siteUrl: string;
+	/** Present only on OAI distributions; needed to grant the comment bucket. */
+	originAccessIdentityId?: string;
 }
 
 export interface DnsValidationRecord {

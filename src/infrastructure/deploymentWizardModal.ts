@@ -3,7 +3,7 @@ import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
-import type { CognitoAuthOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
+import type { CognitoAuthOutputs, CommentStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3 } from '../publish/awsUpload';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
@@ -18,6 +18,8 @@ export class DeploymentWizardModal extends Modal {
 	private stackOutputs: StackOutputs | null = null;
 	private cognitoOutputs: CognitoAuthOutputs | null = null;
 	private cognitoStackName: string = '';
+	private commentOutputs: CommentStackOutputs | null = null;
+	private commentStackName: string = '';
 	private aborted = false;
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin, cfManager: CloudFormationManager, profile: PublishingProfile) {
@@ -45,6 +47,7 @@ export class DeploymentWizardModal extends Modal {
 			commentIdentityEnabled: auth?.commentIdentity || false,
 			googleClientId: auth?.googleClientId || '',
 			authDomainPrefix: auth?.authDomainPrefix || '',
+			commentingEnabled: profile.commenting?.enabled || false,
 		};
 	}
 
@@ -188,7 +191,20 @@ export class DeploymentWizardModal extends Modal {
 				.setDesc('Provision the pool so signed-in readers can write comments (see the commenting feature).')
 				.addToggle(toggle => toggle
 					.setValue(this.config.commentIdentityEnabled || false)
-					.onChange(v => { this.config.commentIdentityEnabled = v; }));
+					.onChange(v => {
+						this.config.commentIdentityEnabled = v;
+						if (!v) this.config.commentingEnabled = false;
+						this.renderStep();
+					}));
+
+			if (this.config.commentIdentityEnabled) {
+				new Setting(container)
+					.setName('Deploy commenting backend')
+					.setDesc('Self-hosted comments (DynamoDB + S3) using this pool for sign-in. Reads are public; only signed-in users can write.')
+					.addToggle(toggle => toggle
+						.setValue(this.config.commentingEnabled || false)
+						.onChange(v => { this.config.commentingEnabled = v; }));
+			}
 
 			new Setting(container)
 				.setName('Google Client ID')
@@ -674,6 +690,11 @@ export class DeploymentWizardModal extends Modal {
 				await this.runCognitoPhase2(container, eventLog);
 				if (this.aborted) return;
 
+				// Optionally deploy the comment backend, then re-update the full stack
+				// to attach the /comments/* + /api/comments origins.
+				await this.runCommentDeploy(container, eventLog);
+				if (this.aborted) return;
+
 				this.step = 6;
 				this.renderStep();
 			} else {
@@ -710,6 +731,64 @@ export class DeploymentWizardModal extends Modal {
 			(event) => this.appendEvent(eventLog, event),
 			'us-east-1',
 		);
+	}
+
+	/**
+	 * Deploy the self-hosted comment backend (when enabled), then re-update the
+	 * full stack to attach the comment CloudFront origins. Requires the Cognito
+	 * outputs (for the authorizer) and the full-stack outputs (for the bucket's
+	 * cross-stack read grant), so it runs after both have deployed.
+	 */
+	private async runCommentDeploy(container: HTMLElement, eventLog: HTMLElement): Promise<void> {
+		if (!this.config.commentingEnabled || !this.config.commentIdentityEnabled) return;
+		if (!this.cognitoOutputs || !this.stackOutputs) return;
+
+		container.createEl('p', {
+			text: 'Deploying the comment backend (DynamoDB, write API, re-export)...',
+			cls: 'cpn-wizard-description',
+		});
+
+		// Source the authorizer config from the auth pool, and the bucket grant
+		// identifiers from the just-deployed site distribution.
+		this.config.commentJwksUri = this.cognitoOutputs.jwksUri;
+		this.config.commentTokenIssuer = this.cognitoOutputs.issuer;
+		this.config.commentUserPoolClientId = this.cognitoOutputs.userPoolClientId;
+		this.config.siteDistributionId = this.stackOutputs.distributionId;
+		this.config.siteOriginAccessIdentityId = this.stackOutputs.originAccessIdentityId || '';
+
+		const commentStackName = await this.cfManager.deployCommentStack(this.config as DeploymentConfig);
+		await this.updateInfraState({ status: 'comment-deploying' });
+
+		const status = await this.cfManager.pollStackUntilComplete(
+			commentStackName,
+			this.activeProfile,
+			(event) => this.appendEvent(eventLog, event),
+			this.config.region,
+		);
+		if (this.aborted) return;
+		if (status !== 'CREATE_COMPLETE') {
+			throw new Error(`Comment stack deployment failed: ${status}`);
+		}
+
+		const outputs = await this.cfManager.getCommentStackOutputs(commentStackName, this.activeProfile, this.config.region);
+		this.commentStackName = commentStackName;
+		this.commentOutputs = outputs;
+
+		// Re-update the full stack to carve in the comment origins/behaviors.
+		container.createEl('p', {
+			text: 'Attaching the comment routes to the site distribution...',
+			cls: 'cpn-wizard-description',
+		});
+		this.config.commentBucketDomainName = outputs.bucketDomainName;
+		this.config.commentApiDomainName = outputs.apiDomain;
+		await this.cfManager.updateFullStack(this.config as DeploymentConfig);
+		await this.cfManager.pollStackUntilComplete(
+			this.cfManager.getStackName(this.config.variantName || '', 'full'),
+			this.activeProfile,
+			(event) => this.appendEvent(eventLog, event),
+			this.config.region,
+		);
+		await this.updateInfraState({ status: 'comment-deployed' });
 	}
 
 	private renderStep6Complete(): void {
@@ -819,6 +898,7 @@ export class DeploymentWizardModal extends Modal {
 			originAccessMethod: this.config.originAccessMethod || 'oac',
 			authLambdaEdgeArn: this.config.authLambdaEdgeArn || undefined,
 			cognitoAuth: this.buildCognitoAuthState(),
+			comment: this.buildCommentState(),
 		};
 
 		// Persist author intent (re-shown when the wizard reopens); secret is never stored.
@@ -833,6 +913,10 @@ export class DeploymentWizardModal extends Modal {
 		} else {
 			profile.cognitoAuth = undefined;
 		}
+
+		profile.commenting = (this.config.commentingEnabled && this.commentOutputs)
+			? { enabled: true }
+			: undefined;
 
 		await this.plugin.saveSettings();
 		this.refreshSettingsTab();
@@ -862,6 +946,19 @@ export class DeploymentWizardModal extends Modal {
 			callbackApiDomain: this.cognitoOutputs.callbackApiDomain,
 			googleClientId: this.config.googleClientId || undefined,
 			authDomainPrefix: this.config.authDomainPrefix || undefined,
+		};
+	}
+
+	/** Comment-stack deployment bookkeeping, or undefined when not deployed this run. */
+	private buildCommentState() {
+		if (!this.config.commentingEnabled || !this.commentOutputs) return undefined;
+		return {
+			stackName: this.commentStackName,
+			enabled: true,
+			bucketName: this.commentOutputs.bucketName,
+			bucketDomainName: this.commentOutputs.bucketDomainName,
+			apiDomain: this.commentOutputs.apiDomain,
+			tableName: this.commentOutputs.tableName,
 		};
 	}
 

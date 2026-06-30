@@ -22,11 +22,13 @@ import type CommonplaceNotesPlugin from '../main';
 import {
 	CERTIFICATE_TEMPLATE,
 	COGNITO_AUTH_TEMPLATE,
+	COMMENT_STACK_TEMPLATE,
 	FULL_STACK_OAC_TEMPLATE,
 	FULL_STACK_OAI_TEMPLATE,
 } from './templates';
 import type {
 	CognitoAuthOutputs,
+	CommentStackOutputs,
 	DeploymentConfig,
 	DnsValidationRecord,
 	HostedZoneInfo,
@@ -172,6 +174,56 @@ export class CloudFormationManager {
 		];
 	}
 
+	/**
+	 * Deploy the self-hosted comment backend (DynamoDB + stream re-export + write
+	 * API with cookie authorizer). Deployed in the site region, after the full
+	 * stack (it needs the site distribution/OAI id for the comment bucket's
+	 * cross-stack read grant) and after the Cognito stack (it needs the pool's
+	 * JWKS/issuer/client id for the authorizer). CAPABILITY_IAM for Lambda roles.
+	 */
+	async deployCommentStack(config: DeploymentConfig): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'comment');
+		const client = this.getCloudFormationClient(config, config.region);
+
+		await client.send(new CreateStackCommand({
+			StackName: stackName,
+			TemplateBody: COMMENT_STACK_TEMPLATE,
+			Parameters: [
+				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
+				{ ParameterKey: 'JwksUri', ParameterValue: config.commentJwksUri || '' },
+				{ ParameterKey: 'TokenIssuer', ParameterValue: config.commentTokenIssuer || '' },
+				{ ParameterKey: 'UserPoolClientId', ParameterValue: config.commentUserPoolClientId || '' },
+				{ ParameterKey: 'OriginAccessMethod', ParameterValue: config.originAccessMethod },
+				{ ParameterKey: 'SiteDistributionId', ParameterValue: config.siteDistributionId || '' },
+				{ ParameterKey: 'SiteOriginAccessIdentityId', ParameterValue: config.siteOriginAccessIdentityId || '' },
+			],
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	async getCommentStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<CommentStackOutputs> {
+		const client = this.getCloudFormationClientForProfile(profile, region);
+		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		const stack = response.Stacks?.[0];
+		if (!stack) throw new Error(`Comment stack ${stackName} not found`);
+
+		const outputs = stack.Outputs || [];
+		const get = (key: string) => outputs.find(o => o.OutputKey === key)?.OutputValue || '';
+
+		return {
+			bucketName: get('CommentBucketName'),
+			bucketDomainName: get('CommentBucketDomainName'),
+			apiDomain: get('CommentApiDomain'),
+			tableName: get('CommentTableName'),
+		};
+	}
+
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'full');
 		const client = this.getCloudFormationClient(config, config.region);
@@ -241,6 +293,7 @@ export class CloudFormationManager {
 			distributionDomainName: get('DistributionDomainName'),
 			distributionId: get('DistributionID'),
 			siteUrl: get('SiteUrl'),
+			originAccessIdentityId: get('OriginAccessIdentityId') || undefined,
 		};
 	}
 

@@ -476,6 +476,11 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				if (!confirmed) return;
 
 				try {
+					if (state.comment?.stackName) {
+						// Delete the comment stack before the site stack so the
+						// /comments/* origin's referenced bucket policy is gone first.
+						await this.cloudFormationManager.deleteStack(state.comment.stackName, profile, state.region);
+					}
 					if (state.fullStackName) {
 						await this.cloudFormationManager.deleteStack(state.fullStackName, profile, state.region);
 					}
@@ -489,9 +494,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
 						// a "replicated function" error and need a retry later.
 						await this.cloudFormationManager.deleteStack(state.cognitoAuth.stackName, profile, 'us-east-1');
 					}
-					// Reset to defaults (no spread) — clears cognitoAuth and the persisted intent.
+					// Reset to defaults (no spread) — clears cognitoAuth/comment and the persisted intent.
 					profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
 					profile.cognitoAuth = undefined;
+					profile.commenting = undefined;
 					await this.saveSettings();
 					NoticeManager.showNotice(
 						state.cognitoAuth?.stackName
