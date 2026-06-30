@@ -20,6 +20,8 @@ export interface PublishingProfile {
 	homeNotePath: string;
     isPublic: boolean;
 	publishContentIndex: boolean;
+	/** Replace wikilink note-paths with UIDs in the published raw Markdown (e.g. `[[Note]]` → `[[UID|Note]]`) to scrub titles. Default true. */
+	obscureRawWikilinks?: boolean;
     publishMechanism: 'AWS' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;

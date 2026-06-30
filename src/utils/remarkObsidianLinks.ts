@@ -5,6 +5,7 @@ import { TFile } from 'obsidian';
 import { slug as githubSlug } from 'github-slugger';
 import { FrontmatterManager } from '../utils/frontmatter';
 import { formatNoteUrl, UrlScheme } from '../utils/urlScheme';
+import { parseWikilinkInner } from './wikilinkParse';
 
 export interface ResolvedNoteInfo {
 	uid: string;
@@ -44,10 +45,10 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					}
 
 					const [fullMatch, linkText] = match;
-					const [link, alias] = linkText.split('|');
-
-					// Parse out heading if it exists
-					const [notePath, heading] = link.split('#');
+					// Shared with the published-raw scrubber (rewriteRawWikilinks) so
+					// the two interpret `[[path#heading|alias]]` identically and never
+					// drift. Splits on the first '|' and first '#'.
+					const { notePath, heading, alias } = parseWikilinkInner(linkText);
 
 					const displayText = alias || heading || notePath;
 

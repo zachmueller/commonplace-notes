@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 		homeNotePath: '',
         isPublic: false,
 		publishContentIndex: true,
+		obscureRawWikilinks: true,
         publishMechanism: 'AWS',
         indicator: {
 			style: 'color',
@@ -538,6 +539,11 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					: 'sdk';
 				needsSave = true;
 			}
+
+			if (profile.obscureRawWikilinks === undefined) {
+				profile.obscureRawWikilinks = true;
+				needsSave = true;
+			}
 		}
 
 		if (needsSave) {
@@ -673,7 +679,13 @@ cpn.rebuildContentIndex();
 				const uid = this.frontmatterManager.getNoteUID(file);
 				if (uid) {
 					Logger.info(`Processing ${file.basename}`);
-					await this.contentIndexManager.queueUpdate(profile.id, uid, title, raw);
+					// Mirror the scrub applied in queueNote so the content index
+					// stays aligned with the published `raw` (default on).
+					const obscure = profile.obscureRawWikilinks ?? true;
+					const indexRaw = obscure
+						? await this.noteManager.rewriteRawWikilinks(raw, file, profile.id)
+						: raw;
+					await this.contentIndexManager.queueUpdate(profile.id, uid, title, indexRaw);
 				}
 			}
 		}

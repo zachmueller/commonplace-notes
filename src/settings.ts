@@ -346,6 +346,16 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(contentSection)
+			.setName('Obscure wikilinks in published Markdown')
+			.setDesc('Replace note paths in wikilinks with UIDs in the published raw Markdown (e.g. [[Note]] → [[UID|Note]]) to keep note titles private. Rendered HTML and search are unaffected. Turn off if your own tooling consumes the raw Markdown and needs literal titles.')
+			.addToggle(toggle => toggle
+				.setValue(profile.obscureRawWikilinks ?? true)
+				.onChange(async (value) => {
+					this.plugin.settings.publishingProfiles[index].obscureRawWikilinks = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(contentSection)
 			.setName('Excluded directories')
 			.setDesc('One directory per line (e.g., private/)')
 			.addTextArea(text => text
@@ -1132,6 +1142,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			homeNotePath: '',
 			isPublic: false,
 			publishContentIndex: true,
+			obscureRawWikilinks: true,
 			publishMechanism: 'AWS',
 			indicator: {
 				style: 'color',
