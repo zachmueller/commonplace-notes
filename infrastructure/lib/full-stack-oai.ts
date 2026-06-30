@@ -231,6 +231,11 @@ export class FullStackOai extends cdk.Stack {
 			description: 'CloudFront distribution ID',
 		});
 
+		new cdk.CfnOutput(this, 'OriginAccessIdentityId', {
+			value: oai.ref,
+			description: 'CloudFront Origin Access Identity ID (for granting the comment bucket)',
+		});
+
 		new cdk.CfnOutput(this, 'SiteUrl', {
 			value: cdk.Fn.conditionIf(
 				'HasCustomDomain',

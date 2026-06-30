@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { CertificateStack } from '../lib/certificate-stack';
 import { CognitoAuthStack } from '../lib/cognito-auth-stack';
+import { CommentStack } from '../lib/comment-stack';
 import { FullStackOac } from '../lib/full-stack-oac';
 import { FullStackOai } from '../lib/full-stack-oai';
 
@@ -19,6 +20,8 @@ new CognitoAuthStack(app, 'CpnCognitoAuthStack', {
 
 new FullStackOac(app, 'CpnFullStackOac');
 new FullStackOai(app, 'CpnFullStackOai');
+
+new CommentStack(app, 'CpnCommentStack');
 
 const assembly = app.synth();
 
@@ -84,6 +87,7 @@ const certTemplate = getTemplate('CpnCertificateStack');
 const cognitoTemplate = getTemplate('CpnCognitoAuthStack');
 const oacTemplate = getTemplate('CpnFullStackOac');
 const oaiTemplate = getTemplate('CpnFullStackOai');
+const commentTemplate = getTemplate('CpnCommentStack');
 
 const outputPath = path.resolve(__dirname, '../../src/infrastructure/templates.ts');
 
@@ -97,6 +101,8 @@ export const COGNITO_AUTH_TEMPLATE = ${JSON.stringify(cognitoTemplate)};
 export const FULL_STACK_OAC_TEMPLATE = ${JSON.stringify(oacTemplate)};
 
 export const FULL_STACK_OAI_TEMPLATE = ${JSON.stringify(oaiTemplate)};
+
+export const COMMENT_STACK_TEMPLATE = ${JSON.stringify(commentTemplate)};
 `;
 
 fs.writeFileSync(outputPath, output, 'utf-8');
@@ -105,3 +111,4 @@ console.log(`  Certificate template: ${(certTemplate.length / 1024).toFixed(1)} 
 console.log(`  Cognito auth template: ${(cognitoTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Full stack (OAC): ${(oacTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Full stack (OAI): ${(oaiTemplate.length / 1024).toFixed(1)} KB`);
+console.log(`  Comment stack: ${(commentTemplate.length / 1024).toFixed(1)} KB`);

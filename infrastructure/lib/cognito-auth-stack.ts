@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { readInlineLambda } from './inline-code';
+import { readInlineLambda, readInlineLambdaBundle } from './inline-code';
 
 /**
  * Built-in Cognito + Google identity sub-stack.
@@ -114,7 +114,10 @@ export class CognitoAuthStack extends cdk.Stack {
 		// then concatenated with the verbatim (comment-stripped) function body.
 		// The body contains no `${...}` or backticks after stripping, so it is
 		// safe to carry through Fn::Join without Sub-token collisions.
-		const edgeBody = readInlineLambda('auth-edge.js');
+		// Bundle: CFG (injected) + shared JWT verifier + edge handler. The shared
+		// verifier reads JWKS_URI/TOKEN_ISS/TOKEN_AUD, which auth-edge.js derives
+		// from CFG; ordering is CFG -> verifier -> handler.
+		const edgeBody = readInlineLambdaBundle('lib-jwt-verify.js', 'auth-edge.js');
 		const cfgLine = cdk.Fn.sub(
 			'const CFG = { domain: "${Domain}", clientId: "${ClientId}", region: "${Region}", userPoolId: "${PoolId}" };\n',
 			{
