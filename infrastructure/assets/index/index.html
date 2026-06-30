@@ -44,6 +44,18 @@
 	--callout-tip: 0, 191, 188;
 	--callout-caution: 213, 57, 132;
 	--callout-important: 120, 82, 238;
+	/* Full Obsidian palette (canonical types) */
+	--callout-note: 8, 109, 221;
+	--callout-abstract: 0, 191, 188;
+	--callout-info: 8, 109, 221;
+	--callout-todo: 8, 109, 221;
+	--callout-success: 8, 185, 78;
+	--callout-question: 236, 191, 0;
+	--callout-failure: 233, 49, 71;
+	--callout-danger: 233, 49, 71;
+	--callout-bug: 233, 49, 71;
+	--callout-example: 120, 82, 238;
+	--callout-quote: 158, 158, 158;
 	--callout-bg-opacity: 0.05;
 }
 
@@ -86,6 +98,18 @@
 		--callout-tip: 56, 229, 225;
 		--callout-caution: 255, 123, 183;
 		--callout-important: 163, 139, 255;
+		/* Full Obsidian palette (canonical types) - dark mode */
+		--callout-note: 88, 166, 255;
+		--callout-abstract: 56, 229, 225;
+		--callout-info: 88, 166, 255;
+		--callout-todo: 88, 166, 255;
+		--callout-success: 73, 204, 121;
+		--callout-question: 255, 213, 67;
+		--callout-failure: 255, 99, 120;
+		--callout-danger: 255, 99, 120;
+		--callout-bug: 255, 99, 120;
+		--callout-example: 163, 139, 255;
+		--callout-quote: 158, 158, 158;
 		--callout-bg-opacity: 0.1;
 	}
 }
@@ -128,6 +152,18 @@
 	--callout-tip: 56, 229, 225;
 	--callout-caution: 255, 123, 183;
 	--callout-important: 163, 139, 255;
+	/* Full Obsidian palette (canonical types) */
+	--callout-note: 88, 166, 255;
+	--callout-abstract: 56, 229, 225;
+	--callout-info: 88, 166, 255;
+	--callout-todo: 88, 166, 255;
+	--callout-success: 73, 204, 121;
+	--callout-question: 255, 213, 67;
+	--callout-failure: 255, 99, 120;
+	--callout-danger: 255, 99, 120;
+	--callout-bug: 255, 99, 120;
+	--callout-example: 163, 139, 255;
+	--callout-quote: 158, 158, 158;
 	--callout-bg-opacity: 0.1;
 }
 
@@ -169,6 +205,18 @@
 	--callout-tip: 0, 191, 188;
 	--callout-caution: 213, 57, 132;
 	--callout-important: 120, 82, 238;
+	/* Full Obsidian palette (canonical types) */
+	--callout-note: 8, 109, 221;
+	--callout-abstract: 0, 191, 188;
+	--callout-info: 8, 109, 221;
+	--callout-todo: 8, 109, 221;
+	--callout-success: 8, 185, 78;
+	--callout-question: 236, 191, 0;
+	--callout-failure: 233, 49, 71;
+	--callout-danger: 233, 49, 71;
+	--callout-bug: 233, 49, 71;
+	--callout-example: 120, 82, 238;
+	--callout-quote: 158, 158, 158;
 	--callout-bg-opacity: 0.05;
 }
 
@@ -215,41 +263,119 @@ pre code {
 	padding: 1em;
 }
 
-/* Callout blocks */
-div[data-callout-type] {
+/* Callout blocks. Static callouts render as <div>; foldable callouts
+   ([!type]- / [!type]+) render as native <details>/<summary> (no JS). */
+[data-callout-type] {
 	background-color: rgba(var(--callout-color), var(--callout-bg-opacity));
 	border-left: 5px solid rgb(var(--callout-color));
 	padding: 10px;
 	margin: 20px auto;
 }
 
-div[data-callout-type] div[data-callout-title] {
+[data-callout-type] [data-callout-title] {
 	color: rgb(var(--callout-color));
 	font-weight: bold;
 }
 
-div[data-callout-type] p {
+[data-callout-type] p {
 	margin: 0;
 }
 
-div[data-callout-type] {
+/* Foldable callout title: clickable, hide the native disclosure marker. */
+summary[data-callout-title] {
+	cursor: pointer;
+	list-style: none;
+}
+
+summary[data-callout-title]::-webkit-details-marker {
+	display: none;
+}
+
+[data-callout-type] {
 	--callout-color: var(--callout-default);
 }
 
-div[data-callout-type="warning"] {
+/* Backward-compat selectors (pre-expansion type names). */
+[data-callout-type="warning"] {
 	--callout-color: var(--callout-warning);
 }
 
-div[data-callout-type="tip"] {
+[data-callout-type="tip"] {
 	--callout-color: var(--callout-tip);
 }
 
-div[data-callout-type="caution"] {
+[data-callout-type="caution"] {
 	--callout-color: var(--callout-caution);
 }
 
-div[data-callout-type="important"] {
+[data-callout-type="important"] {
 	--callout-color: var(--callout-important);
+}
+
+/* Full Obsidian palette (canonical types). */
+[data-callout-type="note"] {
+	--callout-color: var(--callout-note);
+}
+
+[data-callout-type="abstract"] {
+	--callout-color: var(--callout-abstract);
+}
+
+[data-callout-type="info"] {
+	--callout-color: var(--callout-info);
+}
+
+[data-callout-type="todo"] {
+	--callout-color: var(--callout-todo);
+}
+
+[data-callout-type="success"] {
+	--callout-color: var(--callout-success);
+}
+
+[data-callout-type="question"] {
+	--callout-color: var(--callout-question);
+}
+
+[data-callout-type="failure"] {
+	--callout-color: var(--callout-failure);
+}
+
+[data-callout-type="danger"] {
+	--callout-color: var(--callout-danger);
+}
+
+[data-callout-type="bug"] {
+	--callout-color: var(--callout-bug);
+}
+
+[data-callout-type="example"] {
+	--callout-color: var(--callout-example);
+}
+
+[data-callout-type="quote"] {
+	--callout-color: var(--callout-quote);
+}
+
+/* Tables */
+.content table {
+	border-collapse: collapse;
+	margin: 1em 0;
+	display: block;        /* enables horizontal scroll when wider than the panel */
+	overflow-x: auto;
+	max-width: 100%;
+}
+
+.content th,
+.content td {
+	border: 1px solid var(--border-color);
+	padding: 6px 12px;
+}
+
+.content th {
+	background: var(--bg-secondary);
+	font-weight: 600;
+	text-align: left;
 }
 
 body {

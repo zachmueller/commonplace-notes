@@ -44,6 +44,7 @@ import remarkMath from 'remark-math';
 
 import remarkObsidianLinks from '../remarkObsidianLinks';
 import remarkLineNumbers from '../remarkLineNumbers';
+import remarkCallouts from '../remarkCallouts';
 import type { ParserLibs, Plugin } from './types';
 
 /**
@@ -80,6 +81,7 @@ export function buildParserLibs(): ParserLibs {
 		// CPN-internal factories
 		remarkObsidianLinks,
 		remarkLineNumbers,
+		remarkCallouts,
 		// optional plugins — light ones eager
 		rehypeRaw,
 		rehypeAutolinkHeadings,
