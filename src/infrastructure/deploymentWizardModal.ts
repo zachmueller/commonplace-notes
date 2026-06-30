@@ -3,10 +3,10 @@ import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
-import type { DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
+import type { CognitoAuthOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3 } from '../publish/awsUpload';
 
-type WizardStep = 1 | 2 | 3 | 4 | 5;
+type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
 
 export class DeploymentWizardModal extends Modal {
 	private plugin: CommonplaceNotesPlugin;
@@ -16,6 +16,8 @@ export class DeploymentWizardModal extends Modal {
 	private config: Partial<DeploymentConfig> = {};
 	private certArn: string = '';
 	private stackOutputs: StackOutputs | null = null;
+	private cognitoOutputs: CognitoAuthOutputs | null = null;
+	private cognitoStackName: string = '';
 	private aborted = false;
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin, cfManager: CloudFormationManager, profile: PublishingProfile) {
@@ -24,6 +26,7 @@ export class DeploymentWizardModal extends Modal {
 		this.cfManager = cfManager;
 		this.profile = profile;
 
+		const auth = profile.cognitoAuth;
 		this.config = {
 			profileId: profile.id,
 			region: profile.awsSettings?.region || 'us-east-1',
@@ -35,6 +38,13 @@ export class DeploymentWizardModal extends Modal {
 			hostedZoneId: '',
 			hostedZoneName: '',
 			originAccessMethod: 'oac',
+			// Built-in Cognito + Google auth — re-seed persisted author intent
+			// (the Google secret is never stored, so it is always re-entered).
+			cognitoAuthEnabled: auth?.enabled || false,
+			readGatingEnabled: auth?.readGating || false,
+			commentIdentityEnabled: auth?.commentIdentity || false,
+			googleClientId: auth?.googleClientId || '',
+			authDomainPrefix: auth?.authDomainPrefix || '',
 		};
 	}
 
@@ -56,14 +66,15 @@ export class DeploymentWizardModal extends Modal {
 			case 1: this.renderStep1Configure(); break;
 			case 2: this.renderStep2DeployCert(); break;
 			case 3: this.renderStep3DnsValidation(); break;
-			case 4: this.renderStep4DeployFull(); break;
-			case 5: this.renderStep5Complete(); break;
+			case 4: this.renderStep4DeployCognito(); break;
+			case 5: this.renderStep5DeployFull(); break;
+			case 6: this.renderStep6Complete(); break;
 		}
 	}
 
 	private renderStepIndicator(): void {
 		const indicator = this.contentEl.createDiv({ cls: 'cpn-wizard-step-indicator' });
-		const steps = ['Configure', 'Certificate', 'DNS', 'Deploy', 'Complete'];
+		const steps = ['Configure', 'Certificate', 'DNS', 'Auth', 'Deploy', 'Complete'];
 		for (let i = 0; i < steps.length; i++) {
 			const dot = indicator.createSpan({ cls: 'cpn-wizard-step-dot' });
 			if (i + 1 === this.step) dot.addClass('cpn-wizard-step-active');
@@ -142,19 +153,78 @@ export class DeploymentWizardModal extends Modal {
 			this.renderRoute53Section(route53Container);
 		}
 
-		new Setting(container)
-			.setName('Auth Lambda@Edge ARN')
-			.setDesc('Optional: ARN of a Lambda@Edge viewer-request function for authentication (e.g., from cpn-internal-auth)')
-			.addText(text => text
-				.setValue(this.config.authLambdaEdgeArn || '')
-				.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
-				.onChange(v => { this.config.authLambdaEdgeArn = v; }));
+		this.renderAuthSection(container);
 
 		new Setting(container)
 			.addButton(btn => btn
 				.setButtonText('Next')
 				.setCta()
 				.onClick(() => this.handleStep1Next()));
+	}
+
+	private renderAuthSection(container: HTMLElement): void {
+		container.createEl('h3', { text: 'Authentication' });
+
+		new Setting(container)
+			.setName('Enable built-in auth (Cognito + Google)')
+			.setDesc('Deploy a Cognito user pool with Google sign-in. Required for gating reads and for commenting.')
+			.addToggle(toggle => toggle
+				.setValue(this.config.cognitoAuthEnabled || false)
+				.onChange(v => {
+					this.config.cognitoAuthEnabled = v;
+					this.renderStep();
+				}));
+
+		if (this.config.cognitoAuthEnabled) {
+			new Setting(container)
+				.setName('Gate whole-site reads')
+				.setDesc('Require login to view any page. Off = open blog (anyone reads; sign-in only to comment).')
+				.addToggle(toggle => toggle
+					.setValue(this.config.readGatingEnabled || false)
+					.onChange(v => { this.config.readGatingEnabled = v; }));
+
+			new Setting(container)
+				.setName('Provide identity for comments')
+				.setDesc('Provision the pool so signed-in readers can write comments (see the commenting feature).')
+				.addToggle(toggle => toggle
+					.setValue(this.config.commentIdentityEnabled || false)
+					.onChange(v => { this.config.commentIdentityEnabled = v; }));
+
+			new Setting(container)
+				.setName('Google Client ID')
+				.setDesc('From Google Cloud Console → Credentials → OAuth 2.0 Client ID')
+				.addText(text => text
+					.setValue(this.config.googleClientId || '')
+					.setPlaceholder('xxxx.apps.googleusercontent.com')
+					.onChange(v => { this.config.googleClientId = v; }));
+
+			new Setting(container)
+				.setName('Google Client Secret')
+				.setDesc('Not stored — passed securely at deploy time and re-entered each time.')
+				.addText(text => {
+					text.inputEl.type = 'password';
+					text
+						.setValue(this.config.googleClientSecret || '')
+						.setPlaceholder('GOCSPX-...')
+						.onChange(v => { this.config.googleClientSecret = v; });
+				});
+
+			new Setting(container)
+				.setName('Auth domain prefix')
+				.setDesc('Hosted UI prefix → <prefix>.auth.<region>.amazoncognito.com (must be globally unique)')
+				.addText(text => text
+					.setValue(this.config.authDomainPrefix || '')
+					.setPlaceholder('my-notes-auth')
+					.onChange(v => { this.config.authDomainPrefix = v; }));
+		} else {
+			new Setting(container)
+				.setName('Auth Lambda@Edge ARN (advanced)')
+				.setDesc('Bring-your-own viewer-request function (e.g., from cpn-internal-auth). Ignored if built-in auth is enabled.')
+				.addText(text => text
+					.setValue(this.config.authLambdaEdgeArn || '')
+					.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
+					.onChange(v => { this.config.authLambdaEdgeArn = v; }));
+		}
 	}
 
 	private handleStep1Next(): void {
@@ -168,12 +238,32 @@ export class DeploymentWizardModal extends Modal {
 			return;
 		}
 
+		if (this.config.cognitoAuthEnabled) {
+			if (!this.config.googleClientId || !this.config.googleClientSecret || !this.config.authDomainPrefix) {
+				new Notice('Built-in auth requires Google Client ID, Client Secret, and an auth domain prefix.');
+				return;
+			}
+			if (!this.config.readGatingEnabled && !this.config.commentIdentityEnabled) {
+				new Notice('Enable read gating and/or comment identity, or turn off built-in auth.');
+				return;
+			}
+		}
+
 		if (this.config.customDomain) {
 			this.step = 2;
 		} else {
-			this.step = 4;
+			this.step = this.stepAfterDomainPath();
 		}
 		this.renderStep();
+	}
+
+	/**
+	 * The step to enter once the domain/certificate path is settled: the Cognito
+	 * auth step (4) when built-in auth is enabled, otherwise straight to the
+	 * full-stack deploy (5).
+	 */
+	private stepAfterDomainPath(): WizardStep {
+		return this.config.cognitoAuthEnabled ? 4 : 5;
 	}
 
 	private async renderRoute53Section(container: HTMLElement): Promise<void> {
@@ -400,7 +490,7 @@ export class DeploymentWizardModal extends Modal {
 				await this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn });
 
 				if (this.config.useRoute53) {
-					this.step = 4;
+					this.step = this.stepAfterDomainPath();
 				} else {
 					this.step = 3;
 				}
@@ -464,7 +554,7 @@ export class DeploymentWizardModal extends Modal {
 					.onClick(async () => {
 						const status = await this.cfManager.checkCertificateStatus(this.certArn, this.activeProfile);
 						if (status === 'ISSUED') {
-							this.step = 4;
+							this.step = this.stepAfterDomainPath();
 							this.renderStep();
 						} else {
 							statusEl.setText(`Certificate status: ${status}. Waiting for validation...`);
@@ -475,7 +565,70 @@ export class DeploymentWizardModal extends Modal {
 		}
 	}
 
-	private async renderStep4DeployFull(): Promise<void> {
+	/**
+	 * Phase 1 of the two-phase Cognito deploy. Deploys the auth sub-stack
+	 * (us-east-1) with a placeholder callback URL for default-domain sites, or
+	 * the real callback URL up front for custom-domain sites, then captures its
+	 * outputs. When read gating is on, the captured edge-fn versioned ARN is fed
+	 * into the full-stack deploy via config.authLambdaEdgeArn. Phase 2 (callback
+	 * URL fix-up) runs after the full stack deploys — see runCognitoPhase2().
+	 */
+	private async renderStep4DeployCognito(): Promise<void> {
+		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
+		container.createEl('h2', { text: 'Deploy Authentication' });
+		container.createEl('p', {
+			text: 'Deploying the Cognito user pool, Google sign-in, and viewer-request function in us-east-1...',
+			cls: 'cpn-wizard-description',
+		});
+
+		const eventLog = container.createDiv({ cls: 'cpn-wizard-event-log' });
+
+		try {
+			// Custom-domain sites know their callback URL up front; default-domain
+			// sites use a placeholder now and get the real URL in phase 2.
+			if (this.config.customDomain) {
+				this.config.callbackUrl = `https://${this.config.customDomain}/auth/callback`;
+			} else {
+				this.config.callbackUrl = undefined; // template default placeholder
+			}
+
+			const stackName = await this.cfManager.deployCognitoAuthStack(this.config as DeploymentConfig);
+			await this.updateInfraState({ status: 'cognito-deploying' });
+
+			const finalStatus = await this.cfManager.pollStackUntilComplete(
+				stackName,
+				this.activeProfile,
+				(event) => this.appendEvent(eventLog, event),
+				'us-east-1',
+			);
+
+			if (this.aborted) return;
+
+			if (finalStatus === 'CREATE_COMPLETE') {
+				const outputs = await this.cfManager.getCognitoAuthOutputs(stackName, this.activeProfile);
+				this.cognitoOutputs = outputs;
+				this.cognitoStackName = stackName;
+
+				// Feed the edge-fn ARN into the full-stack deploy only when the
+				// author chose whole-site read gating; open-blog mode leaves it ''.
+				if (this.config.readGatingEnabled) {
+					this.config.authLambdaEdgeArn = outputs.edgeFunctionVersionArn;
+				}
+
+				await this.updateInfraState({ status: 'cognito-deployed' });
+				this.step = 5;
+				this.renderStep();
+			} else {
+				await this.updateInfraState({ status: 'failed' });
+				this.showError(container, `Cognito auth stack deployment failed: ${finalStatus}`);
+			}
+		} catch (err: any) {
+			await this.updateInfraState({ status: 'failed' });
+			this.showError(container, `Error deploying authentication: ${err.message}`);
+		}
+	}
+
+	private async renderStep5DeployFull(): Promise<void> {
 		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
 		container.createEl('h2', { text: 'Deploy Infrastructure' });
 		container.createEl('p', {
@@ -508,7 +661,13 @@ export class DeploymentWizardModal extends Modal {
 			if (finalStatus === 'CREATE_COMPLETE') {
 				this.stackOutputs = await this.cfManager.getStackOutputs(stackName, this.activeProfile, this.config.region);
 				await this.updateInfraState({ status: 'deployed', lastDeployTimestamp: Date.now() });
-				this.step = 5;
+
+				// Phase 2: point the Cognito app client's callback URL at the now-known
+				// site domain. Skipped for custom-domain sites (already correct in phase 1).
+				await this.runCognitoPhase2(container, eventLog);
+				if (this.aborted) return;
+
+				this.step = 6;
 				this.renderStep();
 			} else {
 				await this.updateInfraState({ status: 'failed' });
@@ -520,7 +679,33 @@ export class DeploymentWizardModal extends Modal {
 		}
 	}
 
-	private renderStep5Complete(): void {
+	/**
+	 * Phase 2 of the two-phase Cognito deploy: for default-CloudFront-domain
+	 * sites, update the auth sub-stack so the app client's callback URL matches
+	 * the real distribution domain. A pure parameter update. No-op when built-in
+	 * auth is off or the site has a custom domain (callback was correct already).
+	 */
+	private async runCognitoPhase2(container: HTMLElement, eventLog: HTMLElement): Promise<void> {
+		if (!this.config.cognitoAuthEnabled || !this.cognitoStackName) return;
+		if (this.config.customDomain) return; // callback URL already correct
+		if (!this.stackOutputs?.distributionDomainName) return;
+
+		container.createEl('p', {
+			text: 'Updating Cognito callback URL to the deployed site domain...',
+			cls: 'cpn-wizard-description',
+		});
+
+		this.config.callbackUrl = `https://${this.stackOutputs.distributionDomainName}/auth/callback`;
+		await this.cfManager.updateCognitoAuthStack(this.config as DeploymentConfig);
+		await this.cfManager.pollStackUntilComplete(
+			this.cognitoStackName,
+			this.activeProfile,
+			(event) => this.appendEvent(eventLog, event),
+			'us-east-1',
+		);
+	}
+
+	private renderStep6Complete(): void {
 		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
 		container.createEl('h2', { text: 'Deployment Complete' });
 		container.createEl('p', {
@@ -606,6 +791,10 @@ export class DeploymentWizardModal extends Modal {
 			// Non-fatal — account ID is informational
 		}
 
+		// NOTE: this literal does NOT spread the existing infrastructureState, so
+		// every field set during the wizard must be reconstructed here or it is
+		// lost. Keep this in sync with updateInfraState()'s spread. The Cognito
+		// state is grouped into one nested object to make that one field, not many.
 		profile.infrastructureState = {
 			status: 'deployed',
 			fullStackName: this.cfManager.getStackName(this.config.variantName || '', 'full'),
@@ -622,7 +811,21 @@ export class DeploymentWizardModal extends Modal {
 			variantName: this.config.variantName,
 			originAccessMethod: this.config.originAccessMethod || 'oac',
 			authLambdaEdgeArn: this.config.authLambdaEdgeArn || undefined,
+			cognitoAuth: this.buildCognitoAuthState(),
 		};
+
+		// Persist author intent (re-shown when the wizard reopens); secret is never stored.
+		if (this.config.cognitoAuthEnabled) {
+			profile.cognitoAuth = {
+				enabled: true,
+				readGating: this.config.readGatingEnabled || false,
+				commentIdentity: this.config.commentIdentityEnabled || false,
+				googleClientId: this.config.googleClientId || undefined,
+				authDomainPrefix: this.config.authDomainPrefix || undefined,
+			};
+		} else {
+			profile.cognitoAuth = undefined;
+		}
 
 		await this.plugin.saveSettings();
 		this.refreshSettingsTab();
@@ -630,6 +833,29 @@ export class DeploymentWizardModal extends Modal {
 
 		// Push initial site assets so the deployed site has content immediately
 		await pushSiteAssetsToS3(this.plugin, profile.id);
+	}
+
+	/**
+	 * Assemble the persisted Cognito deployment bookkeeping from captured stack
+	 * outputs. Returns undefined when built-in auth was not deployed in this run.
+	 */
+	private buildCognitoAuthState() {
+		if (!this.config.cognitoAuthEnabled || !this.cognitoOutputs) return undefined;
+		return {
+			stackName: this.cognitoStackName,
+			enabled: true,
+			readGating: this.config.readGatingEnabled || false,
+			commentIdentity: this.config.commentIdentityEnabled || false,
+			userPoolId: this.cognitoOutputs.userPoolId,
+			userPoolClientId: this.cognitoOutputs.userPoolClientId,
+			hostedUiDomain: this.cognitoOutputs.hostedUiDomain,
+			jwksUri: this.cognitoOutputs.jwksUri,
+			issuer: this.cognitoOutputs.issuer,
+			edgeFunctionVersionArn: this.cognitoOutputs.edgeFunctionVersionArn,
+			callbackApiDomain: this.cognitoOutputs.callbackApiDomain,
+			googleClientId: this.config.googleClientId || undefined,
+			authDomainPrefix: this.config.authDomainPrefix || undefined,
+		};
 	}
 
 	private refreshSettingsTab(): void {

@@ -482,9 +482,22 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					if (state.certStackName) {
 						await this.cloudFormationManager.deleteStack(state.certStackName, profile, 'us-east-1');
 					}
+					if (state.cognitoAuth?.stackName) {
+						// The Cognito stack owns a Lambda@Edge function whose replicas
+						// are removed asynchronously by CloudFront only after the
+						// distribution is gone — its first delete attempt may fail with
+						// a "replicated function" error and need a retry later.
+						await this.cloudFormationManager.deleteStack(state.cognitoAuth.stackName, profile, 'us-east-1');
+					}
+					// Reset to defaults (no spread) — clears cognitoAuth and the persisted intent.
 					profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
+					profile.cognitoAuth = undefined;
 					await this.saveSettings();
-					NoticeManager.showNotice('Infrastructure destruction initiated.');
+					NoticeManager.showNotice(
+						state.cognitoAuth?.stackName
+							? 'Infrastructure destruction initiated. The auth stack may need a retry once the CloudFront edge replicas are removed.'
+							: 'Infrastructure destruction initiated.',
+					);
 				} catch (err: any) {
 					NoticeManager.showNotice(`Error: ${err.message}`);
 				}

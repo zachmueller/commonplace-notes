@@ -21,10 +21,12 @@ import type { PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
 import {
 	CERTIFICATE_TEMPLATE,
+	COGNITO_AUTH_TEMPLATE,
 	FULL_STACK_OAC_TEMPLATE,
 	FULL_STACK_OAI_TEMPLATE,
 } from './templates';
 import type {
+	CognitoAuthOutputs,
 	DeploymentConfig,
 	DnsValidationRecord,
 	HostedZoneInfo,
@@ -73,6 +75,85 @@ export class CloudFormationManager {
 		}));
 
 		return stackName;
+	}
+
+	private buildCognitoAuthParameters(config: DeploymentConfig) {
+		return [
+			{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
+			{ ParameterKey: 'GoogleClientId', ParameterValue: config.googleClientId || '' },
+			{ ParameterKey: 'GoogleClientSecret', ParameterValue: config.googleClientSecret || '' },
+			{ ParameterKey: 'CallbackURL', ParameterValue: config.callbackUrl || 'https://placeholder.invalid/auth/callback' },
+			{ ParameterKey: 'AuthDomainPrefix', ParameterValue: config.authDomainPrefix || '' },
+		];
+	}
+
+	/**
+	 * Phase 1 of the two-phase Cognito deploy: create the auth sub-stack (user
+	 * pool + Google IdP + Hosted UI + app client + viewer-request edge fn).
+	 * Pinned to us-east-1 because it owns a Lambda@Edge function; needs
+	 * CAPABILITY_IAM because it creates the Lambda execution roles.
+	 */
+	async deployCognitoAuthStack(config: DeploymentConfig): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'cognito');
+		const client = this.getCloudFormationClient(config, 'us-east-1');
+
+		await client.send(new CreateStackCommand({
+			StackName: stackName,
+			TemplateBody: COGNITO_AUTH_TEMPLATE,
+			Parameters: this.buildCognitoAuthParameters(config),
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	/**
+	 * Phase 2 of the two-phase Cognito deploy: re-pass all parameters with the
+	 * real CallbackURL now that the site distribution domain is known. A pure
+	 * parameter update — the UserPoolClient's CallbackURLs allow-list updates in
+	 * place, no resource replacement. Skipped for custom-domain sites where the
+	 * callback URL was already correct in phase 1.
+	 */
+	async updateCognitoAuthStack(config: DeploymentConfig): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'cognito');
+		const client = this.getCloudFormationClient(config, 'us-east-1');
+
+		await client.send(new UpdateStackCommand({
+			StackName: stackName,
+			TemplateBody: COGNITO_AUTH_TEMPLATE,
+			Parameters: this.buildCognitoAuthParameters(config),
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	async getCognitoAuthOutputs(stackName: string, profile: PublishingProfile): Promise<CognitoAuthOutputs> {
+		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		const stack = response.Stacks?.[0];
+		if (!stack) throw new Error(`Cognito auth stack ${stackName} not found`);
+
+		const outputs = stack.Outputs || [];
+		const get = (key: string) => outputs.find(o => o.OutputKey === key)?.OutputValue || '';
+
+		return {
+			edgeFunctionVersionArn: get('EdgeFunctionVersionArn'),
+			userPoolId: get('UserPoolId'),
+			userPoolClientId: get('UserPoolClientId'),
+			hostedUiDomain: get('HostedUiDomain'),
+			jwksUri: get('JwksUri'),
+			issuer: get('Issuer'),
+			callbackApiDomain: get('CallbackApiDomain'),
+		};
 	}
 
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
@@ -291,9 +372,14 @@ export class CloudFormationManager {
 		};
 	}
 
-	getStackName(variantName: string, type: 'cert' | 'full'): string {
+	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'comment'): string {
 		const suffix = variantName || 'default';
-		return type === 'cert' ? `cpn-cert-${suffix}` : `cpn-${suffix}`;
+		switch (type) {
+			case 'cert': return `cpn-cert-${suffix}`;
+			case 'cognito': return `cpn-cognito-${suffix}`;
+			case 'comment': return `cpn-comment-${suffix}`;
+			default: return `cpn-${suffix}`;
+		}
 	}
 
 	dispose(): void {

@@ -26,6 +26,25 @@ export interface PublishingProfile {
 	infrastructureState?: InfrastructureState;
 	indicator: PublishingIndicator;
 	siteCustomization?: SiteCustomization;
+	/** Author intent for built-in Cognito + Google auth (persisted; secret is never stored). */
+	cognitoAuth?: CognitoAuthProfile;
+}
+
+/**
+ * Persisted author intent for built-in Cognito + Google auth on a public site.
+ * Distinct from the deployment bookkeeping in InfrastructureState.cognitoAuth —
+ * this is what the author configured, re-shown when the wizard reopens. The
+ * Google client secret is deliberately absent: it is captured transiently in
+ * the wizard and passed as a NoEcho CloudFormation parameter, never stored.
+ */
+export interface CognitoAuthProfile {
+	enabled: boolean;
+	/** Whole-site read gating (attach the edge fn to the site's default behavior). */
+	readGating: boolean;
+	/** Provision identities for the comment write path (open-blog mode if readGating is off). */
+	commentIdentity: boolean;
+	googleClientId?: string;
+	authDomainPrefix?: string;
 }
 
 export interface AWSProfileSettings {
