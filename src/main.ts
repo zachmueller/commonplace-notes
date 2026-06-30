@@ -494,13 +494,18 @@ export default class CommonplaceNotesPlugin extends Plugin {
 						// a "replicated function" error and need a retry later.
 						await this.cloudFormationManager.deleteStack(state.cognitoAuth.stackName, profile, 'us-east-1');
 					}
-					// Reset to defaults (no spread) — clears cognitoAuth/comment and the persisted intent.
+					if (state.passwordAuth?.stackName) {
+						// Same Lambda@Edge replica-removal caveat as the Cognito stack.
+						await this.cloudFormationManager.deleteStack(state.passwordAuth.stackName, profile, 'us-east-1');
+					}
+					// Reset to defaults (no spread) — clears cognitoAuth/passwordAuth/comment and intent.
 					profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
+					profile.readGate = undefined;
 					profile.cognitoAuth = undefined;
 					profile.commenting = undefined;
 					await this.saveSettings();
 					NoticeManager.showNotice(
-						state.cognitoAuth?.stackName
+						(state.cognitoAuth?.stackName || state.passwordAuth?.stackName)
 							? 'Infrastructure destruction initiated. The auth stack may need a retry once the CloudFront edge replicas are removed.'
 							: 'Infrastructure destruction initiated.',
 					);

@@ -8,6 +8,15 @@ import { pushSiteAssetsToS3 } from '../publish/awsUpload';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
 
+/** Lowercase hex sha256 via Web Crypto (available in Obsidian's Electron renderer). */
+async function sha256Hex(input: string): Promise<string> {
+	const data = new TextEncoder().encode(input);
+	const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
 export class DeploymentWizardModal extends Modal {
 	private plugin: CommonplaceNotesPlugin;
 	private cfManager: CloudFormationManager;
@@ -20,6 +29,8 @@ export class DeploymentWizardModal extends Modal {
 	private cognitoStackName: string = '';
 	private commentOutputs: CommentStackOutputs | null = null;
 	private commentStackName: string = '';
+	private passwordStackName: string = '';
+	private passwordEdgeArn: string = '';
 	private aborted = false;
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin, cfManager: CloudFormationManager, profile: PublishingProfile) {
@@ -40,10 +51,11 @@ export class DeploymentWizardModal extends Modal {
 			hostedZoneId: '',
 			hostedZoneName: '',
 			originAccessMethod: 'oac',
-			// Built-in Cognito + Google auth — re-seed persisted author intent
-			// (the Google secret is never stored, so it is always re-entered).
-			cognitoAuthEnabled: auth?.enabled || false,
-			readGatingEnabled: auth?.readGating || false,
+			// Read-gate mode + built-in Cognito + Google auth — re-seed persisted
+			// author intent (the Google secret + password plaintext are never
+			// stored, so they are always re-entered; the password hash is reused).
+			readGateMode: profile.readGate?.mode || (auth?.enabled ? 'cognito' : 'none'),
+			passwordHash: profile.readGate?.passwordHash,
 			commentIdentityEnabled: auth?.commentIdentity || false,
 			googleClientId: auth?.googleClientId || '',
 			authDomainPrefix: auth?.authDomainPrefix || '',
@@ -165,47 +177,76 @@ export class DeploymentWizardModal extends Modal {
 				.onClick(() => this.handleStep1Next()));
 	}
 
+	/** The Cognito pool is provisioned whenever reads are Cognito-gated OR comments need identity. */
+	private cognitoPoolNeeded(): boolean {
+		return this.config.readGateMode === 'cognito' || !!this.config.commentIdentityEnabled;
+	}
+
 	private renderAuthSection(container: HTMLElement): void {
 		container.createEl('h3', { text: 'Authentication' });
 
+		// Read access is one axis: who can READ the site. Independent of comments.
 		new Setting(container)
-			.setName('Enable built-in auth (Cognito + Google)')
-			.setDesc('Deploy a Cognito user pool with Google sign-in. Required for gating reads and for commenting.')
-			.addToggle(toggle => toggle
-				.setValue(this.config.cognitoAuthEnabled || false)
+			.setName('Read access')
+			.setDesc('Who can read the published site. Comment write-access is configured separately below.')
+			.addDropdown(dd => dd
+				.addOption('none', 'Public (anyone can read)')
+				.addOption('cognito', 'Login required (Cognito + Google)')
+				.addOption('password', 'Password (anyone with the password)')
+				.addOption('byo', 'Custom Lambda@Edge ARN (advanced)')
+				.setValue(this.config.readGateMode || 'none')
 				.onChange(v => {
-					this.config.cognitoAuthEnabled = v;
+					this.config.readGateMode = v as DeploymentConfig['readGateMode'];
 					this.renderStep();
 				}));
 
-		if (this.config.cognitoAuthEnabled) {
+		if (this.config.readGateMode === 'password') {
 			new Setting(container)
-				.setName('Gate whole-site reads')
-				.setDesc('Require login to view any page. Off = open blog (anyone reads; sign-in only to comment).')
-				.addToggle(toggle => toggle
-					.setValue(this.config.readGatingEnabled || false)
-					.onChange(v => { this.config.readGatingEnabled = v; }));
+				.setName('Site password')
+				.setDesc('Shared read password. Hashed (sha256) before deploy — the plaintext never leaves the plugin. Re-enter to change it.')
+				.addText(text => {
+					text.inputEl.type = 'password';
+					text
+						.setValue(this.config.passwordValue || '')
+						.setPlaceholder(this.config.passwordHash ? '•••••••• (unchanged)' : 'choose a password')
+						.onChange(v => { this.config.passwordValue = v; });
+				});
+		}
 
+		if (this.config.readGateMode === 'byo') {
 			new Setting(container)
-				.setName('Provide identity for comments')
-				.setDesc('Provision the pool so signed-in readers can write comments (see the commenting feature).')
+				.setName('Auth Lambda@Edge ARN (advanced)')
+				.setDesc('Bring-your-own viewer-request function (e.g., from cpn-internal-auth). Must be a versioned ARN in us-east-1.')
+				.addText(text => text
+					.setValue(this.config.authLambdaEdgeArn || '')
+					.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
+					.onChange(v => { this.config.authLambdaEdgeArn = v; }));
+		}
+
+		// Comment identity is the other axis: who can WRITE comments (Cognito sign-in).
+		new Setting(container)
+			.setName('Enable commenting (Cognito + Google sign-in)')
+			.setDesc('Provision a Cognito pool so signed-in readers can write comments. Works with any read-access mode (e.g. password reads + sign-in to comment).')
+			.addToggle(toggle => toggle
+				.setValue(this.config.commentIdentityEnabled || false)
+				.onChange(v => {
+					this.config.commentIdentityEnabled = v;
+					if (!v) this.config.commentingEnabled = false;
+					this.renderStep();
+				}));
+
+		if (this.config.commentIdentityEnabled) {
+			new Setting(container)
+				.setName('Deploy commenting backend')
+				.setDesc('Self-hosted comments (DynamoDB + S3). Comment reads inherit the read-access mode; only signed-in users can write.')
 				.addToggle(toggle => toggle
-					.setValue(this.config.commentIdentityEnabled || false)
-					.onChange(v => {
-						this.config.commentIdentityEnabled = v;
-						if (!v) this.config.commentingEnabled = false;
-						this.renderStep();
-					}));
+					.setValue(this.config.commentingEnabled || false)
+					.onChange(v => { this.config.commentingEnabled = v; }));
+		}
 
-			if (this.config.commentIdentityEnabled) {
-				new Setting(container)
-					.setName('Deploy commenting backend')
-					.setDesc('Self-hosted comments (DynamoDB + S3) using this pool for sign-in. Reads are public; only signed-in users can write.')
-					.addToggle(toggle => toggle
-						.setValue(this.config.commentingEnabled || false)
-						.onChange(v => { this.config.commentingEnabled = v; }));
-			}
-
+		// Cognito credentials are needed whenever the pool is provisioned (for
+		// read gating, for comment identity, or both).
+		if (this.cognitoPoolNeeded()) {
 			new Setting(container)
 				.setName('Google Client ID')
 				.setDesc('From Google Cloud Console → Credentials → OAuth 2.0 Client ID')
@@ -232,14 +273,6 @@ export class DeploymentWizardModal extends Modal {
 					.setValue(this.config.authDomainPrefix || '')
 					.setPlaceholder('my-notes-auth')
 					.onChange(v => { this.config.authDomainPrefix = v; }));
-		} else {
-			new Setting(container)
-				.setName('Auth Lambda@Edge ARN (advanced)')
-				.setDesc('Bring-your-own viewer-request function (e.g., from cpn-internal-auth). Ignored if built-in auth is enabled.')
-				.addText(text => text
-					.setValue(this.config.authLambdaEdgeArn || '')
-					.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
-					.onChange(v => { this.config.authLambdaEdgeArn = v; }));
 		}
 	}
 
@@ -254,15 +287,24 @@ export class DeploymentWizardModal extends Modal {
 			return;
 		}
 
-		if (this.config.cognitoAuthEnabled) {
+		if (this.cognitoPoolNeeded()) {
 			if (!this.config.googleClientId || !this.config.googleClientSecret || !this.config.authDomainPrefix) {
-				new Notice('Built-in auth requires Google Client ID, Client Secret, and an auth domain prefix.');
+				new Notice('Cognito auth requires Google Client ID, Client Secret, and an auth domain prefix.');
 				return;
 			}
-			if (!this.config.readGatingEnabled && !this.config.commentIdentityEnabled) {
-				new Notice('Enable read gating and/or comment identity, or turn off built-in auth.');
+		}
+
+		if (this.config.readGateMode === 'password') {
+			// Need a password unless one was already deployed (hash persisted) and left unchanged.
+			if (!this.config.passwordValue && !this.config.passwordHash) {
+				new Notice('Enter a site password, or choose a different read-access mode.');
 				return;
 			}
+		}
+
+		if (this.config.readGateMode === 'byo' && !this.config.authLambdaEdgeArn) {
+			new Notice('Enter the Lambda@Edge ARN, or choose a different read-access mode.');
+			return;
 		}
 
 		if (this.config.customDomain) {
@@ -273,13 +315,20 @@ export class DeploymentWizardModal extends Modal {
 		this.renderStep();
 	}
 
+	/** Whether the Auth deploy step (4) must run — any sub-stack or ARN wiring is needed. */
+	private needsAuthStep(): boolean {
+		return this.cognitoPoolNeeded()
+			|| this.config.readGateMode === 'password'
+			|| this.config.readGateMode === 'byo';
+	}
+
 	/**
-	 * The step to enter once the domain/certificate path is settled: the Cognito
-	 * auth step (4) when built-in auth is enabled, otherwise straight to the
-	 * full-stack deploy (5).
+	 * The step to enter once the domain/certificate path is settled: the Auth
+	 * deploy step (4) when any read-gate sub-stack / pool is needed, otherwise
+	 * straight to the full-stack deploy (5).
 	 */
 	private stepAfterDomainPath(): WizardStep {
-		return this.config.cognitoAuthEnabled ? 4 : 5;
+		return this.needsAuthStep() ? 4 : 5;
 	}
 
 	private async renderRoute53Section(container: HTMLElement): Promise<void> {
@@ -582,65 +631,96 @@ export class DeploymentWizardModal extends Modal {
 	}
 
 	/**
-	 * Phase 1 of the two-phase Cognito deploy. Deploys the auth sub-stack
-	 * (us-east-1) with a placeholder callback URL for default-domain sites, or
-	 * the real callback URL up front for custom-domain sites, then captures its
-	 * outputs. When read gating is on, the captured edge-fn versioned ARN is fed
-	 * into the full-stack deploy via config.authLambdaEdgeArn. Phase 2 (callback
-	 * URL fix-up) runs after the full stack deploys — see runCognitoPhase2().
+	 * Auth deploy step: deploy whichever read-gate / identity sub-stacks the
+	 * chosen configuration needs (us-east-1), then resolve the read-gate ARN that
+	 * feeds the full-stack `AuthLambdaEdgeArn`:
+	 *   - password mode  -> deploy the password (Basic Auth) sub-stack; ARN = its edge fn
+	 *   - cognito mode    -> ARN = the Cognito edge fn
+	 *   - byo mode        -> ARN = the user-supplied ARN (no sub-stack)
+	 *   - none            -> ARN = '' (public reads)
+	 * The Cognito pool is deployed when read gating is cognito OR comments need
+	 * identity. Its phase-2 callback fix-up still runs after the full stack.
 	 */
 	private async renderStep4DeployCognito(): Promise<void> {
 		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
 		container.createEl('h2', { text: 'Deploy Authentication' });
-		container.createEl('p', {
-			text: 'Deploying the Cognito user pool, Google sign-in, and viewer-request function in us-east-1...',
-			cls: 'cpn-wizard-description',
-		});
-
 		const eventLog = container.createDiv({ cls: 'cpn-wizard-event-log' });
 
 		try {
-			// Custom-domain sites know their callback URL up front; default-domain
-			// sites use a placeholder now and get the real URL in phase 2.
-			if (this.config.customDomain) {
-				this.config.callbackUrl = `https://${this.config.customDomain}/auth/callback`;
-			} else {
-				this.config.callbackUrl = undefined; // template default placeholder
-			}
-
-			const stackName = await this.cfManager.deployCognitoAuthStack(this.config as DeploymentConfig);
-			await this.updateInfraState({ status: 'cognito-deploying' });
-
-			const finalStatus = await this.cfManager.pollStackUntilComplete(
-				stackName,
-				this.activeProfile,
-				(event) => this.appendEvent(eventLog, event),
-				'us-east-1',
-			);
-
-			if (this.aborted) return;
-
-			if (finalStatus === 'CREATE_COMPLETE') {
-				const outputs = await this.cfManager.getCognitoAuthOutputs(stackName, this.activeProfile);
-				this.cognitoOutputs = outputs;
-				this.cognitoStackName = stackName;
-
-				// Feed the edge-fn ARN into the full-stack deploy only when the
-				// author chose whole-site read gating; open-blog mode leaves it ''.
-				if (this.config.readGatingEnabled) {
-					this.config.authLambdaEdgeArn = outputs.edgeFunctionVersionArn;
+			// 1) Password read-gate sub-stack (independent of the pool).
+			if (this.config.readGateMode === 'password') {
+				container.createEl('p', {
+					text: 'Deploying the password (Basic Auth) viewer-request function in us-east-1...',
+					cls: 'cpn-wizard-description',
+				});
+				// Hash the plaintext now (never stored/transmitted in the clear). Reuse
+				// the existing hash on redeploy when the field was left blank.
+				if (this.config.passwordValue) {
+					this.config.passwordHash = await sha256Hex(this.config.passwordValue);
 				}
-
-				await this.updateInfraState({ status: 'cognito-deployed' });
-				this.step = 5;
-				this.renderStep();
-			} else {
-				await this.updateInfraState({ status: 'failed' });
-				this.showError(container, `Cognito auth stack deployment failed: ${finalStatus}`);
+				const pwStack = await this.cfManager.deployPasswordAuthStack(this.config as DeploymentConfig);
+				await this.updateInfraState({ status: 'password-deploying' });
+				const pwStatus = await this.cfManager.pollStackUntilComplete(
+					pwStack, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',
+				);
+				if (this.aborted) return;
+				if (pwStatus !== 'CREATE_COMPLETE') {
+					await this.updateInfraState({ status: 'failed' });
+					this.showError(container, `Password auth stack deployment failed: ${pwStatus}`);
+					return;
+				}
+				const pwOut = await this.cfManager.getPasswordAuthOutputs(pwStack, this.activeProfile);
+				this.passwordStackName = pwStack;
+				this.passwordEdgeArn = pwOut.edgeFunctionVersionArn;
+				await this.updateInfraState({ status: 'password-deployed' });
 			}
+
+			// 2) Cognito pool (read gating and/or comment identity).
+			if (this.cognitoPoolNeeded()) {
+				container.createEl('p', {
+					text: 'Deploying the Cognito user pool, Google sign-in, and viewer-request function in us-east-1...',
+					cls: 'cpn-wizard-description',
+				});
+				// Custom-domain sites know their callback URL up front; default-domain
+				// sites use a placeholder now and get the real URL in phase 2.
+				this.config.callbackUrl = this.config.customDomain
+					? `https://${this.config.customDomain}/auth/callback`
+					: undefined;
+
+				const stackName = await this.cfManager.deployCognitoAuthStack(this.config as DeploymentConfig);
+				await this.updateInfraState({ status: 'cognito-deploying' });
+				const finalStatus = await this.cfManager.pollStackUntilComplete(
+					stackName, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',
+				);
+				if (this.aborted) return;
+				if (finalStatus !== 'CREATE_COMPLETE') {
+					await this.updateInfraState({ status: 'failed' });
+					this.showError(container, `Cognito auth stack deployment failed: ${finalStatus}`);
+					return;
+				}
+				this.cognitoOutputs = await this.cfManager.getCognitoAuthOutputs(stackName, this.activeProfile);
+				this.cognitoStackName = stackName;
+				await this.updateInfraState({ status: 'cognito-deployed' });
+			}
+
+			// 3) Resolve the read-gate ARN fed into the full-stack deploy.
+			this.config.authLambdaEdgeArn = this.resolveReadGateArn();
+
+			this.step = 5;
+			this.renderStep();
 		} catch (err: any) {
 			await this.updateInfraState({ status: 'failed' });
 			this.showError(container, `Error deploying authentication: ${err.message}`);
+		}
+	}
+
+	/** The viewer-request edge-fn ARN for the active read-gate mode (''=public). */
+	private resolveReadGateArn(): string {
+		switch (this.config.readGateMode) {
+			case 'cognito': return this.cognitoOutputs?.edgeFunctionVersionArn || '';
+			case 'password': return this.passwordEdgeArn || '';
+			case 'byo': return this.config.authLambdaEdgeArn || '';
+			default: return '';
 		}
 	}
 
@@ -658,7 +738,7 @@ export class DeploymentWizardModal extends Modal {
 			// Carve the /auth/* callback origin into the distribution so the
 			// HttpOnly cookie is set first-party. The comment origins are wired in
 			// a later deploy once the comment stack exists.
-			if (this.config.cognitoAuthEnabled && this.cognitoOutputs?.callbackApiDomain) {
+			if (this.cognitoPoolNeeded() && this.cognitoOutputs?.callbackApiDomain) {
 				this.config.callbackApiDomainName = this.cognitoOutputs.callbackApiDomain;
 			}
 
@@ -714,7 +794,7 @@ export class DeploymentWizardModal extends Modal {
 	 * auth is off or the site has a custom domain (callback was correct already).
 	 */
 	private async runCognitoPhase2(container: HTMLElement, eventLog: HTMLElement): Promise<void> {
-		if (!this.config.cognitoAuthEnabled || !this.cognitoStackName) return;
+		if (!this.cognitoPoolNeeded() || !this.cognitoStackName) return;
 		if (this.config.customDomain) return; // callback URL already correct
 		if (!this.stackOutputs?.distributionDomainName) return;
 
@@ -897,15 +977,21 @@ export class DeploymentWizardModal extends Modal {
 			variantName: this.config.variantName,
 			originAccessMethod: this.config.originAccessMethod || 'oac',
 			authLambdaEdgeArn: this.config.authLambdaEdgeArn || undefined,
+			readGateMode: this.config.readGateMode || 'none',
 			cognitoAuth: this.buildCognitoAuthState(),
+			passwordAuth: this.buildPasswordAuthState(),
 			comment: this.buildCommentState(),
 		};
 
+		// Persist read-gate intent (mode + low-sensitivity hash for redeploys).
+		profile.readGate = (this.config.readGateMode && this.config.readGateMode !== 'none')
+			? { mode: this.config.readGateMode, passwordHash: this.config.passwordHash }
+			: undefined;
+
 		// Persist author intent (re-shown when the wizard reopens); secret is never stored.
-		if (this.config.cognitoAuthEnabled) {
+		if (this.cognitoPoolNeeded()) {
 			profile.cognitoAuth = {
 				enabled: true,
-				readGating: this.config.readGatingEnabled || false,
 				commentIdentity: this.config.commentIdentityEnabled || false,
 				googleClientId: this.config.googleClientId || undefined,
 				authDomainPrefix: this.config.authDomainPrefix || undefined,
@@ -931,11 +1017,10 @@ export class DeploymentWizardModal extends Modal {
 	 * outputs. Returns undefined when built-in auth was not deployed in this run.
 	 */
 	private buildCognitoAuthState() {
-		if (!this.config.cognitoAuthEnabled || !this.cognitoOutputs) return undefined;
+		if (!this.cognitoPoolNeeded() || !this.cognitoOutputs) return undefined;
 		return {
 			stackName: this.cognitoStackName,
 			enabled: true,
-			readGating: this.config.readGatingEnabled || false,
 			commentIdentity: this.config.commentIdentityEnabled || false,
 			userPoolId: this.cognitoOutputs.userPoolId,
 			userPoolClientId: this.cognitoOutputs.userPoolClientId,
@@ -946,6 +1031,16 @@ export class DeploymentWizardModal extends Modal {
 			callbackApiDomain: this.cognitoOutputs.callbackApiDomain,
 			googleClientId: this.config.googleClientId || undefined,
 			authDomainPrefix: this.config.authDomainPrefix || undefined,
+		};
+	}
+
+	/** Password read-gate deployment bookkeeping, or undefined when not deployed this run. */
+	private buildPasswordAuthState() {
+		if (this.config.readGateMode !== 'password' || !this.passwordEdgeArn) return undefined;
+		return {
+			stackName: this.passwordStackName,
+			edgeFunctionVersionArn: this.passwordEdgeArn,
+			passwordHash: this.config.passwordHash,
 		};
 	}
 

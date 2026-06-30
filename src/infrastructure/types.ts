@@ -5,6 +5,8 @@ export type DeploymentStatus =
 	| 'waiting-dns'
 	| 'cognito-deploying'
 	| 'cognito-deployed'
+	| 'password-deploying'
+	| 'password-deployed'
 	| 'deploying'
 	| 'deployed'
 	| 'comment-deploying'
@@ -13,6 +15,28 @@ export type DeploymentStatus =
 	| 'destroying';
 
 export type OriginAccessMethod = 'oac' | 'oai';
+
+/**
+ * How read access to the published site is gated. A single interchangeable axis
+ * — whatever the mode, it produces (or omits) the versioned viewer-request
+ * Lambda@Edge ARN fed into the full-stack `AuthLambdaEdgeArn` parameter.
+ *   none     — fully public reads
+ *   cognito  — whole-site login via the Cognito edge fn
+ *   password — HTTP Basic Auth via the password edge fn
+ *   byo      — bring-your-own viewer-request Lambda ARN
+ * Independent of comment identity (the Cognito pool can be provisioned for
+ * comment writes regardless of the read-gate mode — e.g. password reads +
+ * Cognito comments).
+ */
+export type ReadGateMode = 'none' | 'cognito' | 'password' | 'byo';
+
+/** Deployment bookkeeping for the built-in password read-gate sub-stack. */
+export interface PasswordAuthState {
+	stackName: string;
+	edgeFunctionVersionArn: string;
+	/** sha256 hex of the shared password (low-sensitivity; lets redeploys skip re-entry). */
+	passwordHash?: string;
+}
 
 /**
  * Deployment bookkeeping for the built-in Cognito + Google auth sub-stack.
@@ -26,8 +50,6 @@ export interface CognitoAuthState {
 	stackName: string;
 	/** Pool deployed (identities available for comment writes). */
 	enabled: boolean;
-	/** Whole-site read gating: edge fn attached to the site's default behavior. */
-	readGating: boolean;
 	/** Pool issues identities for the comment write path. */
 	commentIdentity: boolean;
 	userPoolId: string;
@@ -87,7 +109,10 @@ export interface InfrastructureState {
 	originAccessMethod: OriginAccessMethod;
 	imported?: boolean;
 	authLambdaEdgeArn?: string;
+	/** Which read-gate is active (drives which sub-stack supplies authLambdaEdgeArn). */
+	readGateMode?: ReadGateMode;
 	cognitoAuth?: CognitoAuthState;
+	passwordAuth?: PasswordAuthState;
 	comment?: CommentState;
 }
 
@@ -104,9 +129,13 @@ export interface DeploymentConfig {
 	awsProfile: string;
 	originAccessMethod: OriginAccessMethod;
 	authLambdaEdgeArn?: string;
+	/** Read-gate mode (transient wizard selection). */
+	readGateMode?: ReadGateMode;
+	/** Plaintext password (transient; hashed before deploy, never persisted/transmitted). */
+	passwordValue?: string;
+	/** sha256 hex of the password, passed as the NoEcho PasswordHash param. */
+	passwordHash?: string;
 	/** Built-in Cognito + Google auth toggles & inputs (transient; not all persisted). */
-	cognitoAuthEnabled?: boolean;
-	readGatingEnabled?: boolean;
 	commentIdentityEnabled?: boolean;
 	googleClientId?: string;
 	/** Captured transiently in the wizard and passed as a NoEcho param; never persisted. */

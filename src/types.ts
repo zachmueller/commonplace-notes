@@ -1,5 +1,5 @@
 import { TFile } from 'obsidian';
-import { InfrastructureState } from './infrastructure/types';
+import { InfrastructureState, ReadGateMode } from './infrastructure/types';
 
 export interface CommonplaceNotesSettings {
     publishingProfiles: PublishingProfile[];
@@ -26,10 +26,22 @@ export interface PublishingProfile {
 	infrastructureState?: InfrastructureState;
 	indicator: PublishingIndicator;
 	siteCustomization?: SiteCustomization;
+	/** Persisted read-gate intent (mode + low-sensitivity password hash for redeploys). */
+	readGate?: ReadGateProfile;
 	/** Author intent for built-in Cognito + Google auth (persisted; secret is never stored). */
 	cognitoAuth?: CognitoAuthProfile;
 	/** Self-hosted commenting toggle for this (public) site. */
 	commenting?: CommentingProfile;
+}
+
+/**
+ * Persisted read-gate intent, re-shown when the wizard reopens. The password
+ * hash (sha256, never the plaintext) is stored so an update-stack redeploy can
+ * run without re-entry; documented as low-sensitivity (a shared read password).
+ */
+export interface ReadGateProfile {
+	mode: ReadGateMode;
+	passwordHash?: string;
 }
 
 /** Persisted author intent for self-hosted commenting. Requires cognitoAuth.commentIdentity. */
@@ -43,12 +55,13 @@ export interface CommentingProfile {
  * this is what the author configured, re-shown when the wizard reopens. The
  * Google client secret is deliberately absent: it is captured transiently in
  * the wizard and passed as a NoEcho CloudFormation parameter, never stored.
+ *
+ * Whole-site read gating is no longer here — it is the `cognito` value of
+ * PublishingProfile.readGate.mode (an independent axis from comment identity).
  */
 export interface CognitoAuthProfile {
 	enabled: boolean;
-	/** Whole-site read gating (attach the edge fn to the site's default behavior). */
-	readGating: boolean;
-	/** Provision identities for the comment write path (open-blog mode if readGating is off). */
+	/** Provision identities for the comment write path. */
 	commentIdentity: boolean;
 	googleClientId?: string;
 	authDomainPrefix?: string;

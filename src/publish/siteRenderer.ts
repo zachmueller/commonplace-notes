@@ -122,7 +122,9 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 				redirect_uri: redirectUri,
 			});
 			config.authLoginUrl = `${auth.hostedUiDomain}/oauth2/authorize?${params.toString()}`;
-			config.readGating = !!auth.readGating;
+			// True when the whole site (and thus comment reads) requires login —
+			// i.e. the Cognito edge fn gates reads. Password/BYO/public reads do not.
+			config.readGating = profile.infrastructureState?.readGateMode === 'cognito';
 		}
 	}
 

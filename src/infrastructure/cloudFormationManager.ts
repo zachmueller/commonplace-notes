@@ -25,6 +25,7 @@ import {
 	COMMENT_STACK_TEMPLATE,
 	FULL_STACK_OAC_TEMPLATE,
 	FULL_STACK_OAI_TEMPLATE,
+	PASSWORD_AUTH_TEMPLATE,
 } from './templates';
 import type {
 	CognitoAuthOutputs,
@@ -155,6 +156,44 @@ export class CloudFormationManager {
 			jwksUri: get('JwksUri'),
 			issuer: get('Issuer'),
 			callbackApiDomain: get('CallbackApiDomain'),
+		};
+	}
+
+	/**
+	 * Deploy the built-in password (HTTP Basic Auth) read-gate sub-stack. Pinned
+	 * to us-east-1 (Lambda@Edge) with CAPABILITY_IAM. Only the sha256 hash is
+	 * passed; the plaintext password never leaves the plugin.
+	 */
+	async deployPasswordAuthStack(config: DeploymentConfig): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'password');
+		const client = this.getCloudFormationClient(config, 'us-east-1');
+
+		await client.send(new CreateStackCommand({
+			StackName: stackName,
+			TemplateBody: PASSWORD_AUTH_TEMPLATE,
+			Parameters: [
+				{ ParameterKey: 'PasswordHash', ParameterValue: config.passwordHash || '' },
+				{ ParameterKey: 'Realm', ParameterValue: config.variantName || 'Protected' },
+			],
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	async getPasswordAuthOutputs(stackName: string, profile: PublishingProfile): Promise<{ edgeFunctionVersionArn: string }> {
+		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		const stack = response.Stacks?.[0];
+		if (!stack) throw new Error(`Password auth stack ${stackName} not found`);
+
+		const outputs = stack.Outputs || [];
+		return {
+			edgeFunctionVersionArn: outputs.find(o => o.OutputKey === 'EdgeFunctionVersionArn')?.OutputValue || '',
 		};
 	}
 
@@ -423,11 +462,12 @@ export class CloudFormationManager {
 		};
 	}
 
-	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'comment'): string {
+	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'password' | 'comment'): string {
 		const suffix = variantName || 'default';
 		switch (type) {
 			case 'cert': return `cpn-cert-${suffix}`;
 			case 'cognito': return `cpn-cognito-${suffix}`;
+			case 'password': return `cpn-password-${suffix}`;
 			case 'comment': return `cpn-comment-${suffix}`;
 			default: return `cpn-${suffix}`;
 		}
