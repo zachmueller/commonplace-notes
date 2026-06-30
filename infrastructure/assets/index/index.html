@@ -604,12 +604,30 @@ a:not([href^="#"]):hover {
 .panel.collapsing {
 	transform-origin: right;
 	transform: scaleX(0);
-	width: 0;
-	flex-basis: 0;
+	width: 0 !important;          /* override any inline width set by resizing */
+	flex-basis: 0 !important;     /* override any inline flex-basis set by resizing */
 	padding: 0;
 	margin: 0;
 	border: none;
 	overflow: hidden;
+}
+
+/* Disable the panel transition while actively dragging to resize so the width
+   tracks the cursor instantly instead of easing behind it. */
+.panel.resizing {
+	transition: none;
+}
+
+/* Highlight the right edge when the cursor is in the drag-to-resize zone. */
+.panel.resize-hover {
+	box-shadow: inset -3px 0 0 -1px var(--link-color);
+}
+
+/* Keep the resize cursor and suppress text selection across the whole page
+   while a drag is in progress (the pointer may stray off the panel). */
+body.panel-resizing {
+	cursor: col-resize;
+	user-select: none;
 }
 
 .panel h1 {
@@ -982,11 +1000,27 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				segments = parts.slice(1); // drop the slug
 			}
 
-			// Each segment: first char = type, rest = value
-			return segments.map(seg => ({
-				type: seg.charAt(0),
-				value: decodeURIComponent(seg.slice(1))
-			}));
+			// Each segment is `{type}{id}` optionally followed by `;key=value`
+			// per-note parameters. Split on ';' first: the first token is the
+			// existing `{type}{id}`; the rest are parameters. Parsing is lenient and
+			// order-independent — tokens with no '=' are ignored, duplicate keys are
+			// last-wins, and unknown keys never throw. This keeps old and new share
+			// links forward- and backward-compatible as parameters are added.
+			return segments.map(seg => {
+				const [head, ...paramToks] = seg.split(';');
+				const params = {};
+				for (const tok of paramToks) {
+					const eq = tok.indexOf('='); // split on the FIRST '=' only
+					if (eq === -1) continue;     // no '=' → not a key=value pair, ignore
+					const key = decodeURIComponent(tok.slice(0, eq));
+					params[key] = decodeURIComponent(tok.slice(eq + 1)); // last-wins
+				}
+				return {
+					type: head.charAt(0),
+					value: decodeURIComponent(head.slice(1)),
+					params
+				};
+			});
 		}
 
 		async function loadNoteByParameter(type, value) {
@@ -1092,6 +1126,73 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			}
 		}
 
+		// Per-note panel width bounds (px). Single source of truth shared by the
+		// inbound-width resolver, updateURL's default-omit check, and the drag-to-
+		// resize handler below. Inbound out-of-range widths fall back to the
+		// default; a live drag clamps into [MIN, MAX] (see resolveWidth + the
+		// resize IIFE).
+		const PANEL_MIN_WIDTH = 200;
+		const PANEL_MAX_WIDTH = 1600;
+		const PANEL_DEFAULT_WIDTH = 600;
+
+		// Serialize a per-note parameter object into a `;key=value` suffix, e.g.
+		// `;width=800`. Values are encodeURIComponent-encoded (so a value
+		// containing the reserved ';' or '=' can't corrupt the structure) and keys
+		// are emitted in a stable alphabetical order so URLs are deterministic.
+		// Mirrors parseURLFragment() above and serializeParams() in urlScheme.ts.
+		function serializeParams(params) {
+			return Object.keys(params).sort().map(k =>
+				`;${encodeURIComponent(k)}=${encodeURIComponent(String(params[k]))}`
+			).join('');
+		}
+
+		// Collect the known per-note parameters a panel currently carries, reading
+		// them back from its datasets. v1 knows only `width`, and omits it when it
+		// equals the default to keep shared links clean. NOTE: v1 re-emits only
+		// known keys — an unknown parameter present on an inbound URL is dropped on
+		// the next updateURL(). parseURLFragment() still returns the full params
+		// object, so preserving unknowns verbatim later is a panel-local change.
+		function collectPanelParams(panel) {
+			const params = {};
+			const width = parseInt(panel.dataset.width, 10);
+			if (Number.isFinite(width) && width !== PANEL_DEFAULT_WIDTH) {
+				params.width = width;
+			}
+			return params;
+		}
+
+		// Resolve an inbound `width` parameter to a usable pixel value, or null to
+		// mean "use the CSS default". Unlike a live drag (which clamps into range),
+		// a malformed or out-of-range inbound value falls back to the default
+		// silently — a shared link with a nonsense width shouldn't half-apply. An
+		// explicit value equal to the default also resolves to null so that
+		// `;width=600` normalizes to a clean, default-looking panel (idempotent
+		// with updateURL, which omits the default).
+		function resolveWidth(raw) {
+			const n = parseInt(raw, 10);
+			if (Number.isFinite(n) && n >= PANEL_MIN_WIDTH && n <= PANEL_MAX_WIDTH
+				&& n !== PANEL_DEFAULT_WIDTH) {
+				return n;
+			}
+			return null;
+		}
+
+		// Apply a resolved width to a panel: set both width and flex-basis so the
+		// flex layout honors it, and record it on the dataset so updateURL can
+		// re-serialize it. A null width leaves the CSS default (600px) in force and
+		// clears any dataset width so the parameter is omitted from the URL.
+		function applyPanelWidth(panel, width) {
+			if (width === null) {
+				delete panel.dataset.width;
+				panel.style.width = '';
+				panel.style.flexBasis = '';
+				return;
+			}
+			panel.style.width = width + 'px';
+			panel.style.flexBasis = width + 'px';
+			panel.dataset.width = String(width);
+		}
+
 		// Function to update URL based on current panel stack
 		function updateURL(useReplaceState = false) {
 			const panels = Array.from(document.querySelectorAll('.panel'));
@@ -1101,11 +1202,11 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				return;
 			}
 
-			// Build parameter path: /{type}{value} for each panel
+			// Build parameter path: /{type}{value}{;k=v...} for each panel
 			const paramPath = panels.map(panel => {
 				const type = panel.dataset.paramType;
 				const value = panel.dataset.paramValue;
-				return `/${type}${encodeURIComponent(value)}`;
+				return `/${type}${encodeURIComponent(value)}${serializeParams(collectPanelParams(panel))}`;
 			}).join('');
 
 			// Read slug from first panel for the base note name
@@ -1150,7 +1251,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				return;
 			}
 			for (const param of params) {
-				await addPanel(param.type, param.value);
+				await addPanel(param.type, param.value, null, null, param.params);
 			}
 		}
 
@@ -1387,7 +1488,7 @@ ${closeButton}
 			return panel;
 		}
 
-		async function addPanel(paramType, paramValue, afterPanel = null, headingSlug = null) {
+		async function addPanel(paramType, paramValue, afterPanel = null, headingSlug = null, params = null) {
 			console.log('addPanel called with:', paramType, paramValue);
 
 			// Create a unique identifier for the panel
@@ -1410,11 +1511,14 @@ ${closeButton}
 
 				const container = document.getElementById('panels');
 				const panel = createPanel(noteData, loadedPanels.size);
-				
+
 				// Store parameter information
 				panel.dataset.paramType = paramType;
 				panel.dataset.paramValue = paramValue;
-				
+
+				// Apply any per-note parameters carried in the URL (v1: width).
+				applyPanelWidth(panel, resolveWidth(params && params.width));
+
 				// Insert after the source panel if provided, otherwise append to end
 				const referenceNode = afterPanel ? afterPanel.nextElementSibling : null;
 				container.insertBefore(panel, referenceNode);
@@ -1487,6 +1591,104 @@ ${closeButton}
 		}
 
 
+
+		// Click-and-drag resizing of individual panels.
+		// Each panel can be resized by grabbing its right edge. The default
+		// starting width (600px, from CSS) is left untouched — we only set an
+		// inline width once the user actually drags a given panel, then persist
+		// the resolved width into the URL (replaceState) so it's shareable.
+		(function setupPanelResizing() {
+			const container = document.getElementById('panels');
+			const HANDLE_WIDTH = 8;   // width of the grab zone, in px
+
+			let dragPanel = null;     // panel currently being resized
+			let startX = 0;           // pointer X at drag start
+			let startWidth = 0;       // panel width at drag start
+			let hoverPanel = null;    // panel currently showing the hover affordance
+
+			// Find the panel (if any) whose right-edge grab zone contains the
+			// pointer. We iterate and measure rather than using e.target, because
+			// at a boundary between two panels the pointer sits over the NEXT
+			// panel, which would otherwise hide the edge we want to grab.
+			//
+			// The panel body scrolls directly (overflow-y: auto), so on platforms
+			// with classic (non-overlay) scrollbars a vertical scrollbar sits
+			// flush against the panel's right edge, inside the grab zone. Shift the
+			// zone inward by the scrollbar width (offsetWidth - clientWidth, which
+			// is 0 with overlay scrollbars) so the grab zone hugs the content edge
+			// and doesn't fight the scrollbar.
+			function panelAt(clientX, clientY) {
+				const panels = container.querySelectorAll('.panel');
+				for (const panel of panels) {
+					if (panel.classList.contains('collapsing')) continue;
+					const rect = panel.getBoundingClientRect();
+					if (clientY < rect.top || clientY > rect.bottom) continue;
+					const sbw = panel.offsetWidth - panel.clientWidth; // scrollbar width
+					if (clientX >= rect.right - HANDLE_WIDTH - sbw && clientX <= rect.right + 1) {
+						return panel;
+					}
+				}
+				return null;
+			}
+
+			function setHover(panel) {
+				if (hoverPanel === panel) return;
+				if (hoverPanel) {
+					hoverPanel.classList.remove('resize-hover');
+					hoverPanel.style.cursor = '';
+				}
+				hoverPanel = panel;
+				if (hoverPanel) {
+					hoverPanel.classList.add('resize-hover');
+					hoverPanel.style.cursor = 'col-resize';
+				}
+			}
+
+			// Hover feedback: show the resize affordance when near a panel's edge.
+			container.addEventListener('mousemove', (e) => {
+				if (dragPanel) return; // visual state handled during the active drag
+				setHover(panelAt(e.clientX, e.clientY));
+			});
+
+			container.addEventListener('mouseleave', () => {
+				if (!dragPanel) setHover(null);
+			});
+
+			container.addEventListener('mousedown', (e) => {
+				const panel = panelAt(e.clientX, e.clientY);
+				if (!panel) return;
+
+				e.preventDefault(); // avoid starting a text selection
+				dragPanel = panel;
+				startX = e.clientX;
+				startWidth = panel.getBoundingClientRect().width;
+
+				panel.classList.add('resizing');
+				document.body.classList.add('panel-resizing');
+			});
+
+			document.addEventListener('mousemove', (e) => {
+				if (!dragPanel) return;
+				let newWidth = startWidth + (e.clientX - startX);
+				newWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, newWidth));
+				// Set both width and flex-basis so the flex layout honors the size.
+				dragPanel.style.width = newWidth + 'px';
+				dragPanel.style.flexBasis = newWidth + 'px';
+			});
+
+			document.addEventListener('mouseup', () => {
+				if (!dragPanel) return;
+				// Persist the resolved width into the panel dataset and the URL.
+				// replaceState (not pushState) so a drag doesn't flood history.
+				const finalWidth = Math.round(dragPanel.getBoundingClientRect().width);
+				dragPanel.dataset.width = String(finalWidth);
+				dragPanel.classList.remove('resizing');
+				dragPanel = null;
+				document.body.classList.remove('panel-resizing');
+				setHover(null);
+				updateURL(true);
+			});
+		})();
 
 		// Initial load based on details in URL
 		window.addEventListener('load', () => {
