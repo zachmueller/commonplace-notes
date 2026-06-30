@@ -185,6 +185,9 @@ export class CognitoAuthStack extends cdk.Stack {
 					COGNITO_DOMAIN: hostedUiDomain,
 					CLIENT_ID: userPoolClient.ref,
 					CLIENT_SECRET: userPoolClient.attrClientSecret,
+					// Exact redirect_uri registered on the app client; kept correct by
+					// the two-phase CallbackURL param (no Host-header dependency).
+					REDIRECT_URI: callbackUrl.valueAsString,
 				},
 			},
 		});

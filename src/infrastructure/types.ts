@@ -93,6 +93,12 @@ export interface DeploymentConfig {
 	authDomainPrefix?: string;
 	/** OAuth redirect_uri allowed on the app client (phase-1 placeholder vs phase-2 real). */
 	callbackUrl?: string;
+	/** API Gateway host for the /auth/* callback origin (from the Cognito auth stack). */
+	callbackApiDomainName?: string;
+	/** Regional domain of the comment S3 bucket for the /comments/* origin (from the comment stack). */
+	commentBucketDomainName?: string;
+	/** API Gateway host for the /api/comments write origin (from the comment stack). */
+	commentApiDomainName?: string;
 }
 
 export interface StackOutputs {

@@ -10,7 +10,11 @@
 // the Cognito token endpoint for an id token, sets it as an HttpOnly session
 // cookie, and 302-redirects back to the original path carried in `state`.
 //
-// env: COGNITO_DOMAIN (full https Hosted UI origin), CLIENT_ID, CLIENT_SECRET
+// env: COGNITO_DOMAIN (full https Hosted UI origin), CLIENT_ID, CLIENT_SECRET,
+//      REDIRECT_URI (the exact https://<site>/auth/callback registered on the
+//      app client — kept correct by the two-phase deploy's CallbackURL param).
+//      Using an explicit REDIRECT_URI removes any dependency on CloudFront
+//      forwarding the original Host header to API Gateway.
 //
 // This is an API Gateway HTTP API (payload format 2.0) integration.
 
@@ -62,7 +66,7 @@ exports.handler = async (event) => {
 	}
 
 	try {
-		const redirectUri = 'https://' + host + '/auth/callback';
+		const redirectUri = process.env.REDIRECT_URI || 'https://' + host + '/auth/callback';
 		const res = await tokenExchange({
 			grant_type: 'authorization_code',
 			client_id: process.env.CLIENT_ID,

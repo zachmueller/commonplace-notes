@@ -639,6 +639,13 @@ export class DeploymentWizardModal extends Modal {
 		const eventLog = container.createDiv({ cls: 'cpn-wizard-event-log' });
 
 		try {
+			// Carve the /auth/* callback origin into the distribution so the
+			// HttpOnly cookie is set first-party. The comment origins are wired in
+			// a later deploy once the comment stack exists.
+			if (this.config.cognitoAuthEnabled && this.cognitoOutputs?.callbackApiDomain) {
+				this.config.callbackApiDomainName = this.cognitoOutputs.callbackApiDomain;
+			}
+
 			const stackName = await this.cfManager.deployFullStack(this.config as DeploymentConfig);
 
 			await this.updateInfraState({

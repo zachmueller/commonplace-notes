@@ -156,6 +156,22 @@ export class CloudFormationManager {
 		};
 	}
 
+	private buildFullStackParameters(config: DeploymentConfig) {
+		return [
+			{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
+			{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix },
+			{ ParameterKey: 'CustomDomain', ParameterValue: config.customDomain },
+			{ ParameterKey: 'CertificateArn', ParameterValue: config.certificateArn || '' },
+			{ ParameterKey: 'UseRoute53', ParameterValue: config.useRoute53 ? 'true' : 'false' },
+			{ ParameterKey: 'HostedZoneId', ParameterValue: config.hostedZoneId },
+			{ ParameterKey: 'HostedZoneName', ParameterValue: config.hostedZoneName },
+			{ ParameterKey: 'AuthLambdaEdgeArn', ParameterValue: config.authLambdaEdgeArn || '' },
+			{ ParameterKey: 'CallbackApiDomainName', ParameterValue: config.callbackApiDomainName || '' },
+			{ ParameterKey: 'CommentBucketDomainName', ParameterValue: config.commentBucketDomainName || '' },
+			{ ParameterKey: 'CommentApiDomainName', ParameterValue: config.commentApiDomainName || '' },
+		];
+	}
+
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'full');
 		const client = this.getCloudFormationClient(config, config.region);
@@ -166,16 +182,7 @@ export class CloudFormationManager {
 		await client.send(new CreateStackCommand({
 			StackName: stackName,
 			TemplateBody: template,
-			Parameters: [
-				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
-				{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix },
-				{ ParameterKey: 'CustomDomain', ParameterValue: config.customDomain },
-				{ ParameterKey: 'CertificateArn', ParameterValue: config.certificateArn || '' },
-				{ ParameterKey: 'UseRoute53', ParameterValue: config.useRoute53 ? 'true' : 'false' },
-				{ ParameterKey: 'HostedZoneId', ParameterValue: config.hostedZoneId },
-				{ ParameterKey: 'HostedZoneName', ParameterValue: config.hostedZoneName },
-				{ ParameterKey: 'AuthLambdaEdgeArn', ParameterValue: config.authLambdaEdgeArn || '' },
-			],
+			Parameters: this.buildFullStackParameters(config),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -196,16 +203,7 @@ export class CloudFormationManager {
 		await client.send(new UpdateStackCommand({
 			StackName: stackName,
 			TemplateBody: template,
-			Parameters: [
-				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
-				{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix },
-				{ ParameterKey: 'CustomDomain', ParameterValue: config.customDomain },
-				{ ParameterKey: 'CertificateArn', ParameterValue: config.certificateArn || '' },
-				{ ParameterKey: 'UseRoute53', ParameterValue: config.useRoute53 ? 'true' : 'false' },
-				{ ParameterKey: 'HostedZoneId', ParameterValue: config.hostedZoneId },
-				{ ParameterKey: 'HostedZoneName', ParameterValue: config.hostedZoneName },
-				{ ParameterKey: 'AuthLambdaEdgeArn', ParameterValue: config.authLambdaEdgeArn || '' },
-			],
+			Parameters: this.buildFullStackParameters(config),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },

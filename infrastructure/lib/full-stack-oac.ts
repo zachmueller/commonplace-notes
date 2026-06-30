@@ -5,6 +5,7 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
+import { addAuthCommentWiring } from './auth-comment-wiring';
 
 export class FullStackOac extends cdk.Stack {
 	constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -118,6 +119,13 @@ export class FullStackOac extends cdk.Stack {
 			},
 		});
 
+		// Built-in auth callback + comment read/write CloudFront wiring. The
+		// comment S3 origin reuses this stack's OAC (signing config is shareable).
+		const wiring = addAuthCommentWiring(this, {
+			originAccessControlId: oac.ref,
+			s3OriginConfig: { originAccessIdentity: '' },
+		});
+
 		// CloudFront Distribution
 		const originPath = cdk.Fn.conditionIf('HasS3Prefix', `/${s3Prefix.valueAsString}`, '').toString();
 
@@ -152,6 +160,7 @@ export class FullStackOac extends cdk.Stack {
 						cdk.Aws.NO_VALUE,
 					) as any,
 				},
+				cacheBehaviors: wiring.extraCacheBehaviors as any,
 				origins: [
 					{
 						id: 'S3Origin',
@@ -162,6 +171,7 @@ export class FullStackOac extends cdk.Stack {
 							originAccessIdentity: '',
 						},
 					},
+					...wiring.extraOrigins,
 				],
 			},
 		});

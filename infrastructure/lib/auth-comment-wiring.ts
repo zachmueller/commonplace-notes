@@ -1,0 +1,202 @@
+import * as cdk from 'aws-cdk-lib';
+
+/**
+ * Shared CloudFront wiring for the built-in auth callback and the comment
+ * read/write paths, added to BOTH the OAC and OAI full-stack templates.
+ *
+ * Everything here is gated behind new `''`-default parameters so a site that
+ * passes none of them deploys a distribution behaviourally identical to today:
+ * the conditional origins resolve to `AWS::NoValue` (pruned from the array) and
+ * the `CacheBehaviors` array collapses to empty (which CloudFront treats the
+ * same as having no extra behaviors).
+ *
+ * Paths (deliberately distinct prefixes so each maps cleanly to one origin):
+ *   /auth/*        -> callback API Gateway (sets the HttpOnly session cookie)
+ *   /api/comments  -> comment write API Gateway (cookie-authorized writes)
+ *   /comments/*    -> comment S3 bucket (open, CDN-cached comment JSON reads)
+ *
+ * The comment S3 origin's access config differs between OAC and OAI, so the
+ * caller passes it in via `commentOriginAccess`.
+ */
+
+// AWS-managed policy IDs (global constants, same as the hardcoded CachingOptimized
+// the default behavior already uses).
+const CACHE_OPTIMIZED = '658327ea-f89d-4fab-a63d-7e88639e58f6';
+const CACHE_DISABLED = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad';
+// AllViewerExceptHostHeader: forwards all viewer headers (incl. Cookie) + query
+// strings to the origin but NOT the Host header — required for API Gateway
+// custom origins, which reject a forwarded CloudFront Host header.
+const ORIGIN_REQ_ALL_VIEWER_EXCEPT_HOST = 'b689b0a8-53d0-40ab-baf2-68738e2966ac';
+
+const ALL_METHODS = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE'];
+
+export interface AuthCommentWiring {
+	/** Conditional origin entries to append to distributionConfig.origins. */
+	extraOrigins: any[];
+	/** Conditional cache-behavior entries forming distributionConfig.cacheBehaviors. */
+	extraCacheBehaviors: any[];
+}
+
+/**
+ * Create the auth/comment parameters + conditions on `stack` and return the
+ * conditional origins and cache behaviors to splice into the distribution.
+ *
+ * @param commentOriginAccess access-method-specific properties for the comment
+ *   S3 origin (OAC: `{ originAccessControlId, s3OriginConfig:{originAccessIdentity:''} }`;
+ *   OAI: `{ s3OriginConfig:{ originAccessIdentity: 'origin-access-identity/...' } }`).
+ */
+export function addAuthCommentWiring(
+	stack: cdk.Stack,
+	commentOriginAccess: Record<string, unknown>,
+): AuthCommentWiring {
+	const callbackApiDomain = new cdk.CfnParameter(stack, 'CallbackApiDomainName', {
+		type: 'String',
+		default: '',
+		description: 'API Gateway host backing the /auth/* callback origin (from the Cognito auth stack)',
+	});
+
+	const commentBucketDomain = new cdk.CfnParameter(stack, 'CommentBucketDomainName', {
+		type: 'String',
+		default: '',
+		description: 'Regional domain name of the comment S3 bucket (from the comment stack)',
+	});
+
+	const commentApiDomain = new cdk.CfnParameter(stack, 'CommentApiDomainName', {
+		type: 'String',
+		default: '',
+		description: 'API Gateway host backing the /api/comments write origin (from the comment stack)',
+	});
+
+	new cdk.CfnCondition(stack, 'HasAuthCallback', {
+		expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(callbackApiDomain.valueAsString, '')),
+	});
+
+	new cdk.CfnCondition(stack, 'HasComments', {
+		expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(commentBucketDomain.valueAsString, '')),
+	});
+
+	new cdk.CfnCondition(stack, 'HasCommentApi', {
+		expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(commentApiDomain.valueAsString, '')),
+	});
+
+	const apiCustomOriginConfig = {
+		originProtocolPolicy: 'https-only',
+		originSslProtocols: ['TLSv1.2'],
+		httpPort: 80,
+		httpsPort: 443,
+	};
+
+	const extraOrigins = [
+		// /auth/* -> callback API Gateway
+		cdk.Fn.conditionIf(
+			'HasAuthCallback',
+			{
+				Id: 'AuthApiOrigin',
+				DomainName: callbackApiDomain.valueAsString,
+				CustomOriginConfig: {
+					OriginProtocolPolicy: apiCustomOriginConfig.originProtocolPolicy,
+					OriginSSLProtocols: apiCustomOriginConfig.originSslProtocols,
+					HTTPPort: apiCustomOriginConfig.httpPort,
+					HTTPSPort: apiCustomOriginConfig.httpsPort,
+				},
+			},
+			cdk.Aws.NO_VALUE,
+		),
+		// /comments/* -> comment S3 bucket (access config supplied by caller)
+		cdk.Fn.conditionIf(
+			'HasComments',
+			{
+				Id: 'CommentBucketOrigin',
+				DomainName: commentBucketDomain.valueAsString,
+				...mapCommentOriginAccessKeys(commentOriginAccess),
+			},
+			cdk.Aws.NO_VALUE,
+		),
+		// /api/comments -> comment write API Gateway
+		cdk.Fn.conditionIf(
+			'HasCommentApi',
+			{
+				Id: 'CommentApiOrigin',
+				DomainName: commentApiDomain.valueAsString,
+				CustomOriginConfig: {
+					OriginProtocolPolicy: apiCustomOriginConfig.originProtocolPolicy,
+					OriginSSLProtocols: apiCustomOriginConfig.originSslProtocols,
+					HTTPPort: apiCustomOriginConfig.httpPort,
+					HTTPSPort: apiCustomOriginConfig.httpsPort,
+				},
+			},
+			cdk.Aws.NO_VALUE,
+		),
+	];
+
+	const extraCacheBehaviors = [
+		// /auth/* — never cache; forward cookies/query (sets the session cookie).
+		cdk.Fn.conditionIf(
+			'HasAuthCallback',
+			{
+				PathPattern: '/auth/*',
+				TargetOriginId: 'AuthApiOrigin',
+				ViewerProtocolPolicy: 'redirect-to-https',
+				AllowedMethods: ALL_METHODS,
+				CachedMethods: ['GET', 'HEAD'],
+				Compress: true,
+				CachePolicyId: CACHE_DISABLED,
+				OriginRequestPolicyId: ORIGIN_REQ_ALL_VIEWER_EXCEPT_HOST,
+			},
+			cdk.Aws.NO_VALUE,
+		),
+		// /api/comments — never cache; forward the HttpOnly cookie to the authorizer.
+		cdk.Fn.conditionIf(
+			'HasCommentApi',
+			{
+				PathPattern: '/api/comments',
+				TargetOriginId: 'CommentApiOrigin',
+				ViewerProtocolPolicy: 'redirect-to-https',
+				AllowedMethods: ALL_METHODS,
+				CachedMethods: ['GET', 'HEAD'],
+				Compress: true,
+				CachePolicyId: CACHE_DISABLED,
+				OriginRequestPolicyId: ORIGIN_REQ_ALL_VIEWER_EXCEPT_HOST,
+			},
+			cdk.Aws.NO_VALUE,
+		),
+		// /comments/* — open, CDN-cached reads. Inherit the site's gating: when an
+		// edge fn is attached (HasAuthLambda), gate comment reads too; otherwise
+		// they stay world-readable (open-blog model).
+		cdk.Fn.conditionIf(
+			'HasComments',
+			{
+				PathPattern: '/comments/*',
+				TargetOriginId: 'CommentBucketOrigin',
+				ViewerProtocolPolicy: 'redirect-to-https',
+				AllowedMethods: ['GET', 'HEAD'],
+				CachedMethods: ['GET', 'HEAD'],
+				Compress: true,
+				CachePolicyId: CACHE_OPTIMIZED,
+				LambdaFunctionAssociations: cdk.Fn.conditionIf(
+					'HasAuthLambda',
+					[{ EventType: 'viewer-request', LambdaFunctionARN: cdk.Fn.ref('AuthLambdaEdgeArn') }],
+					cdk.Aws.NO_VALUE,
+				),
+			},
+			cdk.Aws.NO_VALUE,
+		),
+	];
+
+	return { extraOrigins, extraCacheBehaviors };
+}
+
+/**
+ * The caller passes the comment-origin access props in camelCase (as the L2-ish
+ * objects elsewhere in these stacks use). The conditional origin entry is a raw
+ * CloudFormation fragment, so map the few keys we accept to their CFN casing.
+ */
+function mapCommentOriginAccessKeys(access: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	if ('originAccessControlId' in access) out.OriginAccessControlId = access.originAccessControlId;
+	if ('s3OriginConfig' in access) {
+		const s3 = access.s3OriginConfig as Record<string, unknown>;
+		out.S3OriginConfig = { OriginAccessIdentity: s3.originAccessIdentity };
+	}
+	return out;
+}

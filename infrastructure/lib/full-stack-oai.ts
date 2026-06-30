@@ -3,6 +3,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import { Construct } from 'constructs';
+import { addAuthCommentWiring } from './auth-comment-wiring';
 
 export class FullStackOai extends cdk.Stack {
 	constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -113,6 +114,15 @@ export class FullStackOai extends cdk.Stack {
 			},
 		});
 
+		// Built-in auth callback + comment read/write CloudFront wiring. The
+		// comment S3 origin uses this stack's OAI; the comment bucket's policy
+		// (in the comment stack) must grant this OAI access to its objects.
+		const wiring = addAuthCommentWiring(this, {
+			s3OriginConfig: {
+				originAccessIdentity: cdk.Fn.sub('origin-access-identity/cloudfront/${OAI}'),
+			},
+		});
+
 		// CloudFront Distribution
 		const originPath = cdk.Fn.conditionIf('HasS3Prefix', `/${s3Prefix.valueAsString}`, '').toString();
 
@@ -147,6 +157,7 @@ export class FullStackOai extends cdk.Stack {
 						cdk.Aws.NO_VALUE,
 					) as any,
 				},
+				cacheBehaviors: wiring.extraCacheBehaviors as any,
 				origins: [
 					{
 						id: 'S3Origin',
@@ -156,6 +167,7 @@ export class FullStackOai extends cdk.Stack {
 							originAccessIdentity: cdk.Fn.sub('origin-access-identity/cloudfront/${OAI}'),
 						},
 					},
+					...wiring.extraOrigins,
 				],
 			},
 		});
