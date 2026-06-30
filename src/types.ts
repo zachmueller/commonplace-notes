@@ -28,6 +28,13 @@ export interface PublishingProfile {
 	siteCustomization?: SiteCustomization;
 	/** Author intent for built-in Cognito + Google auth (persisted; secret is never stored). */
 	cognitoAuth?: CognitoAuthProfile;
+	/** Self-hosted commenting toggle for this (public) site. */
+	commenting?: CommentingProfile;
+}
+
+/** Persisted author intent for self-hosted commenting. Requires cognitoAuth.commentIdentity. */
+export interface CommentingProfile {
+	enabled: boolean;
 }
 
 /**

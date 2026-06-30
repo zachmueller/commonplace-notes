@@ -42,6 +42,9 @@ const CONFIG_BOOTSTRAP = `fetch('config.json')
   .then(r => r.ok ? r.json() : null)
   .then(config => {
     if (!config) return;
+    // Expose parsed config for the app (e.g. the comment client reads the
+    // comment endpoints + auth login URL from here). Mirrors window.__CPN_HOME_UID__.
+    window.__CPN_CONFIG__ = config;
     const root = document.documentElement;
     if (config.fontFamily) document.body.style.fontFamily = config.fontFamily;
     function applyTheme() {

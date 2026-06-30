@@ -104,6 +104,28 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 		config.theme = theme;
 	}
 
+	// Commenting + built-in auth (consumed by the comment client via
+	// window.__CPN_CONFIG__). Only emitted when commenting is enabled and the
+	// Cognito auth stack has been deployed (its outputs supply the login URL).
+	const auth = profile.infrastructureState?.cognitoAuth;
+	if (profile.commenting?.enabled && auth?.commentIdentity) {
+		config.commentsEnabled = true;
+		config.commentReadPath = '/comments/';
+		config.commentWritePath = '/api/comments';
+		if (auth.hostedUiDomain && auth.userPoolClientId && profile.baseUrl) {
+			const redirectUri = profile.baseUrl.replace(/\/+$/, '') + '/auth/callback';
+			const params = new URLSearchParams({
+				client_id: auth.userPoolClientId,
+				response_type: 'code',
+				scope: 'openid email profile',
+				identity_provider: 'Google',
+				redirect_uri: redirectUri,
+			});
+			config.authLoginUrl = `${auth.hostedUiDomain}/oauth2/authorize?${params.toString()}`;
+			config.readGating = !!auth.readGating;
+		}
+	}
+
 	return JSON.stringify(config, null, '\t');
 }
 

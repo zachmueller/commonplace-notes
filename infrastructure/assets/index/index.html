@@ -655,6 +655,95 @@ body.panel-resizing {
 	border-top: 1px solid var(--border-color);
 }
 
+/* Comments (per-panel) */
+.comments {
+	margin-top: 40px;
+	padding-top: 20px;
+	border-top: 1px solid var(--border-color);
+}
+.comments-heading {
+	margin: 0 0 16px;
+}
+.comment-item {
+	padding: 10px 0;
+	border-bottom: 1px solid var(--border-color);
+}
+.comment-replies {
+	margin-top: 10px;
+	padding-left: 16px;
+	border-left: 2px solid var(--border-color);
+}
+.comment-meta {
+	font-size: 12px;
+	color: var(--text-secondary);
+	margin-bottom: 4px;
+}
+.comment-body {
+	font-size: 14px;
+	line-height: 1.5;
+	word-wrap: break-word;
+}
+.comment-body p {
+	margin: 0 0 8px;
+}
+.comment-deleted {
+	color: var(--text-secondary);
+	font-style: italic;
+}
+.comment-empty {
+	color: var(--text-secondary);
+	font-size: 14px;
+}
+.comment-composer {
+	margin-top: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.comment-input {
+	width: 100%;
+	min-height: 70px;
+	padding: 8px;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background-color: var(--bg-primary);
+	color: var(--text-primary);
+	font-family: inherit;
+	font-size: 14px;
+	resize: vertical;
+}
+.comment-submit {
+	align-self: flex-start;
+	padding: 6px 14px;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background-color: var(--bg-secondary);
+	color: var(--text-primary);
+	cursor: pointer;
+	font-size: 14px;
+}
+.comment-submit:hover {
+	opacity: 0.85;
+}
+.comment-submit:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.comment-status {
+	font-size: 12px;
+	color: var(--text-secondary);
+}
+.comment-signin {
+	display: inline-block;
+	padding: 6px 14px;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background-color: var(--bg-secondary);
+	color: var(--text-primary);
+	text-decoration: none;
+	font-size: 14px;
+}
+
 .close-button {
 	position: absolute;
 	top: 20px;
@@ -1063,11 +1152,16 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				}
 				
 				if (!hash) throw new Error('Could not resolve note hash');
-				
+
 				// Load the actual note data
 				const response = await fetch(`/notes/${hash}.json`);
 				if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-				return await response.json();
+				const noteData = await response.json();
+				// Stamp the resolved hash so the comment client has a reliable
+				// revision anchor (it is not otherwise guaranteed on noteData for
+				// u/t loads). Also firms up the permalink UI.
+				noteData.hash = hash;
+				return noteData;
 				
 			} catch (error) {
 				console.error('Error loading note:', error);
@@ -1382,11 +1476,12 @@ ${closeButton}
 					${noteData.backlinks.length ? `
 			<div class="backlinks">
 				<h3>Referenced by:</h3>
-				${noteData.backlinks.map(link => 
+				${noteData.backlinks.map(link =>
 					`<div><a href="#/u${encodeURIComponent(link.uid)}">${link.title}</a></div>`
 				).join('')}
 			</div>
 					` : ''}
+					<div class="comments" hidden></div>
 				`;
 			}
 
@@ -1472,9 +1567,9 @@ ${closeButton}
 			panel.querySelectorAll('.permanent-link').forEach(link => {
 				link.addEventListener('click', async (e) => {
 					e.preventDefault();
-					
+
 					const permalink = `${window.location.origin}${window.location.pathname}${link.dataset.permalink}`;
-					
+
 					try {
 						await navigator.clipboard.writeText(permalink);
 						showToast('Permanent link copied to clipboard');
@@ -1485,7 +1580,244 @@ ${closeButton}
 				});
 			});
 
+			// Comment thread (per-panel; keyed on this panel's note). Runs after the
+			// a[href^="#"] cloneNode pass above so its own handlers are not stripped.
+			// Fire-and-forget: comments load asynchronously and reveal the region.
+			if (!isError) initComments(panel, noteData);
+
 			return panel;
+		}
+
+		// ====================================================================
+		// Commenting client (PR-5). Per-panel, keyed on panel.dataset.uid.
+		// Reads are open CDN-cached GETs of /comments/{uid}.json (404 = none yet);
+		// writes go to /api/comments behind the cookie authorizer. Comment bodies
+		// are raw Markdown rendered through a hardened safe-subset renderer below.
+		// ====================================================================
+
+		function cpnConfig() {
+			return (window.__CPN_CONFIG__ || {});
+		}
+		function commentsEnabled() {
+			return !!cpnConfig().commentsEnabled;
+		}
+
+		// --- Hardened safe-subset Markdown renderer -------------------------
+		// Comment bodies are attacker-controlled and served from a world-readable
+		// cached file, so this is the sole XSS boundary. Strategy: escape ALL HTML
+		// first, then re-introduce a tiny whitelist of inline constructs. No raw
+		// HTML passthrough; links are restricted to http/https/mailto.
+		function escapeHtml(s) {
+			return s
+				.replace(/&/g, '&amp;')
+				.replace(/</g, '&lt;')
+				.replace(/>/g, '&gt;')
+				.replace(/"/g, '&quot;')
+				.replace(/'/g, '&#39;');
+		}
+		function safeLinkHref(url) {
+			const u = String(url).trim();
+			if (/^(https?:|mailto:)/i.test(u)) return u;
+			return null;
+		}
+		function renderInline(text) {
+			// Operates on already-escaped text. Order: code spans first (so their
+			// contents are not further interpreted), then links, bold, italic.
+			let out = text.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
+			out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, url) => {
+				// url here is escaped; decode the few entities we produced to test the protocol.
+				const decoded = url.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+				const href = safeLinkHref(decoded);
+				if (!href) return label;
+				return `<a href="${escapeHtml(href)}" rel="nofollow noopener noreferrer" target="_blank">${label}</a>`;
+			});
+			out = out.replace(/\*\*([^*]+)\*\*/g, (_, c) => `<strong>${c}</strong>`);
+			out = out.replace(/(^|[^*])\*([^*]+)\*/g, (_, pre, c) => `${pre}<em>${c}</em>`);
+			return out;
+		}
+		function renderMarkdown(md) {
+			const escaped = escapeHtml(String(md == null ? '' : md));
+			// Block-level: split on blank lines into paragraphs; preserve single
+			// newlines as <br>. Lists are kept simple (one level).
+			const blocks = escaped.split(/\n{2,}/);
+			return blocks.map(block => {
+				const lines = block.split('\n');
+				const isList = lines.every(l => /^\s*[-*]\s+/.test(l)) && lines.length > 0;
+				if (isList) {
+					const items = lines.map(l => `<li>${renderInline(l.replace(/^\s*[-*]\s+/, ''))}</li>`).join('');
+					return `<ul>${items}</ul>`;
+				}
+				return `<p>${renderInline(lines.join('\n')).replace(/\n/g, '<br>')}</p>`;
+			}).join('');
+		}
+
+		// --- Data fetch ------------------------------------------------------
+		async function loadComments(noteUid) {
+			const base = cpnConfig().commentReadPath || '/comments/';
+			try {
+				const res = await fetch(`${base}${encodeURIComponent(noteUid)}.json`, { credentials: 'same-origin' });
+				if (res.status === 404) return { version: 1, comments: [] }; // none yet
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = await res.json();
+				return data && Array.isArray(data.comments) ? data : { version: 1, comments: [] };
+			} catch (err) {
+				console.error('Error loading comments:', err);
+				return null;
+			}
+		}
+
+		function hostedUiLoginUrl() {
+			const cfg = cpnConfig();
+			if (!cfg.authLoginUrl) return null;
+			// Return to the current full URL after sign-in.
+			const state = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
+			const sep = cfg.authLoginUrl.indexOf('?') > -1 ? '&' : '?';
+			return `${cfg.authLoginUrl}${sep}state=${state}`;
+		}
+
+		// --- Rendering -------------------------------------------------------
+		// Build a chronological thread (replies nested one level under parents).
+		function buildThread(comments) {
+			const byParent = new Map();
+			for (const c of comments) {
+				const key = c.parentCommentUid || '__root__';
+				if (!byParent.has(key)) byParent.set(key, []);
+				byParent.get(key).push(c);
+			}
+			return byParent;
+		}
+
+		function renderComment(c) {
+			const el = document.createElement('div');
+			el.className = 'comment-item';
+			el.dataset.commentUid = c.commentUid;
+			if (c.status === 'deleted') {
+				el.classList.add('comment-deleted');
+				el.innerHTML = `<div class="comment-body"><em>[comment deleted]</em></div>`;
+				return el;
+			}
+			const when = c.createdAt ? new Date(c.createdAt * 1000).toLocaleString() : '';
+			el.innerHTML = `
+				<div class="comment-meta"><span class="comment-when">${escapeHtml(when)}</span></div>
+				<div class="comment-body">${renderMarkdown(c.body)}</div>
+			`;
+			return el;
+		}
+
+		function renderThreadInto(container, comments) {
+			const byParent = buildThread(comments);
+			const list = container.querySelector('.comment-list');
+			list.innerHTML = '';
+			const roots = byParent.get('__root__') || [];
+			for (const root of roots) {
+				const item = renderComment(root);
+				const replies = byParent.get(root.commentUid) || [];
+				if (replies.length) {
+					const repliesEl = document.createElement('div');
+					repliesEl.className = 'comment-replies';
+					for (const r of replies) repliesEl.appendChild(renderComment(r));
+					item.appendChild(repliesEl);
+				}
+				list.appendChild(item);
+			}
+			if (!roots.length) {
+				list.innerHTML = '<p class="comment-empty">No comments yet.</p>';
+			}
+		}
+
+		// --- Compose / write -------------------------------------------------
+		async function postComment(noteUid, noteHash, body) {
+			const base = cpnConfig().commentWritePath || '/api/comments';
+			const res = await fetch(base, {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ noteUid, noteHash, body }),
+			});
+			if (res.status === 401 || res.status === 403) {
+				throw new Error('auth');
+			}
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			return res.json();
+		}
+
+		function buildComposer(panel, noteData, region, refresh) {
+			const composer = region.querySelector('.comment-composer');
+			composer.innerHTML = '';
+			const login = hostedUiLoginUrl();
+			// Render compose box; on a 401/403 fall back to the sign-in affordance.
+			const textarea = document.createElement('textarea');
+			textarea.className = 'comment-input';
+			textarea.placeholder = 'Add a comment (Markdown supported)…';
+			const submit = document.createElement('button');
+			submit.className = 'comment-submit';
+			submit.textContent = 'Comment';
+			const status = document.createElement('span');
+			status.className = 'comment-status';
+
+			const showSignIn = () => {
+				composer.innerHTML = '';
+				if (login) {
+					const a = document.createElement('a');
+					a.className = 'comment-signin';
+					a.href = login;
+					a.textContent = 'Sign in to comment';
+					composer.appendChild(a);
+				} else {
+					composer.textContent = 'Sign-in is not configured for this site.';
+				}
+			};
+
+			submit.addEventListener('click', async () => {
+				const body = textarea.value.trim();
+				if (!body) return;
+				submit.disabled = true;
+				status.textContent = 'Posting…';
+				try {
+					await postComment(panel.dataset.uid, noteData.hash || '', body);
+					textarea.value = '';
+					status.textContent = 'Posted. It may take a moment to appear.';
+					setTimeout(refresh, 1500);
+				} catch (err) {
+					if (err.message === 'auth') {
+						showSignIn();
+					} else {
+						status.textContent = 'Could not post comment.';
+					}
+				} finally {
+					submit.disabled = false;
+				}
+			});
+
+			composer.appendChild(textarea);
+			composer.appendChild(submit);
+			composer.appendChild(status);
+		}
+
+		// --- Entry point (called from createPanel per panel) -----------------
+		async function initComments(panel, noteData) {
+			if (!commentsEnabled()) return;
+			const region = panel.querySelector('.comments');
+			if (!region) return;
+			const noteUid = panel.dataset.uid;
+			if (!noteUid) return;
+
+			region.innerHTML = `
+				<h3 class="comments-heading">Comments</h3>
+				<div class="comment-list"></div>
+				<div class="comment-composer"></div>
+			`;
+
+			const refresh = async () => {
+				const data = await loadComments(noteUid);
+				if (data) renderThreadInto(region, data.comments);
+			};
+
+			const data = await loadComments(noteUid);
+			if (data === null) return; // network error — leave the region hidden
+			region.hidden = false;
+			renderThreadInto(region, data.comments);
+			buildComposer(panel, noteData, region, refresh);
 		}
 
 		async function addPanel(paramType, paramValue, afterPanel = null, headingSlug = null, params = null) {
