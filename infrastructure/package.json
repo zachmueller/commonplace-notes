@@ -2,12 +2,15 @@
   "name": "commonplace-notes-infrastructure",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "tsc",
     "synth": "npx ts-node bin/synth.ts"
   },
   "devDependencies": {
-    "@types/node": "^22.7.9",
+    "@types/node": "^24.13.2",
     "ts-node": "^10.9.2",
     "typescript": "~5.6.3"
   },
