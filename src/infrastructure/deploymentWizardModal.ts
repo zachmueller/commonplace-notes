@@ -185,6 +185,38 @@ export class DeploymentWizardModal extends Modal {
 		return this.config.readGateMode === 'cognito' || !!this.config.commentIdentityEnabled;
 	}
 
+	/**
+	 * Suggest a default Hosted UI domain prefix. Mirrors the stack-naming scheme
+	 * (cpn-<variant>) and appends a short random suffix to reduce the chance of a
+	 * global collision. Sanitized to satisfy Cognito's prefix rules.
+	 */
+	private suggestAuthDomainPrefix(): string {
+		const base = (this.config.variantName || 'notes')
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '') || 'notes';
+		const suffix = Math.random().toString(36).slice(2, 6);
+		return `cpn-${base}-${suffix}`;
+	}
+
+	/**
+	 * Validate a Cognito Hosted UI domain prefix against AWS's rules. Returns an
+	 * actionable error message, or null when the prefix is valid.
+	 */
+	private validateAuthDomainPrefix(prefix: string): string | null {
+		if (prefix.length > 63) {
+			return 'Auth domain prefix must be 63 characters or fewer.';
+		}
+		if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(prefix)) {
+			return 'Auth domain prefix must use only lowercase letters, digits and hyphens, ' +
+				'and cannot start or end with a hyphen.';
+		}
+		if (/aws|amazon|cognito/.test(prefix)) {
+			return 'Auth domain prefix cannot contain "aws", "amazon" or "cognito" (reserved by AWS).';
+		}
+		return null;
+	}
+
 	private renderAuthSection(container: HTMLElement): void {
 		container.createEl('h3', { text: 'Authentication' });
 
@@ -269,9 +301,20 @@ export class DeploymentWizardModal extends Modal {
 						.onChange(v => { this.config.googleClientSecret = v; });
 				});
 
+			// A name you choose (not a pre-existing endpoint): Cognito reserves it
+			// when the auth stack's UserPoolDomain is created. Seed a sensible
+			// default so the user isn't inventing a globally-unique string blind.
+			if (!this.config.authDomainPrefix) {
+				this.config.authDomainPrefix = this.suggestAuthDomainPrefix();
+			}
 			new Setting(container)
 				.setName('Auth domain prefix')
-				.setDesc('Hosted UI prefix → <prefix>.auth.<region>.amazoncognito.com (must be globally unique)')
+				.setDesc(
+					'A name you choose for the Cognito login page. On deploy it becomes ' +
+					'<prefix>.auth.<region>.amazoncognito.com — it does not need to exist yet, ' +
+					'but must be globally unique across all AWS accounts. Lowercase letters, ' +
+					'digits and hyphens only.'
+				)
 				.addText(text => text
 					.setValue(this.config.authDomainPrefix || '')
 					.setPlaceholder('my-notes-auth')
@@ -293,6 +336,11 @@ export class DeploymentWizardModal extends Modal {
 		if (this.cognitoPoolNeeded()) {
 			if (!this.config.googleClientId || !this.config.googleClientSecret || !this.config.authDomainPrefix) {
 				new Notice('Cognito auth requires Google Client ID, Client Secret, and an auth domain prefix.');
+				return;
+			}
+			const prefixError = this.validateAuthDomainPrefix(this.config.authDomainPrefix);
+			if (prefixError) {
+				new Notice(prefixError);
 				return;
 			}
 		}
