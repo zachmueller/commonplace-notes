@@ -111,6 +111,19 @@ async function mockCloudFormationManager(ctx: TestContext): Promise<void> {
 		cfm.getCertificateArn = async () => "arn:aws:acm:us-east-1:999888777666:certificate/fake";
 		cfm.getCertificateValidationRecords = async () => [];
 		cfm.checkCertificateStatus = async () => "ISSUED";
+
+		// Certificate reuse: a wildcard cert that covers a subdomain site.
+		const wildcardMatch = {
+			arn: "arn:aws:acm:us-east-1:999888777666:certificate/reused-wildcard",
+			domainName: "example.com",
+			sans: ["*.example.com"],
+			matchType: "wildcard",
+			notAfter: 4102444800000, // 2100-01-01
+			inUse: true,
+		};
+		cfm.findMatchingCertificates = async () => [wildcardMatch];
+		cfm.listIssuedCertificatesForDomain = async () => [wildcardMatch];
+		cfm.describeCertificateForReuse = async () => wildcardMatch;
 	}, { mockOutputs: MOCK_OUTPUTS, mockVariant: MOCK_VARIANT });
 }
 
@@ -464,6 +477,154 @@ async function testSettingsSurviveModalClose(ctx: TestContext): Promise<void> {
 		`All settings intact: memory bucket=${afterClose.bucketName}, disk bucket=${diskAfterClose.bucketName}, status=${afterClose.infraStatus}`);
 }
 
+async function testCertificateReuseFlow(ctx: TestContext): Promise<void> {
+	console.log("\nTest 7: Custom domain reuses an existing certificate (skips creation + DNS)");
+	const { page } = ctx;
+
+	// Reset to a clean, undeployed profile and reopen the wizard.
+	await page.evaluate(async () => {
+		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
+		const profile = plugin?.settings?.publishingProfiles?.[0];
+		if (profile) {
+			delete profile.infrastructureState;
+			profile.awsSettings.bucketName = "my-bucket";
+			profile.awsSettings.cloudFrontDistributionId = "";
+			profile.baseUrl = "";
+		}
+		await plugin.saveSettings();
+	});
+
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(500);
+	const reopened = await openPluginSettings(ctx);
+	if (!reopened) return;
+
+	const clickedDeploy = await page.evaluate(() => {
+		const buttons = document.querySelectorAll("button");
+		for (const btn of buttons) {
+			if (btn.textContent?.includes("Deploy Infrastructure")) { btn.click(); return true; }
+		}
+		return false;
+	});
+	if (!clickedDeploy) {
+		ctx.fail("Certificate reuse flow", "Could not find 'Deploy Infrastructure' button");
+		return;
+	}
+	await page.waitForTimeout(800);
+
+	// Fill step 1 including a custom subdomain, then click Next.
+	await page.evaluate((args) => {
+		const { awsProfile, region, variant, domain } = args;
+		const modal = document.querySelector(".cpn-wizard-modal");
+		if (!modal) return;
+		const settings = modal.querySelectorAll(".setting-item");
+		for (const setting of settings) {
+			const name = setting.querySelector(".setting-item-name")?.textContent?.trim();
+			const input = setting.querySelector<HTMLInputElement>("input[type='text']");
+			if (!input) continue;
+			let value: string | null = null;
+			if (name?.includes("AWS Profile")) value = awsProfile;
+			else if (name === "Region") value = region;
+			else if (name?.includes("Variant")) value = variant;
+			else if (name?.includes("Custom Domain")) value = domain;
+			if (value === null) continue;
+			input.value = value;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+		}
+	}, { awsProfile: MOCK_AWS_PROFILE, region: MOCK_REGION, variant: MOCK_VARIANT, domain: "notes.example.com" });
+	await page.waitForTimeout(300);
+
+	await page.evaluate(() => {
+		const modal = document.querySelector(".cpn-wizard-modal");
+		const buttons = modal?.querySelectorAll("button") || [];
+		for (const btn of buttons) {
+			if (btn.textContent?.trim() === "Next") { btn.click(); return; }
+		}
+	});
+
+	// Step 2 (Certificate chooser) does an async lookup, then renders the dropdown.
+	await page.waitForTimeout(1000);
+
+	const chooserText = await page.evaluate(() => {
+		const modal = document.querySelector(".cpn-wizard-modal");
+		return modal?.textContent || "";
+	});
+	if (!chooserText.includes("existing certificate")) {
+		ctx.fail("Certificate reuse flow",
+			`Certificate chooser did not appear. Modal text: "${chooserText.substring(0, 300)}"`);
+		return;
+	}
+
+	// The wildcard match is preselected — click "Continue" to reuse it.
+	const clickedContinue = await page.evaluate(() => {
+		const modal = document.querySelector(".cpn-wizard-modal");
+		const buttons = modal?.querySelectorAll("button") || [];
+		for (const btn of buttons) {
+			if (btn.textContent?.trim() === "Continue") { btn.click(); return true; }
+		}
+		return false;
+	});
+	if (!clickedContinue) {
+		ctx.fail("Certificate reuse flow", "Could not find 'Continue' button on the certificate chooser");
+		return;
+	}
+
+	// Reuse skips cert creation + DNS and (no auth) deploys the full stack directly.
+	await page.waitForTimeout(3000);
+
+	const reachedCompletion = await page.evaluate(() => {
+		const modal = document.querySelector(".cpn-wizard-modal");
+		const text = modal?.textContent || "";
+		return text.includes("Deployment Complete") || text.includes("Apply to Profile");
+	});
+	if (!reachedCompletion) {
+		ctx.fail("Certificate reuse flow", "Did not reach completion after reusing the certificate");
+		return;
+	}
+
+	// Apply to profile, then assert the reuse bookkeeping persisted correctly.
+	await page.evaluate(() => {
+		const modal = document.querySelector(".cpn-wizard-modal");
+		const buttons = modal?.querySelectorAll("button") || [];
+		for (const btn of buttons) {
+			if (btn.textContent?.includes("Apply to Profile")) { btn.click(); return; }
+		}
+	});
+	await page.waitForTimeout(2000);
+
+	const state = await page.evaluate(() => {
+		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
+		const profile = plugin?.settings?.publishingProfiles?.[0];
+		const s = profile?.infrastructureState;
+		return {
+			certificateArn: s?.certificateArn,
+			certificateReused: s?.certificateReused,
+			certStackName: s?.certStackName ?? null,
+			customDomain: s?.customDomain,
+		};
+	});
+
+	if (state.certificateReused !== true) {
+		ctx.fail("Certificate reuse flow",
+			`certificateReused should be true, got ${JSON.stringify(state.certificateReused)}`);
+		return;
+	}
+	if (state.certStackName !== null) {
+		ctx.fail("Certificate reuse flow",
+			`certStackName should be unset for a reused cert, got "${state.certStackName}"`);
+		return;
+	}
+	if (!state.certificateArn?.includes("reused-wildcard")) {
+		ctx.fail("Certificate reuse flow",
+			`certificateArn should be the reused ARN, got "${state.certificateArn}"`);
+		return;
+	}
+
+	ctx.pass("Certificate reuse flow",
+		`Reused cert persisted: arn=…${state.certificateArn.slice(-14)}, reused=${state.certificateReused}, no certStackName`);
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -495,6 +656,7 @@ async function tests(ctx: TestContext): Promise<void> {
 	await testFillWizardAndDeploy(ctx);
 	await testApplyToProfilePersists(ctx);
 	await testSettingsSurviveModalClose(ctx);
+	await testCertificateReuseFlow(ctx);
 }
 
 // ---------------------------------------------------------------------------

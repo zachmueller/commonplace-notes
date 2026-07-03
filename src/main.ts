@@ -485,7 +485,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					if (state.fullStackName) {
 						await this.cloudFormationManager.deleteStack(state.fullStackName, profile, state.region);
 					}
-					if (state.certStackName) {
+					if (state.certStackName && !state.certificateReused) {
+						// Never delete a certificate we reused rather than created — it is
+						// owned outside this profile's stacks. (A reused cert also leaves
+						// certStackName unset; this is belt-and-suspenders.)
 						await this.cloudFormationManager.deleteStack(state.certStackName, profile, 'us-east-1');
 					}
 					if (state.cognitoAuth?.stackName) {

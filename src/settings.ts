@@ -738,7 +738,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						}
 					}));
 
-			if (state.status === 'waiting-dns' || state.certificateArn) {
+			if ((state.status === 'waiting-dns' || state.certificateArn) && !state.certificateReused) {
+				// A reused cert is already ISSUED — DNS validation is not applicable.
 				new Setting(containerEl)
 					.addButton(btn => btn
 						.setButtonText('Manage DNS')

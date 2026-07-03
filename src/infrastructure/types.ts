@@ -103,6 +103,8 @@ export interface InfrastructureState {
 	hostedZoneId?: string;
 	hostedZoneName?: string;
 	certificateArn?: string;
+	/** True when certificateArn refers to a pre-existing cert we reused (not a cpn-cert-* stack we own). */
+	certificateReused?: boolean;
 	lastDeployTimestamp?: number;
 	region?: string;
 	variantName?: string;
@@ -186,4 +188,23 @@ export interface StackEvent {
 export interface HostedZoneInfo {
 	id: string;
 	name: string;
+}
+
+/**
+ * An existing ISSUED ACM certificate offered for reuse in the wizard, annotated
+ * with how it covers the requested custom domain. `matchType` is undefined for
+ * certs surfaced by the "show all" fallback that do not cover the domain.
+ */
+export interface CertificateMatch {
+	arn: string;
+	/** The certificate's primary DomainName. */
+	domainName: string;
+	/** Full list of Subject Alternative Names (after any truncation fallback). */
+	sans: string[];
+	/** How this cert covers the requested domain (undefined = does not cover it). */
+	matchType?: 'exact' | 'wildcard';
+	/** Expiry as epoch ms (Date objects are avoided so this survives persistence). */
+	notAfter?: number;
+	/** Whether the certificate is currently associated with any AWS resource. */
+	inUse: boolean;
 }

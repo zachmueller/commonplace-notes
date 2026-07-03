@@ -15,7 +15,7 @@ The deploying user/role needs at minimum:
 - `cloudformation:CreateStack`, `cloudformation:DescribeStacks`, `cloudformation:DescribeStackEvents`, `cloudformation:DeleteStack`
 - `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutBucketPolicy`, `s3:PutPublicAccessBlock`
 - `cloudfront:CreateDistribution`, `cloudfront:CreateOriginAccessControl` (or `CreateCloudFrontOriginAccessIdentity` for OAI)
-- If using custom domains: `acm:RequestCertificate`, `acm:DescribeCertificate`
+- If using custom domains: `acm:RequestCertificate`, `acm:DescribeCertificate`, `acm:ListCertificates` (to offer reuse of existing certificates)
 - If using Route53: `route53:ListHostedZones`, `route53:ChangeResourceRecordSets`, `route53:CreateHostedZone` (only if creating a new zone)
 
 ---
@@ -60,13 +60,19 @@ If the wizard cannot access Route53 (e.g., missing permissions), it falls back t
 
 Click **Next** to proceed.
 
-### Step 3: Certificate Deployment (Custom Domain Only)
+### Step 3: Certificate (Custom Domain Only)
 
-If you specified a custom domain, the wizard deploys an ACM certificate in `us-east-1` (required by CloudFront regardless of your chosen region).
+If you specified a custom domain, the wizard first looks for an **existing** ISSUED certificate in `us-east-1` that already covers it (certificates for CloudFront must live in `us-east-1` regardless of your chosen region). Matching considers a certificate's primary domain **and all its Subject Alternative Names**, with wildcard semantics — so a certificate issued for `example.com` with a `*.example.com` SAN is recognized as valid for a subdomain site like `notes.example.com`.
 
-The wizard displays real-time stack events as the certificate is created. This typically takes 1-2 minutes.
+You then choose:
+- **Reuse a matching certificate** — the best match (exact over wildcard, latest expiry) is preselected. Reusing an already-validated certificate skips both certificate creation and DNS validation.
+- **Create a new certificate** — deploys a fresh ACM certificate for your domain (the previous default). The wizard displays real-time stack events; this typically takes 1-2 minutes, then continues to DNS validation.
+- **Enter certificate ARN manually...** — paste an ARN directly. It is validated (must exist, be ISSUED, and cover your domain) before it can be used.
+- **Show all issued certificates...** — lists every issued certificate in the account, flagging any that do not cover your domain.
 
-### Step 4: DNS Validation (Manual DNS Only)
+If the wizard cannot list certificates (e.g., missing `acm:ListCertificates`), it falls back to creating a new certificate or entering an ARN manually.
+
+### Step 4: DNS Validation (New Certificate + Manual DNS Only)
 
 If you are **not** using Route53, you must manually add a CNAME record to validate domain ownership:
 

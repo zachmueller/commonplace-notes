@@ -18,6 +18,7 @@
 		"test:note-params": "npx tsx e2e/scripts/test-note-params.ts",
 		"test:diff-params": "npx tsx e2e/scripts/test-diff-params.ts",
 		"test:comment-sanitizer": "npx tsx e2e/scripts/test-comment-sanitizer.ts",
+		"test:cert-match": "npx tsx e2e/scripts/test-cert-match.ts",
 		"test:password-edge": "npx tsx e2e/scripts/test-password-edge.ts",
 		"test:parser": "npx tsx e2e/scripts/test-parser-pipeline.ts",
 		"test:parser:capture-golden": "npx tsx e2e/scripts/capture-parser-golden.ts > e2e/fixtures/parser-golden.json",

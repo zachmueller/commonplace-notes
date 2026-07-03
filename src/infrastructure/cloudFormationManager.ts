@@ -9,6 +9,7 @@ import {
 import {
 	ACMClient,
 	DescribeCertificateCommand,
+	ListCertificatesCommand,
 } from '@aws-sdk/client-acm';
 import {
 	Route53Client,
@@ -28,6 +29,7 @@ import {
 	PASSWORD_AUTH_TEMPLATE,
 } from './templates';
 import type {
+	CertificateMatch,
 	CognitoAuthOutputs,
 	CommentStackOutputs,
 	DeploymentConfig,
@@ -36,8 +38,23 @@ import type {
 	StackEvent,
 	StackOutputs,
 } from './types';
+import { certCoversDomain } from './certMatch';
 
 const POLL_INTERVAL_MS = 5000;
+
+/** CloudFront-compatible ACM key algorithms. ListCertificates defaults to RSA
+ * only, so ECDSA certs must be requested explicitly via Includes.keyTypes. */
+const CLOUDFRONT_KEY_TYPES = ['RSA_2048', 'EC_prime256v1', 'EC_secp384r1'];
+
+/** Light projection of an ACM ListCertificates summary (SANs may be truncated). */
+interface CertSummaryLite {
+	arn: string;
+	domainName: string;
+	sans: string[];
+	hasAdditionalSans: boolean;
+	notAfter?: number;
+	inUse: boolean;
+}
 
 const TERMINAL_STATUSES = new Set([
 	'CREATE_COMPLETE',
@@ -368,6 +385,150 @@ export class CloudFormationManager {
 			CertificateArn: certArn,
 		}));
 		return response.Certificate?.Status || 'UNKNOWN';
+	}
+
+	/**
+	 * List every ISSUED certificate in the account (us-east-1), paginated. Passes
+	 * Includes.keyTypes so CloudFront-compatible ECDSA certs are returned too —
+	 * ListCertificates otherwise defaults to RSA only. SAN summaries here may be
+	 * truncated (see `hasAdditionalSans`); callers needing the full list must fall
+	 * back to DescribeCertificate.
+	 */
+	async listIssuedCertificates(profile: PublishingProfile): Promise<CertSummaryLite[]> {
+		const client = this.getAcmClient(profile);
+		const summaries: CertSummaryLite[] = [];
+		let nextToken: string | undefined;
+
+		do {
+			const response = await client.send(new ListCertificatesCommand({
+				CertificateStatuses: ['ISSUED'],
+				Includes: { keyTypes: CLOUDFRONT_KEY_TYPES as any },
+				NextToken: nextToken,
+			}));
+			for (const cert of response.CertificateSummaryList || []) {
+				if (!cert.CertificateArn) continue;
+				summaries.push({
+					arn: cert.CertificateArn,
+					domainName: cert.DomainName || '',
+					sans: cert.SubjectAlternativeNameSummaries || [],
+					hasAdditionalSans: cert.HasAdditionalSubjectAlternativeNames || false,
+					notAfter: cert.NotAfter ? cert.NotAfter.getTime() : undefined,
+					inUse: cert.InUse || false,
+				});
+			}
+			nextToken = response.NextToken;
+		} while (nextToken);
+
+		return summaries;
+	}
+
+	/**
+	 * Find ISSUED certificates that cover the given domain — matched against the
+	 * primary DomainName and all SANs, with ACM wildcard semantics. When a
+	 * summary's SANs are truncated, or a wildcard/exact hit needs confirming,
+	 * DescribeCertificate resolves the full SAN list (only when needed, to avoid a
+	 * DescribeCertificate call per certificate). Results are sorted best-first:
+	 * exact matches before wildcard, then latest expiry. A single DescribeCertificate
+	 * failure skips that cert rather than failing the whole lookup.
+	 */
+	async findMatchingCertificates(domain: string, profile: PublishingProfile): Promise<CertificateMatch[]> {
+		const summaries = await this.listIssuedCertificates(profile);
+		const matches: CertificateMatch[] = [];
+
+		for (const summary of summaries) {
+			const summaryNames = [summary.domainName, ...summary.sans].filter(Boolean);
+			let matchType = certCoversDomain(summaryNames, domain);
+			let sans = summary.sans;
+
+			// Resolve the full SAN list when the summary was truncated and we have
+			// not already found a match in the visible names.
+			if (!matchType && summary.hasAdditionalSans) {
+				try {
+					const full = await this.describeCertificateFullNames(summary.arn, profile);
+					sans = full.sans;
+					matchType = certCoversDomain([full.domainName, ...full.sans].filter(Boolean), domain);
+				} catch {
+					// Skip a cert we cannot describe rather than failing the lookup.
+					continue;
+				}
+			}
+
+			if (matchType) {
+				matches.push({
+					arn: summary.arn,
+					domainName: summary.domainName,
+					sans,
+					matchType,
+					notAfter: summary.notAfter,
+					inUse: summary.inUse,
+				});
+			}
+		}
+
+		return matches.sort((a, b) => {
+			if (a.matchType !== b.matchType) return a.matchType === 'exact' ? -1 : 1;
+			return (b.notAfter || 0) - (a.notAfter || 0);
+		});
+	}
+
+	/**
+	 * Every ISSUED certificate in the account, each annotated with how (if at all)
+	 * it covers the domain — backs the wizard's "show all certificates" fallback.
+	 * Annotation uses the (possibly truncated) summary SANs; it is an advisory hint
+	 * only, so no per-cert DescribeCertificate is issued here.
+	 */
+	async listIssuedCertificatesForDomain(domain: string, profile: PublishingProfile): Promise<CertificateMatch[]> {
+		const summaries = await this.listIssuedCertificates(profile);
+		return summaries.map(s => ({
+			arn: s.arn,
+			domainName: s.domainName,
+			sans: s.sans,
+			matchType: certCoversDomain([s.domainName, ...s.sans].filter(Boolean), domain) || undefined,
+			notAfter: s.notAfter,
+			inUse: s.inUse,
+		}));
+	}
+
+	/**
+	 * Validate a user-supplied certificate ARN for reuse: it must exist, be
+	 * ISSUED, and cover the requested domain. Throws a descriptive Error otherwise.
+	 */
+	async describeCertificateForReuse(arn: string, domain: string, profile: PublishingProfile): Promise<CertificateMatch> {
+		const client = this.getAcmClient(profile);
+		const response = await client.send(new DescribeCertificateCommand({ CertificateArn: arn }));
+		const cert = response.Certificate;
+		if (!cert) throw new Error(`Certificate ${arn} not found.`);
+		if (cert.Status !== 'ISSUED') {
+			throw new Error(`Certificate is ${cert.Status || 'in an unknown state'}, not ISSUED. Only validated certificates can be reused.`);
+		}
+
+		const domainName = cert.DomainName || '';
+		const sans = cert.SubjectAlternativeNames || [];
+		const matchType = certCoversDomain([domainName, ...sans].filter(Boolean), domain);
+		if (!matchType) {
+			throw new Error(`This certificate (${domainName}) does not cover "${domain}".`);
+		}
+
+		return {
+			arn,
+			domainName,
+			sans,
+			matchType,
+			notAfter: cert.NotAfter ? cert.NotAfter.getTime() : undefined,
+			// DescribeCertificate reports usage as InUseBy (list of resource ARNs),
+			// unlike the list summary's boolean InUse.
+			inUse: (cert.InUseBy?.length || 0) > 0,
+		};
+	}
+
+	/** DescribeCertificate helper returning just the primary name + full SAN list. */
+	private async describeCertificateFullNames(arn: string, profile: PublishingProfile): Promise<{ domainName: string; sans: string[] }> {
+		const client = this.getAcmClient(profile);
+		const response = await client.send(new DescribeCertificateCommand({ CertificateArn: arn }));
+		return {
+			domainName: response.Certificate?.DomainName || '',
+			sans: response.Certificate?.SubjectAlternativeNames || [],
+		};
 	}
 
 	async pollStackUntilComplete(

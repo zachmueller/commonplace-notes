@@ -3,7 +3,7 @@ import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
-import type { CognitoAuthOutputs, CommentStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
+import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3 } from '../publish/awsUpload';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
@@ -24,6 +24,9 @@ export class DeploymentWizardModal extends Modal {
 	private step: WizardStep = 1;
 	private config: Partial<DeploymentConfig> = {};
 	private certArn: string = '';
+	private certReused = false;
+	/** The certificate match the chooser has highlighted for reuse (step 2). */
+	private selectedCertMatch: CertificateMatch | null = null;
 	private stackOutputs: StackOutputs | null = null;
 	private cognitoOutputs: CognitoAuthOutputs | null = null;
 	private cognitoStackName: string = '';
@@ -521,7 +524,220 @@ export class DeploymentWizardModal extends Modal {
 				.onChange(v => { this.config.hostedZoneName = v; }));
 	}
 
+	/**
+	 * Certificate step. Looks up ISSUED certificates in the account (us-east-1)
+	 * that cover the custom domain — matching the primary DomainName and all SANs,
+	 * with wildcard semantics — and offers to reuse one instead of creating a new
+	 * cert. The create path (runCertCreate) preserves the original behavior; the
+	 * reuse path (reuseCertificate) skips certificate creation and DNS validation.
+	 */
 	private async renderStep2DeployCert(): Promise<void> {
+		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
+		container.createEl('h2', { text: 'Certificate' });
+		const domain = this.config.customDomain || '';
+
+		const statusEl = container.createEl('p', {
+			text: 'Looking up existing certificates in us-east-1...',
+			cls: 'cpn-wizard-description',
+		});
+		const chooserEl = container.createDiv();
+
+		let matches: CertificateMatch[];
+		try {
+			matches = await this.cfManager.findMatchingCertificates(domain, this.activeProfile);
+		} catch (err: any) {
+			if (this.aborted) return;
+			// Non-fatal (e.g. missing acm:ListCertificates): fall back to creating a
+			// new cert or pasting an existing ARN.
+			statusEl.setText(`Couldn't list existing certificates: ${err.message}. Create a new certificate, or enter an existing certificate ARN.`);
+			this.renderCertChooser(chooserEl, [], domain);
+			return;
+		}
+
+		if (this.aborted) return;
+
+		statusEl.setText(matches.length === 0
+			? `No existing certificate covers "${domain}". Create a new certificate, or enter an existing certificate ARN.`
+			: `Found ${matches.length} existing certificate${matches.length > 1 ? 's' : ''} that can serve "${domain}". Reuse one, or create a new certificate.`);
+		this.renderCertChooser(chooserEl, matches, domain);
+	}
+
+	/** The dropdown of reuse candidates + create/manual/show-all options. */
+	private renderCertChooser(container: HTMLElement, matches: CertificateMatch[], domain: string): void {
+		this.selectedCertMatch = matches.length > 0 ? matches[0] : null;
+
+		new Setting(container)
+			.setName('Certificate')
+			.setDesc(matches.length > 0
+				? 'Reuse an existing certificate or create a new one'
+				: 'Create a new certificate or reuse an existing one')
+			.addDropdown(dd => {
+				for (const match of matches) {
+					dd.addOption(match.arn, this.certOptionLabel(match));
+				}
+				dd.addOption('__create__', 'Create a new certificate');
+				dd.addOption('__manual__', 'Enter certificate ARN manually...');
+				dd.addOption('__all__', 'Show all issued certificates...');
+				dd.setValue(this.selectedCertMatch ? this.selectedCertMatch.arn : '__create__');
+				dd.onChange(v => {
+					if (v === '__manual__') {
+						container.empty();
+						this.renderManualArnEntry(container, domain);
+					} else if (v === '__all__') {
+						container.empty();
+						this.renderAllCertsChooser(container, domain);
+					} else if (v === '__create__') {
+						this.selectedCertMatch = null;
+					} else {
+						this.selectedCertMatch = matches.find(m => m.arn === v) || null;
+					}
+				});
+			});
+
+		new Setting(container)
+			.addButton(btn => btn
+				.setButtonText('Continue')
+				.setCta()
+				.onClick(() => {
+					if (this.selectedCertMatch) {
+						this.reuseCertificate(this.selectedCertMatch);
+					} else {
+						this.runCertCreate();
+					}
+				}));
+	}
+
+	/** A one-line description of a reuse candidate for the chooser dropdown. */
+	private certOptionLabel(match: CertificateMatch, domain?: string): string {
+		const parts: string[] = [match.domainName || '(no domain)'];
+		if (match.matchType) {
+			parts.push(`${match.matchType} match`);
+		} else if (domain) {
+			parts.push(`does not cover ${domain}`);
+		}
+		if (match.notAfter) {
+			parts.push(`expires ${new Date(match.notAfter).toLocaleDateString()}`);
+		}
+		if (match.inUse) parts.push('in use');
+		return `${parts.join(' — ')} (…${match.arn.slice(-12)})`;
+	}
+
+	/** Manual ARN entry — validated (exists, ISSUED, covers the domain) before reuse. */
+	private renderManualArnEntry(container: HTMLElement, domain: string): void {
+		let arnValue = '';
+		new Setting(container)
+			.setName('Certificate ARN')
+			.setDesc(`Must be an ISSUED certificate in us-east-1 that covers "${domain}".`)
+			.addText(text => text
+				.setPlaceholder('arn:aws:acm:us-east-1:...:certificate/...')
+				.onChange(v => { arnValue = v; }));
+
+		const statusEl = container.createDiv({ cls: 'cpn-dns-status' });
+
+		new Setting(container)
+			.addButton(btn => btn
+				.setButtonText('Use this certificate')
+				.setCta()
+				.onClick(async () => {
+					if (!arnValue.trim()) {
+						new Notice('Enter a certificate ARN.');
+						return;
+					}
+					btn.setDisabled(true);
+					statusEl.setText('Validating certificate...');
+					try {
+						const match = await this.cfManager.describeCertificateForReuse(arnValue.trim(), domain, this.activeProfile);
+						await this.reuseCertificate(match);
+					} catch (err: any) {
+						btn.setDisabled(false);
+						statusEl.setText('');
+						new Notice(err.message);
+					}
+				}))
+			.addButton(btn => btn
+				.setButtonText('Back')
+				.onClick(() => this.renderStep()));
+	}
+
+	/** Fallback list of every ISSUED cert, annotated with domain coverage. */
+	private async renderAllCertsChooser(container: HTMLElement, domain: string): Promise<void> {
+		const loadingEl = container.createEl('p', { text: 'Loading all issued certificates...', cls: 'cpn-wizard-description' });
+
+		let certs: CertificateMatch[];
+		try {
+			certs = await this.cfManager.listIssuedCertificatesForDomain(domain, this.activeProfile);
+		} catch (err: any) {
+			if (this.aborted) return;
+			loadingEl.setText(`Couldn't list certificates: ${err.message}`);
+			return;
+		}
+		if (this.aborted) return;
+		loadingEl.remove();
+
+		container.createEl('p', {
+			text: certs.length === 0
+				? 'No issued certificates found in this account.'
+				: `Showing all issued certificates. One that does not cover "${domain}" cannot serve your site.`,
+			cls: 'cpn-wizard-description',
+		});
+
+		let selected: CertificateMatch | null = certs.length > 0 ? certs[0] : null;
+		if (certs.length > 0) {
+			new Setting(container)
+				.setName('Certificate')
+				.addDropdown(dd => {
+					for (const cert of certs) {
+						dd.addOption(cert.arn, this.certOptionLabel(cert, domain));
+					}
+					dd.setValue(selected!.arn);
+					dd.onChange(v => { selected = certs.find(c => c.arn === v) || null; });
+				});
+		}
+
+		new Setting(container)
+			.addButton(btn => btn
+				.setButtonText('Use selected certificate')
+				.setCta()
+				.setDisabled(certs.length === 0)
+				.onClick(async () => {
+					if (!selected) return;
+					// Re-validate via DescribeCertificate: confirms coverage even when
+					// the summary's SANs were truncated (annotation is only a hint).
+					btn.setDisabled(true);
+					try {
+						const match = await this.cfManager.describeCertificateForReuse(selected.arn, domain, this.activeProfile);
+						await this.reuseCertificate(match);
+					} catch (err: any) {
+						btn.setDisabled(false);
+						new Notice(err.message);
+					}
+				}))
+			.addButton(btn => btn
+				.setButtonText('Back')
+				.onClick(() => this.renderStep()));
+	}
+
+	/** Reuse an already-ISSUED certificate: record it and skip creation + DNS. */
+	private async reuseCertificate(match: CertificateMatch): Promise<void> {
+		this.certArn = match.arn;
+		this.config.certificateArn = match.arn;
+		this.certReused = true;
+		await this.updateInfraState({
+			status: 'cert-deployed',
+			certificateArn: match.arn,
+			certificateReused: true,
+			certStackName: undefined, // we do not own a cert stack for a reused cert
+			customDomain: this.config.customDomain,
+		});
+		// Already ISSUED — skip the DNS validation step entirely, regardless of Route53.
+		this.step = this.stepAfterDomainPath();
+		this.renderStep();
+	}
+
+	/** Create a brand-new ACM certificate stack (the original step-2 behavior). */
+	private async runCertCreate(): Promise<void> {
+		this.contentEl.empty();
+		this.renderStepIndicator();
 		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
 		container.createEl('h2', { text: 'Deploy Certificate' });
 		container.createEl('p', {
@@ -530,6 +746,7 @@ export class DeploymentWizardModal extends Modal {
 		});
 
 		const eventLog = container.createDiv({ cls: 'cpn-wizard-event-log' });
+		this.certReused = false;
 
 		try {
 			const stackName = await this.cfManager.deployCertificateStack(this.config as DeploymentConfig);
@@ -538,6 +755,7 @@ export class DeploymentWizardModal extends Modal {
 				certStackName: stackName,
 				status: 'cert-deploying',
 				customDomain: this.config.customDomain,
+				certificateReused: false,
 			});
 
 			const finalStatus = await this.cfManager.pollStackUntilComplete(
@@ -552,7 +770,7 @@ export class DeploymentWizardModal extends Modal {
 			if (finalStatus === 'CREATE_COMPLETE') {
 				this.certArn = await this.cfManager.getCertificateArn(stackName, this.activeProfile);
 				this.config.certificateArn = this.certArn;
-				await this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn });
+				await this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn, certificateReused: false });
 
 				if (this.config.useRoute53) {
 					this.step = this.stepAfterDomainPath();
@@ -964,7 +1182,7 @@ export class DeploymentWizardModal extends Modal {
 		profile.infrastructureState = {
 			status: 'deployed',
 			fullStackName: this.cfManager.getStackName(this.config.variantName || '', 'full'),
-			certStackName: this.config.customDomain
+			certStackName: (this.config.customDomain && !this.certReused)
 				? this.cfManager.getStackName(this.config.variantName || '', 'cert')
 				: undefined,
 			customDomain: this.config.customDomain || undefined,
@@ -972,6 +1190,7 @@ export class DeploymentWizardModal extends Modal {
 			hostedZoneId: this.config.hostedZoneId || undefined,
 			hostedZoneName: this.config.hostedZoneName || undefined,
 			certificateArn: this.certArn || undefined,
+			certificateReused: this.certReused || undefined,
 			lastDeployTimestamp: Date.now(),
 			region: this.config.region,
 			variantName: this.config.variantName,
