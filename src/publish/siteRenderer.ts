@@ -112,6 +112,7 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 		config.commentsEnabled = true;
 		config.commentReadPath = '/comments/';
 		config.commentWritePath = '/api/comments';
+		config.commentMePath = '/api/me';
 		if (auth.hostedUiDomain && auth.userPoolClientId && profile.baseUrl) {
 			const redirectUri = profile.baseUrl.replace(/\/+$/, '') + '/auth/callback';
 			const params = new URLSearchParams({

@@ -196,6 +196,25 @@ export class CommentStack extends cdk.Stack {
 			environment: { variables: { TABLE_NAME: table.ref } },
 		});
 
+		// ---- Profile / identity Lambda (/api/me) -----------------------------
+		// Whoami + one-time username claim. Uses TransactWriteItems for atomic
+		// per-user immutability + site-wide uniqueness (see comment-me.js).
+		const meRole = basicRole('MeFnRole', [
+			{
+				Effect: 'Allow',
+				Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
+				Resource: table.attrArn,
+			},
+		]);
+		const meFn = new cdk.aws_lambda.CfnFunction(this, 'MeFn', {
+			runtime: 'nodejs20.x',
+			handler: 'index.handler',
+			role: meRole.attrArn,
+			timeout: 10,
+			code: { zipFile: readInlineLambda('comment-me.js') },
+			environment: { variables: { TABLE_NAME: table.ref } },
+		});
+
 		// ---- Re-export Lambda + DLQ ------------------------------------------
 		const dlq = new cdk.aws_sqs.CfnQueue(this, 'ReexportDlq', {
 			messageRetentionPeriod: 1209600, // 14 days
@@ -258,11 +277,29 @@ export class CommentStack extends cdk.Stack {
 			payloadFormatVersion: '2.0',
 		});
 
+		const meIntegration = new cdk.aws_apigatewayv2.CfnIntegration(this, 'MeIntegration', {
+			apiId: api.ref,
+			integrationType: 'AWS_PROXY',
+			integrationUri: meFn.attrArn,
+			integrationMethod: 'POST',
+			payloadFormatVersion: '2.0',
+		});
+
 		for (const [method, logicalId] of [['POST', 'PostRoute'], ['PATCH', 'PatchRoute'], ['DELETE', 'DeleteRoute']] as const) {
 			new cdk.aws_apigatewayv2.CfnRoute(this, logicalId, {
 				apiId: api.ref,
 				routeKey: `${method} /api/comments`,
 				target: cdk.Fn.join('', ['integrations/', integration.ref]),
+				authorizationType: 'CUSTOM',
+				authorizerId: authorizer.ref,
+			});
+		}
+
+		for (const [method, logicalId] of [['GET', 'MeGetRoute'], ['POST', 'MePostRoute']] as const) {
+			new cdk.aws_apigatewayv2.CfnRoute(this, logicalId, {
+				apiId: api.ref,
+				routeKey: `${method} /api/me`,
+				target: cdk.Fn.join('', ['integrations/', meIntegration.ref]),
 				authorizationType: 'CUSTOM',
 				authorizerId: authorizer.ref,
 			});
@@ -280,6 +317,16 @@ export class CommentStack extends cdk.Stack {
 			principal: 'apigateway.amazonaws.com',
 			sourceArn: cdk.Fn.sub(
 				'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/api/comments',
+				{ ApiId: api.ref },
+			),
+		});
+
+		new cdk.aws_lambda.CfnPermission(this, 'MeInvokePermission', {
+			action: 'lambda:InvokeFunction',
+			functionName: meFn.ref,
+			principal: 'apigateway.amazonaws.com',
+			sourceArn: cdk.Fn.sub(
+				'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/api/me',
 				{ ApiId: api.ref },
 			),
 		});

@@ -686,6 +686,11 @@ body.panel-resizing {
 	color: var(--text-secondary);
 	margin-bottom: 4px;
 }
+.comment-author {
+	font-weight: 600;
+	color: var(--text-primary);
+	margin-right: 8px;
+}
 .comment-body {
 	font-size: 14px;
 	line-height: 1.5;
@@ -719,6 +724,35 @@ body.panel-resizing {
 	font-family: inherit;
 	font-size: 14px;
 	resize: vertical;
+}
+.comment-input:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	background-color: var(--bg-secondary);
+}
+.comment-username-setup {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.comment-username-label {
+	font-size: 13px;
+	color: var(--text-secondary);
+}
+.comment-username-input {
+	width: 100%;
+	max-width: 260px;
+	padding: 6px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background-color: var(--bg-primary);
+	color: var(--text-primary);
+	font-family: inherit;
+	font-size: 14px;
+}
+.comment-username-error {
+	font-size: 12px;
+	color: #d33;
 }
 .comment-submit {
 	align-self: flex-start;
@@ -1851,6 +1885,40 @@ ${closeButton}
 			}
 		}
 
+		// Whoami: does the reader have comment access, and have they picked a
+		// username yet? The cpn_id session cookie is HttpOnly (JS can't read it),
+		// so this authenticated round-trip is the only client-visible auth signal.
+		// Returns { authenticated: false } for signed-out readers (401/403), or
+		// { authenticated: true, username: <string|null> } when signed in.
+		async function fetchMe() {
+			const path = cpnConfig().commentMePath || '/api/me';
+			try {
+				const res = await fetch(path, { credentials: 'same-origin' });
+				if (res.status === 401 || res.status === 403) return { authenticated: false };
+				if (!res.ok) return { authenticated: false };
+				const data = await res.json();
+				return { authenticated: true, username: (data && data.username) || null };
+			} catch (err) {
+				return { authenticated: false };
+			}
+		}
+
+		// Claim a unique, permanent username. Resolves to { ok:true, username } or
+		// { ok:false, error } (400 invalid format, 409 taken/already-set).
+		async function postUsername(username) {
+			const path = cpnConfig().commentMePath || '/api/me';
+			const res = await fetch(path, {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ username }),
+			});
+			let data = {};
+			try { data = await res.json(); } catch (e) { /* ignore */ }
+			if (res.ok) return { ok: true, username: data.username || username };
+			return { ok: false, error: (data && data.error) || `HTTP ${res.status}` };
+		}
+
 		function hostedUiLoginUrl() {
 			const cfg = cpnConfig();
 			if (!cfg.authLoginUrl) return null;
@@ -1882,8 +1950,9 @@ ${closeButton}
 				return el;
 			}
 			const when = c.createdAt ? new Date(c.createdAt * 1000).toLocaleString() : '';
+			const author = c.authorName ? '@' + c.authorName : 'anonymous';
 			el.innerHTML = `
-				<div class="comment-meta"><span class="comment-when">${escapeHtml(when)}</span></div>
+				<div class="comment-meta"><span class="comment-author">${escapeHtml(author)}</span><span class="comment-when">${escapeHtml(when)}</span></div>
 				<div class="comment-body">${renderMarkdown(c.body)}</div>
 			`;
 			return el;
@@ -1926,11 +1995,90 @@ ${closeButton}
 			return res.json();
 		}
 
-		function buildComposer(panel, noteData, region, refresh) {
-			const composer = region.querySelector('.comment-composer');
+		// Render the "Sign in to comment" affordance into a composer container.
+		function showSignIn(composer) {
 			composer.innerHTML = '';
 			const login = hostedUiLoginUrl();
-			// Render compose box; on a 401/403 fall back to the sign-in affordance.
+			if (login) {
+				const a = document.createElement('a');
+				a.className = 'comment-signin';
+				a.href = login;
+				a.textContent = 'Sign in to comment';
+				composer.appendChild(a);
+			} else {
+				composer.textContent = 'Sign-in is not configured for this site.';
+			}
+		}
+
+		// One-time username-setup step for a signed-in reader who hasn't chosen a
+		// handle yet. On success it rebuilds the composer as an enabled compose box.
+		function buildUsernameSetup(panel, noteData, region, refresh) {
+			const composer = region.querySelector('.comment-composer');
+			composer.innerHTML = '';
+			const wrap = document.createElement('div');
+			wrap.className = 'comment-username-setup';
+			const label = document.createElement('label');
+			label.className = 'comment-username-label';
+			label.textContent = 'Choose a username to comment (3–20 letters, digits or underscore). This is permanent.';
+			const input = document.createElement('input');
+			input.className = 'comment-username-input';
+			input.type = 'text';
+			input.maxLength = 20;
+			input.placeholder = 'username';
+			const save = document.createElement('button');
+			save.className = 'comment-submit';
+			save.textContent = 'Choose username';
+			const error = document.createElement('span');
+			error.className = 'comment-username-error';
+
+			save.addEventListener('click', async () => {
+				error.textContent = '';
+				const name = input.value.trim();
+				if (!name) return;
+				save.disabled = true;
+				try {
+					const result = await postUsername(name);
+					if (result.ok) {
+						buildComposer(panel, noteData, region, refresh, { authenticated: true, username: result.username });
+					} else {
+						error.textContent = result.error;
+					}
+				} catch (err) {
+					error.textContent = 'Could not set username.';
+				} finally {
+					save.disabled = false;
+				}
+			});
+
+			wrap.appendChild(label);
+			wrap.appendChild(input);
+			wrap.appendChild(save);
+			wrap.appendChild(error);
+			composer.appendChild(wrap);
+		}
+
+		// Render the compose box. `auth` is { authenticated, username }: a
+		// signed-out reader gets a DISABLED textarea plus the sign-in link, so the
+		// input is never typeable without comment access. Signed-in-with-username
+		// readers get the working composer.
+		function buildComposer(panel, noteData, region, refresh, auth) {
+			const composer = region.querySelector('.comment-composer');
+			composer.innerHTML = '';
+			const signedIn = !!(auth && auth.authenticated && auth.username);
+
+			if (!signedIn) {
+				// Disabled preview textarea above the sign-in affordance.
+				const preview = document.createElement('textarea');
+				preview.className = 'comment-input';
+				preview.placeholder = 'Sign in to add a comment';
+				preview.disabled = true;
+				composer.appendChild(preview);
+				const signinWrap = document.createElement('div');
+				composer.appendChild(signinWrap);
+				showSignIn(signinWrap);
+				return;
+			}
+
 			const textarea = document.createElement('textarea');
 			textarea.className = 'comment-input';
 			textarea.placeholder = 'Add a comment (Markdown supported)…';
@@ -1939,19 +2087,6 @@ ${closeButton}
 			submit.textContent = 'Comment';
 			const status = document.createElement('span');
 			status.className = 'comment-status';
-
-			const showSignIn = () => {
-				composer.innerHTML = '';
-				if (login) {
-					const a = document.createElement('a');
-					a.className = 'comment-signin';
-					a.href = login;
-					a.textContent = 'Sign in to comment';
-					composer.appendChild(a);
-				} else {
-					composer.textContent = 'Sign-in is not configured for this site.';
-				}
-			};
 
 			submit.addEventListener('click', async () => {
 				const body = textarea.value.trim();
@@ -1965,7 +2100,8 @@ ${closeButton}
 					setTimeout(refresh, 1500);
 				} catch (err) {
 					if (err.message === 'auth') {
-						showSignIn();
+						// Session expired since load — fall back to the sign-in affordance.
+						showSignIn(composer);
 					} else {
 						status.textContent = 'Could not post comment.';
 					}
@@ -2006,7 +2142,17 @@ ${closeButton}
 			if (data === null) return; // network error — leave the region hidden
 			region.hidden = false;
 			renderThreadInto(region, data.comments);
-			buildComposer(panel, noteData, region, refresh);
+
+			// Gate the composer on the reader's auth/identity state:
+			//   signed out            -> disabled box + "Sign in to comment"
+			//   signed in, no username -> one-time username-setup step
+			//   signed in, has username -> working composer
+			const auth = await fetchMe();
+			if (auth.authenticated && !auth.username) {
+				buildUsernameSetup(panel, noteData, region, refresh);
+			} else {
+				buildComposer(panel, noteData, region, refresh, auth);
+			}
 		}
 
 		// Build the side-by-side diff HTML for a note against a ;diff= mini-target.

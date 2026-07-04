@@ -160,6 +160,22 @@ export function addAuthCommentWiring(
 			},
 			cdk.Aws.NO_VALUE,
 		),
+		// /api/me — profile/whoami + username claim; same origin, same no-cache +
+		// cookie-forwarding as /api/comments.
+		cdk.Fn.conditionIf(
+			'HasCommentApi',
+			{
+				PathPattern: '/api/me',
+				TargetOriginId: 'CommentApiOrigin',
+				ViewerProtocolPolicy: 'redirect-to-https',
+				AllowedMethods: ALL_METHODS,
+				CachedMethods: ['GET', 'HEAD'],
+				Compress: true,
+				CachePolicyId: CACHE_DISABLED,
+				OriginRequestPolicyId: ORIGIN_REQ_ALL_VIEWER_EXCEPT_HOST,
+			},
+			cdk.Aws.NO_VALUE,
+		),
 		// /comments/* — open, CDN-cached reads. Inherit the site's gating: when an
 		// edge fn is attached (HasAuthLambda), gate comment reads too; otherwise
 		// they stay world-readable (open-blog model).

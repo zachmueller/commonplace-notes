@@ -65,6 +65,7 @@ function buildView(items) {
 				noteHash: (it.noteHash && it.noteHash.S) || '',
 				parentCommentUid: (it.parentCommentUid && it.parentCommentUid.S) || null,
 				authorId: (it.authorId && it.authorId.S) || '',
+				authorName: (it.authorName && it.authorName.S) || '',
 				body: deleted ? null : (it.body && it.body.S) || '',
 				createdAt: it.createdAt ? Number(it.createdAt.N) : 0,
 				updatedAt: it.updatedAt ? Number(it.updatedAt.N) : 0,

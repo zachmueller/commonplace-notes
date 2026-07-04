@@ -18,6 +18,16 @@
 //   DELETE { commentUid, noteUid, createdAt }
 
 const { DynamoDBClient, PutItemCommand, GetItemCommand, UpdateItemCommand } = require('@aws-sdk/client-dynamodb');
+
+// Look up the poster's chosen username (denormalized onto each comment so the
+// read path needs no join). Set once via /api/me; see comment-me.js.
+async function usernameOf(ddb, table, sub) {
+	const out = await ddb.send(new GetItemCommand({
+		TableName: table,
+		Key: { PK: { S: 'USER#' + sub }, SK: { S: 'PROFILE' } },
+	}));
+	return out.Item && out.Item.username && out.Item.username.S ? out.Item.username.S : null;
+}
 const crypto = require('crypto');
 
 const ddb = new DynamoDBClient({});
@@ -61,6 +71,10 @@ exports.handler = async (event) => {
 	if (method === 'POST') {
 		const { noteUid, noteHash, body, parentCommentUid, quote } = payload;
 		if (!noteUid || !body) return resp(400, { error: 'noteUid and body are required' });
+		// Every commenter must have claimed a username (the widget enforces this
+		// via /api/me before enabling the composer; this is the server guard).
+		const authorName = await usernameOf(ddb, TABLE, authorId);
+		if (!authorName) return resp(409, { error: 'choose a username first' });
 		const commentUid = mintUid(8);
 		const now = Math.floor(Date.now() / 1000);
 		const item = {
@@ -70,6 +84,7 @@ exports.handler = async (event) => {
 			noteUid: { S: noteUid },
 			noteHash: { S: noteHash || '' },
 			authorId: { S: authorId },
+			authorName: { S: authorName },
 			body: { S: body },
 			createdAt: { N: String(now) },
 			updatedAt: { N: String(now) },
