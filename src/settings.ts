@@ -1077,22 +1077,18 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						btn.setButtonText('Updating...');
 						statusEl.empty();
 						try {
-							const config = {
-								profileId: profile.id,
-								variantName: state.variantName || '',
-								s3Prefix: profile.awsSettings!.s3Prefix || '',
-								customDomain: state.customDomain || '',
-								certificateArn: state.certificateArn || '',
-								useRoute53: state.useRoute53,
-								hostedZoneId: state.hostedZoneId || '',
-								hostedZoneName: state.hostedZoneName || '',
-								region: state.region || profile.awsSettings!.region,
-								awsProfile: profile.awsSettings!.awsProfile,
-								originAccessMethod: state.originAccessMethod,
-								authLambdaEdgeArn: arnValue,
-							};
-
-							await this.plugin.cloudFormationManager.updateFullStack(config);
+							// Targeted update: change ONLY the auth ARN and inherit every
+							// other parameter via UsePreviousValue. Rebuilding the full
+							// parameter set from this partial config would blank the
+							// comment/auth domain params and prune the /auth/*, /comments/*
+							// and /api/comments routes off a working site.
+							await this.plugin.cloudFormationManager.updateFullStackAuthLambda(
+								state.fullStackName!,
+								state.originAccessMethod,
+								arnValue,
+								profile,
+								state.region,
+							);
 
 							const finalStatus = await this.plugin.cloudFormationManager.pollStackUntilComplete(
 								state.fullStackName!,

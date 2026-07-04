@@ -4,7 +4,7 @@ import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
 import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
-import { pushSiteAssetsToS3 } from '../publish/awsUpload';
+import { pushSiteAssetsToS3, createCloudFrontInvalidation } from '../publish/awsUpload';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -1041,6 +1041,21 @@ export class DeploymentWizardModal extends Modal {
 				await this.runCommentDeploy(container, eventLog);
 				if (this.aborted) return;
 
+				// Populate the profile from stack outputs and seed the initial site
+				// assets (landing index.html, styles, scripts, config) so the deployed
+				// site serves a working page immediately. Done automatically here rather
+				// than relying on the optional "Apply to Profile" button on the next
+				// screen — otherwise a fresh bucket stays empty and CloudFront returns
+				// S3 "Access Denied" (OAC grants GetObject only, so a missing index.html
+				// is a 403, not a 404). Must run after the profile's commenting/cognito
+				// state is set, which applyOutputsToProfile() does before pushing assets.
+				container.createEl('p', {
+					text: 'Applying outputs to profile and uploading initial site assets...',
+					cls: 'cpn-wizard-description',
+				});
+				await this.applyOutputsToProfile();
+				if (this.aborted) return;
+
 				this.step = 6;
 				this.renderStep();
 			} else {
@@ -1184,10 +1199,10 @@ export class DeploymentWizardModal extends Modal {
 		}
 
 		new Setting(container)
-			.setName('Auto-populate profile settings')
-			.setDesc('Write the deployed infrastructure outputs into this publishing profile')
+			.setName('Re-apply profile settings')
+			.setDesc('Outputs were already applied and the initial site assets uploaded automatically. Use this to re-apply the outputs and re-push the site assets.')
 			.addButton(btn => btn
-				.setButtonText('Apply to Profile')
+				.setButtonText('Re-apply & re-push assets')
 				.setCta()
 				.onClick(() => this.applyOutputsToProfile()));
 
@@ -1275,8 +1290,21 @@ export class DeploymentWizardModal extends Modal {
 		this.refreshSettingsTab();
 		new Notice('Profile settings updated from stack outputs.');
 
-		// Push initial site assets so the deployed site has content immediately
-		await pushSiteAssetsToS3(this.plugin, profile.id);
+		// Push initial site assets so the deployed site has content immediately.
+		// Without this the bucket stays empty and CloudFront returns S3 "Access
+		// Denied" (OAC grants GetObject only — a missing index.html is a 403, not a
+		// 404). pushSiteAssetsToS3 catches its own errors and returns false rather
+		// than throwing, so a failure here never marks the deploy failed; surface an
+		// actionable hint and bust the edge cache on success.
+		const seeded = await pushSiteAssetsToS3(this.plugin, profile.id);
+		if (seeded) {
+			await createCloudFrontInvalidation(this.plugin, profile.id);
+		} else {
+			new Notice(
+				'Infrastructure deployed, but the initial site assets could not be uploaded. Use Settings → "Push site assets" to retry.',
+				10000,
+			);
+		}
 	}
 
 	/**

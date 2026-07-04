@@ -279,6 +279,35 @@ export class CloudFormationManager {
 	}
 
 	/**
+	 * Every full-stack template parameter key. Used to build a targeted update
+	 * that changes only a named subset and inherits the rest via UsePreviousValue.
+	 */
+	private static readonly FULL_STACK_PARAM_KEYS = [
+		'VariantName', 'S3Prefix', 'CustomDomain', 'CertificateArn', 'UseRoute53',
+		'HostedZoneId', 'HostedZoneName', 'AuthLambdaEdgeArn',
+		'CallbackApiDomainName', 'CommentBucketDomainName', 'CommentApiDomainName',
+	] as const;
+
+	/**
+	 * Build UpdateStack parameters that change only the keys present in
+	 * `overrides` and keep every other key at its currently-deployed value
+	 * (UsePreviousValue). This is critical for partial updates: the site
+	 * distribution's /auth/*, /comments/* and /api/comments origins+behaviors are
+	 * pruned when their domain parameters resolve to '', so an update that only
+	 * means to change the auth ARN must NOT re-pass those domains as empty (which
+	 * `buildFullStackParameters` would, from a partial config) or it silently tears
+	 * those routes off a working site. ParameterValue and UsePreviousValue are
+	 * mutually exclusive per key.
+	 */
+	private buildFullStackUpdateParameters(overrides: Partial<Record<string, string>>) {
+		return CloudFormationManager.FULL_STACK_PARAM_KEYS.map((key) =>
+			key in overrides
+				? { ParameterKey: key, ParameterValue: overrides[key] }
+				: { ParameterKey: key, UsePreviousValue: true },
+		);
+	}
+
+	/**
 	 * Deploy the self-hosted comment backend (DynamoDB + stream re-export + write
 	 * API with cookie authorizer). Deployed in the site region, after the full
 	 * stack (it needs the site distribution/OAI id for the comment bucket's
@@ -366,6 +395,41 @@ export class CloudFormationManager {
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	/**
+	 * Targeted update that changes ONLY the viewer-request auth Lambda@Edge ARN and
+	 * leaves every other full-stack parameter at its deployed value. Use this
+	 * instead of updateFullStack() when the caller only knows the ARN (e.g. the
+	 * Settings "Update Auth Lambda@Edge" modal): a full parameter rebuild from a
+	 * partial config would blank CallbackApiDomainName/CommentBucketDomainName/
+	 * CommentApiDomainName and prune the /auth/*, /comments/*, /api/comments routes
+	 * off a working site. Pass '' to remove read-gating.
+	 */
+	async updateFullStackAuthLambda(
+		stackName: string,
+		originAccessMethod: DeploymentConfig['originAccessMethod'],
+		authLambdaEdgeArn: string,
+		profile: PublishingProfile,
+		region?: string,
+	): Promise<string> {
+		const client = this.getCloudFormationClientForProfile(profile, region);
+		const template = originAccessMethod === 'oac'
+			? FULL_STACK_OAC_TEMPLATE
+			: FULL_STACK_OAI_TEMPLATE;
+
+		await client.send(new UpdateStackCommand({
+			StackName: stackName,
+			TemplateBody: template,
+			Parameters: this.buildFullStackUpdateParameters({ AuthLambdaEdgeArn: authLambdaEdgeArn }),
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: profile.id },
 			],
 		}));
 
