@@ -470,11 +470,17 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					const result = await this.destroyInfrastructure(profile, (event) => {
 						Logger.info(`[destroy ${profile.name}] ${event.logicalResourceId} - ${event.status}`);
 					});
-					NoticeManager.showNotice(
-						result.authStackRetryNeeded
-							? 'Infrastructure destroyed. The auth stack may need a retry once the CloudFront edge replicas are removed.'
-							: 'Infrastructure destroyed.',
-					);
+					if (result.fullyDestroyed) {
+						NoticeManager.showNotice('Infrastructure destroyed.');
+					} else {
+						NoticeManager.showNotice(
+							`Some stacks could not be deleted yet (${result.leftoverStacks.join(', ')}). ` +
+							(result.authStackRetryNeeded
+								? 'Auth stacks with Lambda@Edge may need time for CloudFront to remove edge replicas. '
+								: '') +
+							'Use "Force-clean leftover infrastructure" in Settings → Danger Zone to finish.',
+						);
+					}
 				} catch (err: any) {
 					NoticeManager.showNotice(`Error destroying infrastructure: ${err.message}`);
 				}
@@ -508,9 +514,21 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	}
 
 	/**
+	 * Reset a profile's infrastructure/auth/comment state to the clean, undeployed
+	 * default. Called once teardown has confirmed every stack is gone.
+	 */
+	private async resetInfrastructureState(profile: PublishingProfile): Promise<void> {
+		// No spread — clears cognitoAuth/passwordAuth/comment and intent.
+		profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
+		profile.readGate = undefined;
+		profile.cognitoAuth = undefined;
+		profile.commenting = undefined;
+		await this.saveSettings();
+	}
+
+	/**
 	 * Tear down a profile's deployed infrastructure: delete its CloudFormation
-	 * stacks in dependency order, polling each to completion, then reset the
-	 * profile's infrastructure/auth/comment state. Shared by the
+	 * stacks in dependency order, polling each to completion. Shared by the
 	 * `destroy-infrastructure` command and the Settings "Danger Zone" button.
 	 *
 	 * Callers are expected to have already confirmed with the user (see
@@ -520,15 +538,20 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	 * `onEvent` receives per-resource CloudFormation events (same shape the deploy
 	 * flow uses) so the UI can stream live progress.
 	 *
-	 * Returns `{ authStackRetryNeeded }` — true when a Lambda@Edge auth stack
-	 * failed to delete on the first attempt (its replicas are removed
-	 * asynchronously by CloudFront only after the distribution is gone), so the
-	 * caller can advise the user to retry later.
+	 * This is a "polite" teardown — a plain delete that RETAINS the S3 buckets. A
+	 * Lambda@Edge auth stack commonly lands in DELETE_FAILED here because CloudFront
+	 * removes its edge replicas asynchronously (can take hours). Rather than wipe
+	 * local state (which used to strand the leftover under the same deterministic
+	 * name and break the next deploy with "stack already exists"), we PRESERVE the
+	 * state and mark it `failed` whenever any stack survives, so the Settings
+	 * "Force-clean leftover infrastructure" action can finish the job.
+	 *
+	 * Returns `{ fullyDestroyed, leftoverStacks, authStackRetryNeeded }`.
 	 */
 	async destroyInfrastructure(
 		profile: PublishingProfile,
 		onEvent?: (event: StackEvent) => void,
-	): Promise<{ authStackRetryNeeded: boolean }> {
+	): Promise<{ fullyDestroyed: boolean; leftoverStacks: string[]; authStackRetryNeeded: boolean }> {
 		const state = profile.infrastructureState;
 		if (!state || state.status === 'none') {
 			throw new Error('No infrastructure deployed for this profile.');
@@ -540,79 +563,156 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		state.status = 'destroying';
 		await this.saveSettings();
 
+		const leftoverStacks: string[] = [];
+		let authStackRetryNeeded = false;
+
 		// Delete a stack and wait for CloudFormation to finish removing it. Once a
 		// stack is fully gone, DescribeStacks by name raises a ValidationError
 		// ("Stack ... does not exist") rather than reporting DELETE_COMPLETE — treat
-		// that as success. Returns false if the stack ended in DELETE_FAILED.
-		const deleteAndWait = async (stackName: string, region?: string): Promise<boolean> => {
-			await this.cloudFormationManager.deleteStack(stackName, profile, region);
+		// that as success. A DELETE_FAILED result or an unexpected error records the
+		// stack as a leftover (never throws, so remaining stacks still get attempted).
+		const deleteAndWait = async (stackName: string, region: string | undefined, isAuthStack: boolean): Promise<void> => {
 			try {
+				await this.cloudFormationManager.deleteStack(stackName, profile, region);
 				const finalStatus = await this.cloudFormationManager.pollStackUntilComplete(
 					stackName,
 					profile,
 					(event) => onEvent?.(event),
 					region,
 				);
-				return finalStatus !== 'DELETE_FAILED';
+				if (finalStatus === 'DELETE_FAILED') {
+					leftoverStacks.push(stackName);
+					if (isAuthStack) authStackRetryNeeded = true;
+				}
 			} catch (err: any) {
 				const message = String(err?.message || err);
-				if (/does not exist/i.test(message)) {
-					// Stack fully deleted between poll iterations — success.
-					return true;
-				}
-				throw err;
+				if (/does not exist/i.test(message)) return; // Already gone — success.
+				Logger.warn(`Failed to delete stack ${stackName}:`, err);
+				leftoverStacks.push(stackName);
+				if (isAuthStack) authStackRetryNeeded = true;
 			}
 		};
-
-		let authStackRetryNeeded = false;
 
 		if (state.comment?.stackName) {
 			// Delete the comment stack before the site stack so the /comments/*
 			// origin's referenced bucket policy is gone first.
-			await deleteAndWait(state.comment.stackName, state.region);
+			await deleteAndWait(state.comment.stackName, state.region, false);
 		}
 		if (state.fullStackName) {
-			await deleteAndWait(state.fullStackName, state.region);
+			await deleteAndWait(state.fullStackName, state.region, false);
 		}
 		if (state.certStackName && !state.certificateReused) {
 			// Never delete a certificate we reused rather than created — it is owned
 			// outside this profile's stacks. (A reused cert also leaves certStackName
 			// unset; this is belt-and-suspenders.)
-			await deleteAndWait(state.certStackName, 'us-east-1');
+			await deleteAndWait(state.certStackName, 'us-east-1', false);
 		}
 		if (state.cognitoAuth?.stackName) {
-			// The Cognito stack owns a Lambda@Edge function whose replicas are removed
-			// asynchronously by CloudFront only after the distribution is gone — its
-			// first delete attempt may fail and need a retry later.
-			try {
-				if (!(await deleteAndWait(state.cognitoAuth.stackName, 'us-east-1'))) {
-					authStackRetryNeeded = true;
-				}
-			} catch (err) {
-				Logger.warn('Cognito auth stack deletion failed (may need retry after edge replicas clear):', err);
-				authStackRetryNeeded = true;
-			}
+			// Lambda@Edge replica-removal caveat — first delete often DELETE_FAILED.
+			await deleteAndWait(state.cognitoAuth.stackName, 'us-east-1', true);
 		}
 		if (state.passwordAuth?.stackName) {
-			// Same Lambda@Edge replica-removal caveat as the Cognito stack.
-			try {
-				if (!(await deleteAndWait(state.passwordAuth.stackName, 'us-east-1'))) {
-					authStackRetryNeeded = true;
+			await deleteAndWait(state.passwordAuth.stackName, 'us-east-1', true);
+		}
+
+		if (leftoverStacks.length === 0) {
+			await this.resetInfrastructureState(profile);
+			return { fullyDestroyed: true, leftoverStacks: [], authStackRetryNeeded: false };
+		}
+
+		// Leftovers remain — keep every stack reference so they stay trackable and
+		// the force-clean action can find them; don't strand them under 'none'.
+		state.status = 'failed';
+		await this.saveSettings();
+		return { fullyDestroyed: false, leftoverStacks, authStackRetryNeeded };
+	}
+
+	/**
+	 * Finish tearing down leftover stacks a polite destroy could not remove
+	 * (commonly Lambda@Edge auth stacks stuck in DELETE_FAILED). Force-deletes each
+	 * still-present stack via `forceDeleteStack` (retaining resources it can't
+	 * delete, e.g. still-replicating edge functions). When `opts.deleteBuckets` is
+	 * set, also empties and removes the otherwise-RETAINed S3 buckets (published
+	 * content + comments) so a redeploy of a fixed-name bucket doesn't collide.
+	 *
+	 * Only ever invoked from the Settings action after an explicit confirm. Resets
+	 * the profile to the clean default when every targeted stack is gone; otherwise
+	 * leaves `status: 'failed'` and reports which stacks remain.
+	 */
+	async forceCleanInfrastructure(
+		profile: PublishingProfile,
+		opts: { deleteBuckets: boolean },
+		onEvent?: (event: StackEvent) => void,
+	): Promise<{ fullyCleaned: boolean; leftoverStacks: string[] }> {
+		const state = profile.infrastructureState;
+		if (!state) {
+			throw new Error('No infrastructure state for this profile.');
+		}
+		if (state.imported) {
+			throw new Error('Imported stacks cannot be destroyed from the plugin. Manage them via CDK.');
+		}
+
+		const cf = this.cloudFormationManager;
+		const leftoverStacks: string[] = [];
+		// Stacks confirmed removed (DELETE_COMPLETE or already gone) — a retained
+		// bucket may only be deleted once its owning stack is in this set.
+		const removedStacks = new Set<string>();
+
+		// Force-delete a stack if it is still present, retaining any resources
+		// CloudFormation can't remove (e.g. a still-replicating Lambda@Edge fn).
+		const forceClean = async (stackName: string, region: string | undefined): Promise<void> => {
+			const status = await cf.getStackStatusSafe(stackName, profile, region);
+			if (status === null) { removedStacks.add(stackName); return; } // Already gone.
+
+			const finalStatus = await cf.forceDeleteStack(stackName, profile, region, onEvent);
+			if (finalStatus === 'DELETE_COMPLETE') {
+				removedStacks.add(stackName);
+			} else {
+				leftoverStacks.push(stackName);
+			}
+		};
+
+		if (state.comment?.stackName) await forceClean(state.comment.stackName, state.region);
+		if (state.fullStackName) await forceClean(state.fullStackName, state.region);
+		if (state.certStackName && !state.certificateReused) await forceClean(state.certStackName, 'us-east-1');
+		if (state.cognitoAuth?.stackName) await forceClean(state.cognitoAuth.stackName, 'us-east-1');
+		if (state.passwordAuth?.stackName) await forceClean(state.passwordAuth.stackName, 'us-east-1');
+
+		// Remove the retained, fixed-name buckets (they survive stack deletion via
+		// deletionPolicy: RETAIN and are what collide on redeploy). Only delete a
+		// bucket once its OWNING stack is confirmed gone — deleting it while the
+		// stack lingers in DELETE_FAILED would drop data out from under a stack that
+		// still references it. A bucket that can't be emptied/deleted is a leftover.
+		let bucketCleanupFailed = false;
+		if (opts.deleteBuckets) {
+			const bucketTargets: Array<{ bucket: string; ownerStack?: string }> = [];
+			if (profile.awsSettings?.bucketName) {
+				bucketTargets.push({ bucket: profile.awsSettings.bucketName, ownerStack: state.fullStackName });
+			}
+			if (state.comment?.bucketName) {
+				bucketTargets.push({ bucket: state.comment.bucketName, ownerStack: state.comment.stackName });
+			}
+			for (const { bucket, ownerStack } of bucketTargets) {
+				// If we know the owning stack and it wasn't removed, skip — the stack
+				// is already recorded as a leftover, so the run is not fully clean.
+				if (ownerStack && !removedStacks.has(ownerStack)) continue;
+				try {
+					await cf.deleteBucket(bucket, profile);
+				} catch (err) {
+					Logger.warn(`Could not delete bucket ${bucket}:`, err);
+					bucketCleanupFailed = true;
 				}
-			} catch (err) {
-				Logger.warn('Password auth stack deletion failed (may need retry after edge replicas clear):', err);
-				authStackRetryNeeded = true;
 			}
 		}
 
-		// Reset to defaults (no spread) — clears cognitoAuth/passwordAuth/comment and intent.
-		profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
-		profile.readGate = undefined;
-		profile.cognitoAuth = undefined;
-		profile.commenting = undefined;
-		await this.saveSettings();
+		if (leftoverStacks.length === 0 && !bucketCleanupFailed) {
+			await this.resetInfrastructureState(profile);
+			return { fullyCleaned: true, leftoverStacks: [] };
+		}
 
-		return { authStackRetryNeeded };
+		state.status = 'failed';
+		await this.saveSettings();
+		return { fullyCleaned: false, leftoverStacks };
 	}
 
 	async loadSettings() {

@@ -5,7 +5,13 @@ import {
 	DeleteStackCommand,
 	DescribeStacksCommand,
 	DescribeStackEventsCommand,
+	ListStackResourcesCommand,
 } from '@aws-sdk/client-cloudformation';
+import {
+	ListObjectVersionsCommand,
+	DeleteObjectsCommand,
+	DeleteBucketCommand,
+} from '@aws-sdk/client-s3';
 import {
 	ACMClient,
 	DescribeCertificateCommand,
@@ -39,6 +45,7 @@ import type {
 	StackOutputs,
 } from './types';
 import { certCoversDomain } from './certMatch';
+import { Logger } from '../utils/logging';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -78,9 +85,48 @@ export class CloudFormationManager {
 		this.plugin = plugin;
 	}
 
+	/**
+	 * Stack statuses a fresh CreateStack cannot overwrite — a leftover from a prior
+	 * failed create/rollback or an unfinished delete. CloudFormation rejects
+	 * CreateStack against these with AlreadyExistsException, so a redeploy after a
+	 * partial teardown must delete them first.
+	 */
+	private static readonly UNUSABLE_LEFTOVER_STATUSES = new Set([
+		'ROLLBACK_COMPLETE',
+		'ROLLBACK_FAILED',
+		'CREATE_FAILED',
+		'DELETE_FAILED',
+		'REVIEW_IN_PROGRESS',
+	]);
+
+	/**
+	 * Before a CreateStack, clear a same-named leftover stack that would otherwise
+	 * collide. Only stacks in an unusable leftover state (see
+	 * UNUSABLE_LEFTOVER_STATUSES) are force-deleted; a healthy live stack
+	 * (CREATE_COMPLETE/UPDATE_COMPLETE) is left untouched so CreateStack still
+	 * surfaces AlreadyExistsException rather than silently clobbering a real
+	 * deployment.
+	 */
+	private async recoverFailedStackBeforeCreate(client: CloudFormationClient, stackName: string): Promise<void> {
+		let status: string | undefined;
+		try {
+			const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+			status = response.Stacks?.[0]?.StackStatus;
+		} catch (err: any) {
+			if (/does not exist/i.test(String(err?.message || err))) return; // No leftover — normal create.
+			throw err;
+		}
+
+		if (status === 'DELETE_COMPLETE') return; // Name is free.
+		if (status && CloudFormationManager.UNUSABLE_LEFTOVER_STATUSES.has(status)) {
+			await this.forceDeleteStackByClient(client, stackName);
+		}
+	}
+
 	async deployCertificateStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cert');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
+		await this.recoverFailedStackBeforeCreate(client, stackName);
 
 		await client.send(new CreateStackCommand({
 			StackName: stackName,
@@ -116,6 +162,7 @@ export class CloudFormationManager {
 	async deployCognitoAuthStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cognito');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
+		await this.recoverFailedStackBeforeCreate(client, stackName);
 
 		await client.send(new CreateStackCommand({
 			StackName: stackName,
@@ -184,6 +231,7 @@ export class CloudFormationManager {
 	async deployPasswordAuthStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'password');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
+		await this.recoverFailedStackBeforeCreate(client, stackName);
 
 		await client.send(new CreateStackCommand({
 			StackName: stackName,
@@ -240,6 +288,7 @@ export class CloudFormationManager {
 	async deployCommentStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'comment');
 		const client = this.getCloudFormationClient(config, config.region);
+		await this.recoverFailedStackBeforeCreate(client, stackName);
 
 		await client.send(new CreateStackCommand({
 			StackName: stackName,
@@ -283,6 +332,7 @@ export class CloudFormationManager {
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'full');
 		const client = this.getCloudFormationClient(config, config.region);
+		await this.recoverFailedStackBeforeCreate(client, stackName);
 		const template = config.originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
@@ -322,9 +372,24 @@ export class CloudFormationManager {
 		return stackName;
 	}
 
-	async deleteStack(stackName: string, profile: PublishingProfile, region?: string): Promise<void> {
+	/**
+	 * Delete a stack. `retainResources` (logical resource IDs) lets CloudFormation
+	 * skip resources it can't delete — e.g. a Lambda@Edge function whose replicas
+	 * CloudFront removes asynchronously, or a non-empty retained S3 bucket — so a
+	 * DELETE_FAILED stack can be forced to DELETE_COMPLETE. RetainResources is only
+	 * honored when re-issued against a stack already in DELETE_FAILED.
+	 */
+	async deleteStack(
+		stackName: string,
+		profile: PublishingProfile,
+		region?: string,
+		retainResources?: string[],
+	): Promise<void> {
 		const client = this.getCloudFormationClientForProfile(profile, region);
-		await client.send(new DeleteStackCommand({ StackName: stackName }));
+		await client.send(new DeleteStackCommand({
+			StackName: stackName,
+			...(retainResources && retainResources.length ? { RetainResources: retainResources } : {}),
+		}));
 	}
 
 	async getStackStatus(stackName: string, profile: PublishingProfile, region?: string): Promise<string> {
@@ -333,6 +398,181 @@ export class CloudFormationManager {
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Stack ${stackName} not found`);
 		return stack.StackStatus!;
+	}
+
+	/**
+	 * Like getStackStatus but returns null when the stack does not exist (rather
+	 * than throwing), so callers can branch on "is there a leftover here?" without
+	 * a try/catch. A stack in DELETE_COMPLETE is treated as gone (returns null) —
+	 * CloudFormation keeps deleted stacks queryable by name for a while.
+	 */
+	async getStackStatusSafe(stackName: string, profile: PublishingProfile, region?: string): Promise<string | null> {
+		try {
+			const status = await this.getStackStatus(stackName, profile, region);
+			return status === 'DELETE_COMPLETE' ? null : status;
+		} catch (err: any) {
+			const message = String(err?.message || err);
+			if (/does not exist/i.test(message) || /not found/i.test(message)) return null;
+			throw err;
+		}
+	}
+
+	/**
+	 * List a stack's resources (paginated), projecting the fields teardown needs:
+	 * logical/physical IDs, type, and current status. Used to find DELETE_FAILED
+	 * logical IDs to retain when forcing a stuck stack's deletion.
+	 */
+	private async listStackResourcesByClient(
+		client: CloudFormationClient,
+		stackName: string,
+	): Promise<Array<{ logicalId: string; physicalId?: string; resourceType?: string; resourceStatus?: string }>> {
+		const resources: Array<{ logicalId: string; physicalId?: string; resourceType?: string; resourceStatus?: string }> = [];
+		let nextToken: string | undefined;
+
+		do {
+			const response = await client.send(new ListStackResourcesCommand({
+				StackName: stackName,
+				NextToken: nextToken,
+			}));
+			for (const summary of response.StackResourceSummaries || []) {
+				resources.push({
+					logicalId: summary.LogicalResourceId!,
+					physicalId: summary.PhysicalResourceId,
+					resourceType: summary.ResourceType,
+					resourceStatus: summary.ResourceStatus,
+				});
+			}
+			nextToken = response.NextToken;
+		} while (nextToken);
+
+		return resources;
+	}
+
+	/**
+	 * Empty a (versioned) S3 bucket: page through every object version AND
+	 * delete-marker and batch-delete them (<=1000/request). Versioned buckets are
+	 * only truly empty — and thus deletable — once versions and markers are gone,
+	 * so ListObjectsV2 alone is insufficient. Tolerates a missing bucket.
+	 */
+	async emptyBucket(bucketName: string, profile: PublishingProfile): Promise<void> {
+		const client = this.plugin.awsSdkManager.getS3Client(profile);
+		let keyMarker: string | undefined;
+		let versionIdMarker: string | undefined;
+
+		try {
+			do {
+				const listed = await client.send(new ListObjectVersionsCommand({
+					Bucket: bucketName,
+					KeyMarker: keyMarker,
+					VersionIdMarker: versionIdMarker,
+				}));
+
+				const objects = [
+					...(listed.Versions || []),
+					...(listed.DeleteMarkers || []),
+				]
+					.filter(o => o.Key)
+					.map(o => ({ Key: o.Key!, VersionId: o.VersionId }));
+
+				for (let i = 0; i < objects.length; i += 1000) {
+					const batch = objects.slice(i, i + 1000);
+					if (batch.length === 0) continue;
+					const response = await client.send(new DeleteObjectsCommand({
+						Bucket: bucketName,
+						Delete: { Objects: batch, Quiet: true },
+					}));
+					// Surface per-object failures rather than silently advancing the
+					// markers and declaring the bucket empty (mirrors awsUpload.ts).
+					if (response.Errors && response.Errors.length > 0) {
+						for (const e of response.Errors) {
+							Logger.error(`Failed to delete ${e.Key}: ${e.Code} - ${e.Message}`);
+						}
+						throw new Error(`Failed to empty bucket ${bucketName}: ${response.Errors.length} object(s) could not be deleted`);
+					}
+				}
+
+				keyMarker = listed.NextKeyMarker;
+				versionIdMarker = listed.NextVersionIdMarker;
+			} while (keyMarker || versionIdMarker);
+		} catch (err: any) {
+			const code = err?.name || err?.Code;
+			if (code === 'NoSuchBucket') return; // Already gone — nothing to empty.
+			throw err;
+		}
+	}
+
+	/**
+	 * Empty then delete an S3 bucket. Used to remove the RETAINed, fixed-name
+	 * published-content and comment buckets that survive a normal stack delete and
+	 * would otherwise collide with a redeploy. Tolerates a missing bucket.
+	 */
+	async deleteBucket(bucketName: string, profile: PublishingProfile): Promise<void> {
+		await this.emptyBucket(bucketName, profile);
+		const client = this.plugin.awsSdkManager.getS3Client(profile);
+		try {
+			await client.send(new DeleteBucketCommand({ Bucket: bucketName }));
+		} catch (err: any) {
+			const code = err?.name || err?.Code;
+			if (code === 'NoSuchBucket') return; // Already gone.
+			throw err;
+		}
+	}
+
+	/**
+	 * Delete a stack and wait for it to be fully gone, forcing past a stuck delete.
+	 * First attempts a normal delete; if the stack lands in DELETE_FAILED, it lists
+	 * the DELETE_FAILED resources and re-issues the delete with those logical IDs in
+	 * RetainResources (orphaning e.g. a still-replicating Lambda@Edge fn), then polls
+	 * to completion. Returns the final status ('DELETE_COMPLETE' when the stack is
+	 * gone, or the terminal status if it still could not be removed).
+	 */
+	async forceDeleteStack(
+		stackName: string,
+		profile: PublishingProfile,
+		region: string | undefined,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
+		const client = this.getCloudFormationClientForProfile(profile, region);
+		return this.forceDeleteStackByClient(client, stackName, onEvent);
+	}
+
+	/** Client-based core of forceDeleteStack, shared with the deploy-path recovery
+	 * guard (which holds a config-scoped client). */
+	private async forceDeleteStackByClient(
+		client: CloudFormationClient,
+		stackName: string,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
+		const pollGone = async (): Promise<string> => {
+			try {
+				return await this.pollStackUntilCompleteByClient(client, stackName, onEvent);
+			} catch (err: any) {
+				if (/does not exist/i.test(String(err?.message || err))) return 'DELETE_COMPLETE';
+				throw err;
+			}
+		};
+
+		await client.send(new DeleteStackCommand({ StackName: stackName }));
+		let status = await pollGone();
+		if (status !== 'DELETE_FAILED') return status;
+
+		// Stuck: retain the resources that failed to delete and try once more.
+		const resources = await this.listStackResourcesByClient(client, stackName);
+		const retain = resources
+			.filter(r => r.resourceStatus === 'DELETE_FAILED')
+			.map(r => r.logicalId);
+
+		// Nothing to retain means a second identical delete would just fail the same
+		// way (the blocker is stack-level, not a specific resource) — don't burn
+		// another poll cycle; report the DELETE_FAILED so the caller can advise a retry.
+		if (retain.length === 0) return status;
+
+		await client.send(new DeleteStackCommand({
+			StackName: stackName,
+			RetainResources: retain,
+		}));
+		status = await pollGone();
+		return status;
 	}
 
 	async getStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<StackOutputs> {
@@ -538,6 +778,16 @@ export class CloudFormationManager {
 		region?: string,
 	): Promise<string> {
 		const client = this.getCloudFormationClientForProfile(profile, region);
+		return this.pollStackUntilCompleteByClient(client, stackName, onEvent);
+	}
+
+	/** Client-based core of pollStackUntilComplete, shared by profile- and
+	 * config-scoped callers (the deploy path holds a config-scoped client). */
+	private async pollStackUntilCompleteByClient(
+		client: CloudFormationClient,
+		stackName: string,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
 		const seenEventIds = new Set<string>();
 		const startTime = new Date();
 
@@ -554,7 +804,7 @@ export class CloudFormationManager {
 				if (seenEventIds.has(event.EventId!)) continue;
 				seenEventIds.add(event.EventId!);
 
-				onEvent({
+				onEvent?.({
 					resourceType: event.ResourceType || '',
 					logicalResourceId: event.LogicalResourceId || '',
 					status: event.ResourceStatus || '',

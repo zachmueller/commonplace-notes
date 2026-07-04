@@ -413,6 +413,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const dangerSection = this.createSection(profileContainer, 'Danger Zone');
 
 		this.displayDestroyInfrastructure(dangerSection, profile);
+		this.displayForceCleanLeftovers(dangerSection, profile);
 
 		const deleteButtonContainer = dangerSection.createDiv({ cls: 'cpn-profile-delete-container' });
 
@@ -784,6 +785,21 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	}
 
 	/**
+	 * Append one CloudFormation event as a styled line in a live event log,
+	 * colouring failures red and completions green. Shared by the deploy/destroy/
+	 * force-clean flows so the styling logic lives in one place.
+	 */
+	private appendStackEventLine(logEl: HTMLElement, event: { logicalResourceId: string; status: string }): void {
+		const line = logEl.createDiv({ cls: 'cpn-wizard-event-line' });
+		if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+			line.addClass('cpn-event-error');
+		} else if (event.status.includes('COMPLETE')) {
+			line.addClass('cpn-event-success');
+		}
+		line.setText(`${event.logicalResourceId} - ${event.status}`);
+	}
+
+	/**
 	 * "Destroy infrastructure" action in the Danger Zone. Only rendered for AWS
 	 * profiles with a live, non-imported deployment. On confirm it tears down the
 	 * stacks via the shared plugin.destroyInfrastructure(), streaming CloudFormation
@@ -824,19 +840,19 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 						try {
 							const result = await this.plugin.destroyInfrastructure(profile, (event) => {
-								const line = eventLog.createDiv({ cls: 'cpn-wizard-event-line' });
-								if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
-									line.addClass('cpn-event-error');
-								} else if (event.status.includes('COMPLETE')) {
-									line.addClass('cpn-event-success');
-								}
-								line.setText(`${event.logicalResourceId} - ${event.status}`);
+								this.appendStackEventLine(eventLog, event);
 							});
-							new Notice(
-								result.authStackRetryNeeded
-									? 'Infrastructure destroyed. The auth stack may need a retry once the CloudFront edge replicas are removed.'
-									: 'Infrastructure destroyed.',
-							);
+							if (result.fullyDestroyed) {
+								new Notice('Infrastructure destroyed.');
+							} else {
+								new Notice(
+									`Some stacks could not be deleted yet (${result.leftoverStacks.join(', ')}). ` +
+									'Use "Force-clean leftover infrastructure" below to finish.',
+								);
+							}
+							// Re-render either way: on success the section disappears; on
+							// partial teardown the status is now 'failed' and the
+							// force-clean action appears.
 							this.renderActiveProfile();
 						} catch (err) {
 							Logger.error('Error destroying infrastructure:', err);
@@ -847,6 +863,116 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					});
 				return button;
 			});
+	}
+
+	/**
+	 * "Force-clean leftover infrastructure" action in the Danger Zone. Shown only
+	 * when a prior teardown left stacks behind — i.e. status is 'failed' or
+	 * 'destroying' and the profile still references stacks. Force-deletes the stuck
+	 * stacks (retaining resources CloudFormation can't remove, e.g. still-replicating
+	 * Lambda@Edge fns) and, if the user opts in, empties + removes the retained
+	 * fixed-name S3 buckets so a redeploy doesn't collide.
+	 */
+	private displayForceCleanLeftovers(containerEl: HTMLElement, profile: PublishingProfile): void {
+		if (profile.publishMechanism !== 'AWS') return;
+		const state = profile.infrastructureState;
+		if (!state || state.imported) return;
+
+		const hasStackRefs = !!(
+			state.fullStackName ||
+			state.certStackName ||
+			state.comment?.stackName ||
+			state.cognitoAuth?.stackName ||
+			state.passwordAuth?.stackName
+		);
+		// Leftovers are likely after a failed/interrupted teardown. A clean 'none'
+		// or a healthy 'deployed' profile should not surface this action.
+		const likelyLeftovers = hasStackRefs && (state.status === 'failed' || state.status === 'destroying');
+		if (!likelyLeftovers) return;
+
+		const eventLog = containerEl.createDiv({ cls: 'cpn-wizard-event-log' });
+		eventLog.hide();
+
+		new Setting(containerEl)
+			.setName('Force-clean leftover infrastructure')
+			.setDesc('This profile has stacks in a failed or in-progress-teardown state (commonly a Lambda@Edge auth stack whose CloudFront edge replicas take time to clear). Force-delete the remaining stacks so you can redeploy cleanly.')
+			.addButton(button => {
+				button
+					.setButtonText('Force-clean')
+					.setClass('mod-warning')
+					.onClick(async () => {
+						const choice = await this.confirmForceClean(profile);
+						if (!choice.confirmed) return;
+
+						button.setDisabled(true);
+						button.setButtonText('Cleaning...');
+						eventLog.empty();
+						eventLog.show();
+
+						try {
+							const result = await this.plugin.forceCleanInfrastructure(
+								profile,
+								{ deleteBuckets: choice.deleteBuckets },
+								(event) => {
+									this.appendStackEventLine(eventLog, event);
+								},
+							);
+							if (result.fullyCleaned) {
+								new Notice('Leftover infrastructure cleaned. You can now redeploy.');
+							} else {
+								new Notice(
+									`Some stacks still could not be deleted (${result.leftoverStacks.join(', ')}). ` +
+									'Lambda@Edge replicas can take up to a few hours to clear — try again later.',
+								);
+							}
+							this.renderActiveProfile();
+						} catch (err) {
+							Logger.error('Error force-cleaning infrastructure:', err);
+							new Notice(`Force-clean failed: ${err instanceof Error ? err.message : String(err)}`);
+							button.setDisabled(false);
+							button.setButtonText('Force-clean');
+						}
+					});
+				return button;
+			});
+	}
+
+	/**
+	 * Confirm dialog for force-clean, with an opt-in "also delete S3 data" toggle
+	 * (default OFF). Resolves { confirmed, deleteBuckets }.
+	 */
+	private confirmForceClean(profile: PublishingProfile): Promise<{ confirmed: boolean; deleteBuckets: boolean }> {
+		return new Promise(resolve => {
+			const modal = new Modal(this.app);
+			let deleteBuckets = false;
+			let settled = false;
+			const finish = (confirmed: boolean) => {
+				if (settled) return;
+				settled = true;
+				resolve({ confirmed, deleteBuckets });
+				modal.close();
+			};
+
+			modal.onOpen = () => {
+				modal.titleEl.setText('Force-clean leftover infrastructure');
+				modal.contentEl.createEl('p', {
+					text: `This force-deletes the remaining CloudFormation stacks for profile "${profile.name}", orphaning any resources AWS can't remove yet (e.g. replicating Lambda@Edge functions — AWS cleans those up later). This cannot be undone.`,
+				});
+
+				new Setting(modal.contentEl)
+					.setName('Also delete S3 data (published content + comments)')
+					.setDesc('Empty and remove the retained S3 buckets. This permanently deletes your published site content and any stored comments. Leave off to keep the buckets and their data.')
+					.addToggle(toggle => toggle
+						.setValue(false)
+						.onChange(v => { deleteBuckets = v; }));
+
+				new Setting(modal.contentEl)
+					.addButton(btn => btn.setButtonText('Cancel').onClick(() => finish(false)))
+					.addButton(btn => btn.setButtonText('Force-clean').setWarning().onClick(() => finish(true)));
+			};
+			modal.onClose = () => finish(false);
+			modal.open();
+		});
 	}
 
 	private openImportStackModal(profile: PublishingProfile): void {
