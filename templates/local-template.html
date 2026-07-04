@@ -166,6 +166,10 @@
 
 		/* add styles for the metadata */
 		.note-metadata {
+			display: flex;
+			flex-wrap: nowrap;
+			align-items: center;
+			gap: 12px;
 			margin-bottom: 20px;
 			color: #666;
 			font-size: 0.9em;
@@ -817,7 +821,7 @@ ${closeButton}
 		
 		// Format the timestamp if it exists
 		const lastUpdatedHtml = noteData.lastUpdated ? `
-			<div>Last updated: ${(() => {
+			<div>Updated: ${(() => {
 				const d = new Date(noteData.lastUpdated);
 				const pad = (n) => n.toString().padStart(2, '0');
 				return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
