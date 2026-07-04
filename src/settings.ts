@@ -824,14 +824,14 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Destroy infrastructure')
-			.setDesc('Delete the CloudFormation stacks for this profile. The S3 bucket is retained (not deleted). This cannot be undone.')
+			.setDesc('Delete the CloudFormation stacks for this profile. The S3 buckets are retained by default; you can opt to delete them in the confirmation dialog. This cannot be undone.')
 			.addButton(button => {
 				button
 					.setButtonText('Destroy infrastructure')
 					.setClass('mod-warning')
 					.onClick(async () => {
-						const confirmed = await this.plugin.confirmDestroyInfrastructure(profile);
-						if (!confirmed) return;
+						const choice = await this.plugin.confirmDestroyInfrastructure(profile);
+						if (!choice.confirmed) return;
 
 						button.setDisabled(true);
 						button.setButtonText('Destroying...');
@@ -839,9 +839,13 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						eventLog.show();
 
 						try {
-							const result = await this.plugin.destroyInfrastructure(profile, (event) => {
-								this.appendStackEventLine(eventLog, event);
-							});
+							const result = await this.plugin.destroyInfrastructure(
+								profile,
+								{ deleteBuckets: choice.deleteBuckets },
+								(event) => {
+									this.appendStackEventLine(eventLog, event);
+								},
+							);
 							if (result.fullyDestroyed) {
 								new Notice('Infrastructure destroyed.');
 							} else {

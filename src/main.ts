@@ -462,14 +462,18 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					NoticeManager.showNotice('Imported stacks cannot be destroyed from the plugin. Manage them via CDK.');
 					return;
 				}
-				const confirmed = await this.confirmDestroyInfrastructure(profile);
-				if (!confirmed) return;
+				const choice = await this.confirmDestroyInfrastructure(profile);
+				if (!choice.confirmed) return;
 
 				NoticeManager.showNotice('Infrastructure destruction started…');
 				try {
-					const result = await this.destroyInfrastructure(profile, (event) => {
-						Logger.info(`[destroy ${profile.name}] ${event.logicalResourceId} - ${event.status}`);
-					});
+					const result = await this.destroyInfrastructure(
+						profile,
+						{ deleteBuckets: choice.deleteBuckets },
+						(event) => {
+							Logger.info(`[destroy ${profile.name}] ${event.logicalResourceId} - ${event.status}`);
+						},
+					);
 					if (result.fullyDestroyed) {
 						NoticeManager.showNotice('Infrastructure destroyed.');
 					} else {
@@ -496,19 +500,36 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	 * the Settings "Danger Zone" button so the S3-retention warning stays in one
 	 * place.
 	 */
-	confirmDestroyInfrastructure(profile: PublishingProfile): Promise<boolean> {
-		return new Promise<boolean>(resolve => {
+	confirmDestroyInfrastructure(profile: PublishingProfile): Promise<{ confirmed: boolean; deleteBuckets: boolean }> {
+		return new Promise(resolve => {
 			const confirmModal = new Modal(this.app);
+			let deleteBuckets = false;
+			let settled = false;
+			const finish = (confirmed: boolean) => {
+				if (settled) return;
+				settled = true;
+				resolve({ confirmed, deleteBuckets });
+				confirmModal.close();
+			};
+
 			confirmModal.onOpen = () => {
 				confirmModal.contentEl.createEl('h3', { text: 'Destroy Infrastructure' });
 				confirmModal.contentEl.createEl('p', {
-					text: `This will delete the CloudFormation stacks for profile "${profile.name}". The S3 bucket will be retained (not deleted). This action cannot be undone.`,
+					text: `This will delete the CloudFormation stacks for profile "${profile.name}". By default the S3 buckets are retained (not deleted); enable the option below to also remove them. This action cannot be undone.`,
 				});
+
 				new Setting(confirmModal.contentEl)
-					.addButton(btn => btn.setButtonText('Cancel').onClick(() => { resolve(false); confirmModal.close(); }))
-					.addButton(btn => btn.setButtonText('Destroy').setWarning().onClick(() => { resolve(true); confirmModal.close(); }));
+					.setName('Also delete S3 data (published content + comments)')
+					.setDesc('Empty and remove the retained S3 buckets. This permanently deletes your published site content and any stored comments. Leave off to keep the buckets and their data.')
+					.addToggle(toggle => toggle
+						.setValue(false)
+						.onChange(v => { deleteBuckets = v; }));
+
+				new Setting(confirmModal.contentEl)
+					.addButton(btn => btn.setButtonText('Cancel').onClick(() => finish(false)))
+					.addButton(btn => btn.setButtonText('Destroy').setWarning().onClick(() => finish(true)));
 			};
-			confirmModal.onClose = () => resolve(false);
+			confirmModal.onClose = () => finish(false);
 			confirmModal.open();
 		});
 	}
@@ -538,18 +559,22 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	 * `onEvent` receives per-resource CloudFormation events (same shape the deploy
 	 * flow uses) so the UI can stream live progress.
 	 *
-	 * This is a "polite" teardown — a plain delete that RETAINS the S3 buckets. A
-	 * Lambda@Edge auth stack commonly lands in DELETE_FAILED here because CloudFront
-	 * removes its edge replicas asynchronously (can take hours). Rather than wipe
-	 * local state (which used to strand the leftover under the same deterministic
-	 * name and break the next deploy with "stack already exists"), we PRESERVE the
-	 * state and mark it `failed` whenever any stack survives, so the Settings
+	 * By default this is a "polite" teardown — a plain delete that RETAINS the S3
+	 * buckets. When `opts.deleteBuckets` is set, it also empties and removes the
+	 * otherwise-RETAINed buckets (published content + comments) once their owning
+	 * stack is confirmed gone. A Lambda@Edge auth stack commonly lands in
+	 * DELETE_FAILED here because CloudFront removes its edge replicas asynchronously
+	 * (can take hours). Rather than wipe local state (which used to strand the
+	 * leftover under the same deterministic name and break the next deploy with
+	 * "stack already exists"), we PRESERVE the state and mark it `failed` whenever
+	 * any stack survives (or a requested bucket delete fails), so the Settings
 	 * "Force-clean leftover infrastructure" action can finish the job.
 	 *
 	 * Returns `{ fullyDestroyed, leftoverStacks, authStackRetryNeeded }`.
 	 */
 	async destroyInfrastructure(
 		profile: PublishingProfile,
+		opts: { deleteBuckets: boolean },
 		onEvent?: (event: StackEvent) => void,
 	): Promise<{ fullyDestroyed: boolean; leftoverStacks: string[]; authStackRetryNeeded: boolean }> {
 		const state = profile.infrastructureState;
@@ -565,6 +590,9 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		const leftoverStacks: string[] = [];
 		let authStackRetryNeeded = false;
+		// Stacks confirmed removed (DELETE_COMPLETE or already gone) — a retained
+		// bucket may only be deleted once its owning stack is in this set.
+		const removedStacks = new Set<string>();
 
 		// Delete a stack and wait for CloudFormation to finish removing it. Once a
 		// stack is fully gone, DescribeStacks by name raises a ValidationError
@@ -583,10 +611,12 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				if (finalStatus === 'DELETE_FAILED') {
 					leftoverStacks.push(stackName);
 					if (isAuthStack) authStackRetryNeeded = true;
+				} else {
+					removedStacks.add(stackName);
 				}
 			} catch (err: any) {
 				const message = String(err?.message || err);
-				if (/does not exist/i.test(message)) return; // Already gone — success.
+				if (/does not exist/i.test(message)) { removedStacks.add(stackName); return; } // Already gone — success.
 				Logger.warn(`Failed to delete stack ${stackName}:`, err);
 				leftoverStacks.push(stackName);
 				if (isAuthStack) authStackRetryNeeded = true;
@@ -615,7 +645,34 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			await deleteAndWait(state.passwordAuth.stackName, 'us-east-1', true);
 		}
 
-		if (leftoverStacks.length === 0) {
+		// When opted in, remove the retained, fixed-name buckets (they survive stack
+		// deletion via deletionPolicy: RETAIN). Only delete a bucket once its OWNING
+		// stack is confirmed gone — deleting it while the stack lingers in
+		// DELETE_FAILED would drop data out from under a stack that still references
+		// it. A bucket that can't be emptied/deleted keeps the run from being clean.
+		let bucketCleanupFailed = false;
+		if (opts.deleteBuckets) {
+			const bucketTargets: Array<{ bucket: string; ownerStack?: string }> = [];
+			if (profile.awsSettings?.bucketName) {
+				bucketTargets.push({ bucket: profile.awsSettings.bucketName, ownerStack: state.fullStackName });
+			}
+			if (state.comment?.bucketName) {
+				bucketTargets.push({ bucket: state.comment.bucketName, ownerStack: state.comment.stackName });
+			}
+			for (const { bucket, ownerStack } of bucketTargets) {
+				// If we know the owning stack and it wasn't removed, skip — the stack
+				// is already recorded as a leftover, so the run is not fully clean.
+				if (ownerStack && !removedStacks.has(ownerStack)) continue;
+				try {
+					await this.cloudFormationManager.deleteBucket(bucket, profile);
+				} catch (err) {
+					Logger.warn(`Could not delete bucket ${bucket}:`, err);
+					bucketCleanupFailed = true;
+				}
+			}
+		}
+
+		if (leftoverStacks.length === 0 && !bucketCleanupFailed) {
 			await this.resetInfrastructureState(profile);
 			return { fullyDestroyed: true, leftoverStacks: [], authStackRetryNeeded: false };
 		}
