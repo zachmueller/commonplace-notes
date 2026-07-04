@@ -1,11 +1,13 @@
 import { Plugin, MarkdownView, App, TFile, Modal, Setting, Notice, WorkspaceLeaf } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
-import { 
+import {
 	CommonplaceNotesSettings,
 	BulkPublishContextMapping,
 	BulkPublishContextConfig,
-	PublishContextChange
+	PublishContextChange,
+	PublishingProfile
 } from './types';
+import { StackEvent } from './infrastructure/types';
 import { PathUtils } from './utils/path';
 import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
@@ -460,66 +462,157 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					NoticeManager.showNotice('Imported stacks cannot be destroyed from the plugin. Manage them via CDK.');
 					return;
 				}
-				const confirmed = await new Promise<boolean>(resolve => {
-					const confirmModal = new Modal(this.app);
-					confirmModal.onOpen = () => {
-						confirmModal.contentEl.createEl('h3', { text: 'Destroy Infrastructure' });
-						confirmModal.contentEl.createEl('p', {
-							text: `This will delete the CloudFormation stacks for profile "${profile.name}". The S3 bucket will be retained (not deleted). This action cannot be undone.`,
-						});
-						new Setting(confirmModal.contentEl)
-							.addButton(btn => btn.setButtonText('Cancel').onClick(() => { resolve(false); confirmModal.close(); }))
-							.addButton(btn => btn.setButtonText('Destroy').setWarning().onClick(() => { resolve(true); confirmModal.close(); }));
-					};
-					confirmModal.onClose = () => resolve(false);
-					confirmModal.open();
-				});
+				const confirmed = await this.confirmDestroyInfrastructure(profile);
 				if (!confirmed) return;
 
+				NoticeManager.showNotice('Infrastructure destruction started…');
 				try {
-					if (state.comment?.stackName) {
-						// Delete the comment stack before the site stack so the
-						// /comments/* origin's referenced bucket policy is gone first.
-						await this.cloudFormationManager.deleteStack(state.comment.stackName, profile, state.region);
-					}
-					if (state.fullStackName) {
-						await this.cloudFormationManager.deleteStack(state.fullStackName, profile, state.region);
-					}
-					if (state.certStackName && !state.certificateReused) {
-						// Never delete a certificate we reused rather than created — it is
-						// owned outside this profile's stacks. (A reused cert also leaves
-						// certStackName unset; this is belt-and-suspenders.)
-						await this.cloudFormationManager.deleteStack(state.certStackName, profile, 'us-east-1');
-					}
-					if (state.cognitoAuth?.stackName) {
-						// The Cognito stack owns a Lambda@Edge function whose replicas
-						// are removed asynchronously by CloudFront only after the
-						// distribution is gone — its first delete attempt may fail with
-						// a "replicated function" error and need a retry later.
-						await this.cloudFormationManager.deleteStack(state.cognitoAuth.stackName, profile, 'us-east-1');
-					}
-					if (state.passwordAuth?.stackName) {
-						// Same Lambda@Edge replica-removal caveat as the Cognito stack.
-						await this.cloudFormationManager.deleteStack(state.passwordAuth.stackName, profile, 'us-east-1');
-					}
-					// Reset to defaults (no spread) — clears cognitoAuth/passwordAuth/comment and intent.
-					profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
-					profile.readGate = undefined;
-					profile.cognitoAuth = undefined;
-					profile.commenting = undefined;
-					await this.saveSettings();
+					const result = await this.destroyInfrastructure(profile, (event) => {
+						Logger.info(`[destroy ${profile.name}] ${event.logicalResourceId} - ${event.status}`);
+					});
 					NoticeManager.showNotice(
-						(state.cognitoAuth?.stackName || state.passwordAuth?.stackName)
-							? 'Infrastructure destruction initiated. The auth stack may need a retry once the CloudFront edge replicas are removed.'
-							: 'Infrastructure destruction initiated.',
+						result.authStackRetryNeeded
+							? 'Infrastructure destroyed. The auth stack may need a retry once the CloudFront edge replicas are removed.'
+							: 'Infrastructure destroyed.',
 					);
 				} catch (err: any) {
-					NoticeManager.showNotice(`Error: ${err.message}`);
+					NoticeManager.showNotice(`Error destroying infrastructure: ${err.message}`);
 				}
 			}
 		});
 
 		this.registerProfileCommands();
+	}
+
+	/**
+	 * Confirmation dialog for tearing down a profile's infrastructure. Resolves
+	 * true only if the user explicitly clicks Destroy. Shared by the command and
+	 * the Settings "Danger Zone" button so the S3-retention warning stays in one
+	 * place.
+	 */
+	confirmDestroyInfrastructure(profile: PublishingProfile): Promise<boolean> {
+		return new Promise<boolean>(resolve => {
+			const confirmModal = new Modal(this.app);
+			confirmModal.onOpen = () => {
+				confirmModal.contentEl.createEl('h3', { text: 'Destroy Infrastructure' });
+				confirmModal.contentEl.createEl('p', {
+					text: `This will delete the CloudFormation stacks for profile "${profile.name}". The S3 bucket will be retained (not deleted). This action cannot be undone.`,
+				});
+				new Setting(confirmModal.contentEl)
+					.addButton(btn => btn.setButtonText('Cancel').onClick(() => { resolve(false); confirmModal.close(); }))
+					.addButton(btn => btn.setButtonText('Destroy').setWarning().onClick(() => { resolve(true); confirmModal.close(); }));
+			};
+			confirmModal.onClose = () => resolve(false);
+			confirmModal.open();
+		});
+	}
+
+	/**
+	 * Tear down a profile's deployed infrastructure: delete its CloudFormation
+	 * stacks in dependency order, polling each to completion, then reset the
+	 * profile's infrastructure/auth/comment state. Shared by the
+	 * `destroy-infrastructure` command and the Settings "Danger Zone" button.
+	 *
+	 * Callers are expected to have already confirmed with the user (see
+	 * `confirmDestroyInfrastructure`) and to have checked the `none`/`imported`
+	 * guards; those guards are re-asserted here defensively.
+	 *
+	 * `onEvent` receives per-resource CloudFormation events (same shape the deploy
+	 * flow uses) so the UI can stream live progress.
+	 *
+	 * Returns `{ authStackRetryNeeded }` — true when a Lambda@Edge auth stack
+	 * failed to delete on the first attempt (its replicas are removed
+	 * asynchronously by CloudFront only after the distribution is gone), so the
+	 * caller can advise the user to retry later.
+	 */
+	async destroyInfrastructure(
+		profile: PublishingProfile,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<{ authStackRetryNeeded: boolean }> {
+		const state = profile.infrastructureState;
+		if (!state || state.status === 'none') {
+			throw new Error('No infrastructure deployed for this profile.');
+		}
+		if (state.imported) {
+			throw new Error('Imported stacks cannot be destroyed from the plugin. Manage them via CDK.');
+		}
+
+		state.status = 'destroying';
+		await this.saveSettings();
+
+		// Delete a stack and wait for CloudFormation to finish removing it. Once a
+		// stack is fully gone, DescribeStacks by name raises a ValidationError
+		// ("Stack ... does not exist") rather than reporting DELETE_COMPLETE — treat
+		// that as success. Returns false if the stack ended in DELETE_FAILED.
+		const deleteAndWait = async (stackName: string, region?: string): Promise<boolean> => {
+			await this.cloudFormationManager.deleteStack(stackName, profile, region);
+			try {
+				const finalStatus = await this.cloudFormationManager.pollStackUntilComplete(
+					stackName,
+					profile,
+					(event) => onEvent?.(event),
+					region,
+				);
+				return finalStatus !== 'DELETE_FAILED';
+			} catch (err: any) {
+				const message = String(err?.message || err);
+				if (/does not exist/i.test(message)) {
+					// Stack fully deleted between poll iterations — success.
+					return true;
+				}
+				throw err;
+			}
+		};
+
+		let authStackRetryNeeded = false;
+
+		if (state.comment?.stackName) {
+			// Delete the comment stack before the site stack so the /comments/*
+			// origin's referenced bucket policy is gone first.
+			await deleteAndWait(state.comment.stackName, state.region);
+		}
+		if (state.fullStackName) {
+			await deleteAndWait(state.fullStackName, state.region);
+		}
+		if (state.certStackName && !state.certificateReused) {
+			// Never delete a certificate we reused rather than created — it is owned
+			// outside this profile's stacks. (A reused cert also leaves certStackName
+			// unset; this is belt-and-suspenders.)
+			await deleteAndWait(state.certStackName, 'us-east-1');
+		}
+		if (state.cognitoAuth?.stackName) {
+			// The Cognito stack owns a Lambda@Edge function whose replicas are removed
+			// asynchronously by CloudFront only after the distribution is gone — its
+			// first delete attempt may fail and need a retry later.
+			try {
+				if (!(await deleteAndWait(state.cognitoAuth.stackName, 'us-east-1'))) {
+					authStackRetryNeeded = true;
+				}
+			} catch (err) {
+				Logger.warn('Cognito auth stack deletion failed (may need retry after edge replicas clear):', err);
+				authStackRetryNeeded = true;
+			}
+		}
+		if (state.passwordAuth?.stackName) {
+			// Same Lambda@Edge replica-removal caveat as the Cognito stack.
+			try {
+				if (!(await deleteAndWait(state.passwordAuth.stackName, 'us-east-1'))) {
+					authStackRetryNeeded = true;
+				}
+			} catch (err) {
+				Logger.warn('Password auth stack deletion failed (may need retry after edge replicas clear):', err);
+				authStackRetryNeeded = true;
+			}
+		}
+
+		// Reset to defaults (no spread) — clears cognitoAuth/passwordAuth/comment and intent.
+		profile.infrastructureState = { status: 'none', useRoute53: false, originAccessMethod: 'oac' };
+		profile.readGate = undefined;
+		profile.cognitoAuth = undefined;
+		profile.commenting = undefined;
+		await this.saveSettings();
+
+		return { authStackRetryNeeded };
 	}
 
 	async loadSettings() {

@@ -411,6 +411,9 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		// --- Danger Zone ---
 		const dangerSection = this.createSection(profileContainer, 'Danger Zone');
+
+		this.displayDestroyInfrastructure(dangerSection, profile);
+
 		const deleteButtonContainer = dangerSection.createDiv({ cls: 'cpn-profile-delete-container' });
 
 		new Setting(deleteButtonContainer)
@@ -778,6 +781,72 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						}));
 			}
 		}
+	}
+
+	/**
+	 * "Destroy infrastructure" action in the Danger Zone. Only rendered for AWS
+	 * profiles with a live, non-imported deployment. On confirm it tears down the
+	 * stacks via the shared plugin.destroyInfrastructure(), streaming CloudFormation
+	 * events into a live log, then refreshes the profile view.
+	 */
+	private displayDestroyInfrastructure(containerEl: HTMLElement, profile: PublishingProfile): void {
+		if (profile.publishMechanism !== 'AWS') return;
+		const state = profile.infrastructureState;
+		const status = state?.status || 'none';
+		if (!state || status === 'none') return;
+
+		if (state.imported) {
+			new Setting(containerEl)
+				.setName('Destroy infrastructure')
+				.setDesc('This stack was imported and is managed externally via CDK. It cannot be destroyed from the plugin.')
+				.addButton(btn => btn.setButtonText('Destroy infrastructure').setDisabled(true));
+			return;
+		}
+
+		const eventLog = containerEl.createDiv({ cls: 'cpn-wizard-event-log' });
+		eventLog.hide();
+
+		new Setting(containerEl)
+			.setName('Destroy infrastructure')
+			.setDesc('Delete the CloudFormation stacks for this profile. The S3 bucket is retained (not deleted). This cannot be undone.')
+			.addButton(button => {
+				button
+					.setButtonText('Destroy infrastructure')
+					.setClass('mod-warning')
+					.onClick(async () => {
+						const confirmed = await this.plugin.confirmDestroyInfrastructure(profile);
+						if (!confirmed) return;
+
+						button.setDisabled(true);
+						button.setButtonText('Destroying...');
+						eventLog.empty();
+						eventLog.show();
+
+						try {
+							const result = await this.plugin.destroyInfrastructure(profile, (event) => {
+								const line = eventLog.createDiv({ cls: 'cpn-wizard-event-line' });
+								if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+									line.addClass('cpn-event-error');
+								} else if (event.status.includes('COMPLETE')) {
+									line.addClass('cpn-event-success');
+								}
+								line.setText(`${event.logicalResourceId} - ${event.status}`);
+							});
+							new Notice(
+								result.authStackRetryNeeded
+									? 'Infrastructure destroyed. The auth stack may need a retry once the CloudFront edge replicas are removed.'
+									: 'Infrastructure destroyed.',
+							);
+							this.renderActiveProfile();
+						} catch (err) {
+							Logger.error('Error destroying infrastructure:', err);
+							new Notice(`Failed to destroy infrastructure: ${err instanceof Error ? err.message : String(err)}`);
+							button.setDisabled(false);
+							button.setButtonText('Destroy infrastructure');
+						}
+					});
+				return button;
+			});
 	}
 
 	private openImportStackModal(profile: PublishingProfile): void {
