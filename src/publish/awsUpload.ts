@@ -2,6 +2,7 @@ import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, S3ServiceE
 import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
+import type { PublishingProfile } from '../types';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs, renderVendorJs } from './siteRenderer';
@@ -31,6 +32,40 @@ function isCredentialError(error: unknown): boolean {
 		return ['AccessDenied', 'ExpiredToken', 'ExpiredTokenException', 'InvalidAccessKeyId', 'AuthFailure'].includes(error.name);
 	}
 	return false;
+}
+
+/** Resolve the home note's UID from the profile's configured home note path. */
+function resolveHomeNoteUid(plugin: CommonplaceNotesPlugin, profile: PublishingProfile): string | undefined {
+	if (!profile.homeNotePath) return undefined;
+	const homeFile = plugin.app.vault.getAbstractFileByPath(profile.homeNotePath);
+	if (homeFile instanceof TFile) {
+		return plugin.frontmatterManager.getNoteUID(homeFile) || undefined;
+	}
+	return undefined;
+}
+
+/**
+ * Render and upload the site's `config.json`. This carries the commenting/auth
+ * flags the site client reads via `window.__CPN_CONFIG__`, so it must be kept in
+ * sync whenever those settings change. Uploaded both when seeding assets and on
+ * every publish (see pushMappingAndIndexToS3) so a normal publish keeps the
+ * config current — otherwise a settings change would stay stale until the user
+ * manually re-pushed site assets.
+ */
+async function uploadConfigJson(plugin: CommonplaceNotesPlugin, profile: PublishingProfile): Promise<void> {
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const bucket = profile.awsSettings!.bucketName;
+	const s3Prefix = profile.awsSettings!.s3Prefix || '';
+	const homeNoteUid = resolveHomeNoteUid(plugin, profile);
+
+	await s3Client.send(new PutObjectCommand({
+		Bucket: bucket,
+		Key: `${s3Prefix}config.json`,
+		Body: renderConfigJson(profile, homeNoteUid),
+		ContentType: 'application/json',
+		CacheControl: 'no-cache',
+	}));
+	Logger.debug(`Uploaded site asset: ${s3Prefix}config.json`);
 }
 
 export async function pushLocalJsonsToS3(
@@ -196,6 +231,11 @@ export async function pushMappingAndIndexToS3(
 			Logger.debug(`Uploaded content index: ${key}`);
 		}
 	}
+
+	// Refresh config.json so commenting/auth (and theme/home) flags stay in sync
+	// on every publish — without this a settings change would not reach the site
+	// until the user manually re-pushed site assets.
+	await uploadConfigJson(plugin, profile);
 }
 
 export async function deleteNoteHashesFromS3(
@@ -271,13 +311,7 @@ export async function pushSiteAssetsToS3(
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
 		// Resolve home note UID from the configured home note path
-		let homeNoteUid: string | undefined;
-		if (profile.homeNotePath) {
-			const homeFile = plugin.app.vault.getAbstractFileByPath(profile.homeNotePath);
-			if (homeFile instanceof TFile) {
-				homeNoteUid = plugin.frontmatterManager.getNoteUID(homeFile) || undefined;
-			}
-		}
+		const homeNoteUid = resolveHomeNoteUid(plugin, profile);
 
 		const assets: { key: string; body: string; contentType: string; cacheControl: string }[] = [
 			{

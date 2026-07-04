@@ -53,7 +53,12 @@ if (!appScriptMatch) {
 const appJs = appScriptMatch[1].trim();
 
 // Build HTML shell template
-const CONFIG_BOOTSTRAP = `fetch('config.json')
+// Expose the config-load as a promise (window.__CPN_CONFIG_READY__) so code
+// that depends on config (e.g. the comment client) can await it instead of
+// racing the fetch. The panel/comment init runs on the window `load` event,
+// which usually fires after this fetch resolves — but nothing guarantees it,
+// so awaiting the promise removes the race entirely.
+const CONFIG_BOOTSTRAP = `window.__CPN_CONFIG_READY__ = fetch('config.json')
   .then(r => r.ok ? r.json() : null)
   .then(config => {
     if (!config) return;

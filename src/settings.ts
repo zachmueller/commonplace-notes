@@ -4,6 +4,7 @@ import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from
 import { Logger } from './utils/logging';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
+import { googleOAuthUrls } from './infrastructure/cognitoUrls';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from './publish/awsUpload';
 
 class HomeNoteSuggestModal extends SuggestModal<TFile> {
@@ -716,6 +717,42 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.onClick(() => {
 						this.openAuthLambdaModal(profile);
 					}));
+
+			// Google sign-in: the Cognito Hosted UI URLs the user must register
+			// in their Google OAuth client. Persisted from the deploy, shown here
+			// (with copy buttons) so they're always retrievable — otherwise the
+			// user has no in-plugin way to see what Google needs.
+			if (state.cognitoAuth?.hostedUiDomain) {
+				const { jsOrigin, redirectUri } = googleOAuthUrls(state.cognitoAuth.hostedUiDomain);
+				new Setting(containerEl)
+					.setName('Google authorized JavaScript origin')
+					.setDesc(jsOrigin)
+					.addButton(btn => btn
+						.setButtonText('Copy')
+						.onClick(() => {
+							navigator.clipboard.writeText(jsOrigin);
+							new Notice('Copied!');
+						}));
+				new Setting(containerEl)
+					.setName('Google authorized redirect URI')
+					.setDesc(redirectUri)
+					.addButton(btn => btn
+						.setButtonText('Copy')
+						.onClick(() => {
+							navigator.clipboard.writeText(redirectUri);
+							new Notice('Copied!');
+						}));
+			}
+
+			// Commenting: the widget only renders on published note pages, so a
+			// deployed-but-empty site shows nothing. Point the user at the action
+			// that makes comments appear.
+			if (profile.commenting?.enabled && state.cognitoAuth?.commentIdentity) {
+				new Setting(containerEl)
+					.setName('Commenting')
+					.setDesc('Enabled. The comment box appears on published note pages — '
+						+ 'run "Publish all notes" and open a note to see it.');
+			}
 
 			if (state.imported) {
 				new Setting(containerEl)

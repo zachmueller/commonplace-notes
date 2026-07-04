@@ -1975,6 +1975,10 @@ ${closeButton}
 
 		// --- Entry point (called from createPanel per panel) -----------------
 		async function initComments(panel, noteData) {
+			// config.json loads asynchronously (see CONFIG_BOOTSTRAP); await it so a
+			// slow config fetch can't make commentsEnabled() read false and silently
+			// skip the widget until a reload.
+			if (window.__CPN_CONFIG_READY__) await window.__CPN_CONFIG_READY__;
 			if (!commentsEnabled()) return;
 			const region = panel.querySelector('.comments');
 			if (!region) return;

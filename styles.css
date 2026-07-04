@@ -146,6 +146,11 @@
 	margin-bottom: 12px;
 }
 
+.cpn-oauth-hint {
+	margin-top: 8px;
+	margin-bottom: 12px;
+}
+
 .cpn-wizard-outputs {
 	margin-bottom: 16px;
 }

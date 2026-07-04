@@ -5,6 +5,7 @@ import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
 import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from '../publish/awsUpload';
+import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -318,7 +319,61 @@ export class DeploymentWizardModal extends Modal {
 				.addText(text => text
 					.setValue(this.config.authDomainPrefix || '')
 					.setPlaceholder('my-notes-auth')
-					.onChange(v => { this.config.authDomainPrefix = v; }));
+					.onChange(v => {
+						this.config.authDomainPrefix = v;
+						this.renderGoogleOAuthHint(hintEl);
+					}));
+
+			// Live-updating hint: the Hosted UI domain is deterministic from the
+			// prefix + region, so show the exact URLs to register in Google *now*
+			// (Google must trust them before sign-in works). Re-rendered in place on
+			// prefix change so the text input keeps focus.
+			const hintEl = container.createDiv({ cls: 'cpn-oauth-hint' });
+			this.renderGoogleOAuthHint(hintEl);
+		}
+	}
+
+	/**
+	 * (Re)render the Google OAuth pre-deploy hint into `hintEl`, showing the
+	 * Authorized JavaScript origin and redirect URI the user must add to their
+	 * Google OAuth client. Uses a `<region>` / `<prefix>` placeholder when either
+	 * value is not yet known so the shape is still clear.
+	 */
+	private renderGoogleOAuthHint(hintEl: HTMLElement): void {
+		hintEl.empty();
+
+		const prefix = this.config.authDomainPrefix || '<prefix>';
+		const region = this.config.region || '<region>';
+		const domain = `https://${prefix}.auth.${region}.amazoncognito.com`;
+		const { jsOrigin, redirectUri } = googleOAuthUrls(domain);
+		// Only wire up copy buttons once the values are real (no placeholders).
+		const resolved = !!(this.config.authDomainPrefix && this.config.region);
+
+		hintEl.createEl('p', {
+			text: 'Add these to your Google OAuth client (Google Cloud Console → APIs & Services → '
+				+ 'Credentials → your OAuth 2.0 Client ID) before deploying — sign-in fails until '
+				+ 'Google trusts them:',
+			cls: 'cpn-wizard-description',
+		});
+		this.createCopyRow(hintEl, 'Authorized JavaScript origin', jsOrigin, resolved);
+		this.createCopyRow(hintEl, 'Authorized redirect URI', redirectUri, resolved);
+	}
+
+	/**
+	 * A labelled read-only value row with a Copy button, styled like the DNS /
+	 * stack-output rows. When `copyable` is false (placeholder values) the button
+	 * is omitted so the user isn't offered a broken copy.
+	 */
+	private createCopyRow(parent: HTMLElement, label: string, value: string, copyable = true): void {
+		const row = parent.createDiv({ cls: 'cpn-dns-record-row' });
+		row.createEl('strong', { text: label });
+		row.createEl('code', { text: value });
+		if (copyable) {
+			const btn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
+			btn.addEventListener('click', () => {
+				navigator.clipboard.writeText(value);
+				new Notice('Copied!');
+			});
 		}
 	}
 
@@ -1196,6 +1251,38 @@ export class DeploymentWizardModal extends Modal {
 				row.createEl('strong', { text: `${label}: ` });
 				row.createEl('code', { text: value });
 			}
+		}
+
+		// Google sign-in finish-up: the user must register the Cognito Hosted UI
+		// URLs in their Google OAuth client. These weren't final until now (the
+		// domain is confirmed by the deploy), so surface them here with copy
+		// buttons rather than leaving the user to reconstruct them.
+		const hostedUiDomain = this.cognitoOutputs?.hostedUiDomain
+			|| cognitoHostedUiDomain(this.config.authDomainPrefix, this.config.region);
+		if (this.cognitoPoolNeeded() && hostedUiDomain) {
+			const authDiv = container.createDiv({ cls: 'cpn-wizard-outputs' });
+			authDiv.createEl('h3', { text: 'Finish Google sign-in setup' });
+			authDiv.createEl('p', {
+				text: 'Add these to your Google OAuth client (Google Cloud Console → APIs & Services '
+					+ '→ Credentials → your OAuth 2.0 Client ID). Sign-in fails until Google trusts them:',
+				cls: 'cpn-wizard-description',
+			});
+			const { jsOrigin, redirectUri } = googleOAuthUrls(hostedUiDomain);
+			this.createCopyRow(authDiv, 'Authorized JavaScript origin', jsOrigin);
+			this.createCopyRow(authDiv, 'Authorized redirect URI', redirectUri);
+		}
+
+		// Commenting needs published note content to be visible — the widget only
+		// renders on note pages, and the freshly-seeded site has none yet. Tell the
+		// user the one action that makes comments appear.
+		if (this.config.commentingEnabled && this.commentOutputs) {
+			const commentDiv = container.createDiv({ cls: 'cpn-wizard-outputs' });
+			commentDiv.createEl('h3', { text: 'Commenting is deployed' });
+			commentDiv.createEl('p', {
+				text: 'The comment box only appears on published note pages. Run "Publish all notes" '
+					+ 'to upload your content, then open a note to see it.',
+				cls: 'cpn-wizard-description',
+			});
 		}
 
 		new Setting(container)
