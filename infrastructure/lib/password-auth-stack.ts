@@ -3,7 +3,7 @@ import { Construct } from 'constructs';
 import { readInlineLambda } from './inline-code';
 
 /**
- * Built-in password (HTTP Basic Auth) read-gate sub-stack.
+ * Built-in password read-gate sub-stack (branded HTML unlock page).
  *
  * Deployed FIRST (like the certificate / Cognito sub-stacks), pinned to
  * us-east-1 because it owns a viewer-request Lambda@Edge function whose
@@ -29,10 +29,12 @@ export class PasswordAuthStack extends cdk.Stack {
 			description: 'Lowercase hex sha256 of the shared read password (computed plugin-side)',
 		});
 
+		// Kept the param name `Realm` (avoids a template migration); it now feeds
+		// the heading/title of the branded unlock page rather than a Basic Auth realm.
 		const realm = new cdk.CfnParameter(this, 'Realm', {
 			type: 'String',
 			default: 'Protected',
-			description: 'Basic Auth realm shown in the browser password prompt',
+			description: 'Site name shown as the heading on the password unlock page',
 		});
 
 		const edgeRole = new cdk.aws_iam.CfnRole(this, 'EdgeFnRole', {
