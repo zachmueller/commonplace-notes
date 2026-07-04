@@ -1835,7 +1835,13 @@ ${closeButton}
 			const base = cpnConfig().commentReadPath || '/comments/';
 			try {
 				const res = await fetch(`${base}${encodeURIComponent(noteUid)}.json`, { credentials: 'same-origin' });
-				if (res.status === 404) return { version: 1, comments: [] }; // none yet
+				// "No comments yet" is the common case for a fresh note. Under
+				// CloudFront + S3 OAC (GetObject only, no ListBucket) a missing object
+				// returns 403 AccessDenied, NOT 404 — same as the note-load path
+				// (loadNote treats 403/404 alike). Treat both as an empty thread so the
+				// (empty) composer still renders; only genuine transport failures
+				// (offline/DNS/CORS, which reject the fetch) should suppress the widget.
+				if (res.status === 404 || res.status === 403) return { version: 1, comments: [] };
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				const data = await res.json();
 				return data && Array.isArray(data.comments) ? data : { version: 1, comments: [] };

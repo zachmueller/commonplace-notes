@@ -2,8 +2,14 @@
 //
 // On any add/edit/delete, re-Query the affected note's partition, fold the
 // current state (drop status=deleted, keep edits, sort chronologically by SK),
-// and PutObject {note_uid}.json to the comment bucket. Bodies are stored as raw
-// Markdown — the client renders/sanitizes at display time.
+// and PutObject comments/{note_uid}.json to the comment bucket. Bodies are
+// stored as raw Markdown — the client renders/sanitizes at display time.
+//
+// KEY LAYOUT: the object key MUST be `comments/{note_uid}.json`. The site
+// distribution routes `/comments/*` to this bucket with an empty OriginPath, so
+// CloudFront requests the S3 key verbatim from the URL path — i.e. a client read
+// of `/comments/{uid}.json` maps to bucket key `comments/{uid}.json`. Writing to
+// the bucket root (`{uid}.json`) would never be reachable via that behavior.
 //
 // IDEMPOTENT BY CONSTRUCTION: it always rebuilds the whole note file from the
 // current table state (never from the stream delta), so duplicate/retried
@@ -76,7 +82,9 @@ exports.handler = async (event) => {
 		const view = buildView(items);
 		await s3.send(new PutObjectCommand({
 			Bucket: BUCKET,
-			Key: noteUid + '.json',
+			// Must match the `/comments/*` CloudFront behavior's key mapping (see the
+			// KEY LAYOUT note at the top of this file).
+			Key: 'comments/' + noteUid + '.json',
 			Body: JSON.stringify(view),
 			ContentType: 'application/json',
 			CacheControl: 'public, max-age=30',
