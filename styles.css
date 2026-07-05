@@ -237,3 +237,94 @@
 .cpn-infra-status-pending {
 	background: var(--text-warning);
 }
+
+/* Recent comments side panel */
+.cpn-recent-comments-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding-bottom: 8px;
+	margin-bottom: 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cpn-recent-comments-refresh {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	cursor: pointer;
+}
+
+.cpn-recent-comments-profile {
+	max-width: 40%;
+}
+
+.cpn-recent-comments-lastrefreshed {
+	margin-left: auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.cpn-recent-comments-empty {
+	color: var(--text-muted);
+	padding: 12px 4px;
+}
+
+.cpn-recent-comments-card {
+	padding: 8px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cpn-recent-comments-note-title {
+	font-weight: var(--font-semibold);
+	margin-bottom: 4px;
+}
+
+.cpn-recent-comments-clickable {
+	cursor: pointer;
+	color: var(--text-accent);
+}
+
+.cpn-recent-comments-clickable:hover {
+	text-decoration: underline;
+}
+
+.cpn-recent-comments-unresolved {
+	color: var(--text-muted);
+}
+
+.cpn-recent-comments-stale {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-warning);
+	margin-bottom: 4px;
+}
+
+.cpn-recent-comments-comment {
+	padding: 4px 0 4px 8px;
+	border-left: 2px solid var(--background-modifier-border);
+	margin-bottom: 4px;
+}
+
+.cpn-recent-comments-meta {
+	display: flex;
+	gap: 8px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.cpn-recent-comments-author {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+
+.cpn-recent-comments-body {
+	white-space: pre-wrap;
+	word-break: break-word;
+	margin-top: 2px;
+}
+
+.cpn-recent-comments-deleted {
+	font-style: italic;
+	color: var(--text-muted);
+}

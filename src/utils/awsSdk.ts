@@ -1,6 +1,8 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import { STSClient } from '@aws-sdk/client-sts';
 import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { PublishingProfile } from '../types';
@@ -11,6 +13,7 @@ export class AwsSdkManager {
 	private s3Clients: Map<string, S3Client> = new Map();
 	private stsClients: Map<string, STSClient> = new Map();
 	private cfClients: Map<string, CloudFrontClient> = new Map();
+	private ddbClients: Map<string, DynamoDBDocumentClient> = new Map();
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
@@ -52,6 +55,21 @@ export class AwsSdkManager {
 		return client;
 	}
 
+	getDynamoDBClient(profile: PublishingProfile): DynamoDBDocumentClient {
+		const existing = this.ddbClients.get(profile.id);
+		if (existing) return existing;
+
+		const base = new DynamoDBClient({
+			region: profile.awsSettings!.region,
+			credentials: this.buildCredentialProvider(profile),
+		});
+		// The Document client auto-marshals plain JS objects to/from
+		// AttributeValue maps, so callers work with ordinary comment items.
+		const client = DynamoDBDocumentClient.from(base);
+		this.ddbClients.set(profile.id, client);
+		return client;
+	}
+
 	private buildCredentialProvider(profile: PublishingProfile): AwsCredentialIdentityProvider {
 		const awsProfile = profile.awsSettings!.awsProfile;
 
@@ -85,14 +103,19 @@ export class AwsSdkManager {
 
 		const cf = this.cfClients.get(profileId);
 		if (cf) { cf.destroy(); this.cfClients.delete(profileId); }
+
+		const ddb = this.ddbClients.get(profileId);
+		if (ddb) { ddb.destroy(); this.ddbClients.delete(profileId); }
 	}
 
 	dispose(): void {
 		for (const client of this.s3Clients.values()) client.destroy();
 		for (const client of this.stsClients.values()) client.destroy();
 		for (const client of this.cfClients.values()) client.destroy();
+		for (const client of this.ddbClients.values()) client.destroy();
 		this.s3Clients.clear();
 		this.stsClients.clear();
 		this.cfClients.clear();
+		this.ddbClients.clear();
 	}
 }

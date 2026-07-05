@@ -74,10 +74,32 @@ export class CommentStack extends cdk.Stack {
 			attributeDefinitions: [
 				{ attributeName: 'PK', attributeType: 'S' },
 				{ attributeName: 'SK', attributeType: 'S' },
+				// Recency-feed GSI keys (author-facing Phase 2). Only comment items
+				// carry these; profile/username items omit them and are left out of
+				// the index (DynamoDB sparse-index behavior).
+				{ attributeName: 'GSI1PK', attributeType: 'S' },
+				{ attributeName: 'GSI1SK', attributeType: 'S' },
 			],
 			keySchema: [
 				{ attributeName: 'PK', keyType: 'HASH' },
 				{ attributeName: 'SK', keyType: 'RANGE' },
+			],
+			// GSI1 gives newest-N comments site-wide in one Query: every comment
+			// shares the constant GSI1PK='ACTIVITY' partition, sorted by a
+			// time-leading GSI1SK ({createdAt}#{noteUid}#{commentUid}). Reads use
+			// ScanIndexForward=false + Limit. Does not affect the base PK/SK path
+			// (per-note loading, re-export) at all — purely additive.
+			globalSecondaryIndexes: [
+				{
+					indexName: 'GSI1',
+					keySchema: [
+						{ attributeName: 'GSI1PK', keyType: 'HASH' },
+						{ attributeName: 'GSI1SK', keyType: 'RANGE' },
+					],
+					// Project everything so the recency Query returns render-ready
+					// comment fields without a base-table fetch.
+					projection: { projectionType: 'ALL' },
+				},
 			],
 			streamSpecification: { streamViewType: 'NEW_AND_OLD_IMAGES' },
 		});

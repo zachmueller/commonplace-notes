@@ -43,8 +43,8 @@ function mintUid(len) {
 	return out;
 }
 
-function pk(noteUid) { return 'NOTE#' + noteUid; }
-function sk(createdAt, commentUid) { return 'COMMENT#' + createdAt + '#' + commentUid; }
+function pk(noteUid) { return `NOTE#${noteUid}`; }
+function sk(createdAt, commentUid) { return `COMMENT#${createdAt}#${commentUid}`; }
 
 function resp(status, obj) {
 	return {
@@ -64,7 +64,7 @@ exports.handler = async (event) => {
 	const authorId = authorOf(event);
 	if (!authorId) return resp(401, { error: 'unauthorized' });
 
-	const method = (event.requestContext && event.requestContext.http && event.requestContext.http.method) || '';
+	const method = event.requestContext?.http?.method || '';
 	let payload = {};
 	try { payload = event.body ? JSON.parse(event.body) : {}; } catch (e) { return resp(400, { error: 'invalid json' }); }
 
@@ -89,6 +89,12 @@ exports.handler = async (event) => {
 			createdAt: { N: String(now) },
 			updatedAt: { N: String(now) },
 			status: { S: 'active' },
+			// Recency-feed GSI (author-facing panel): one shared ACTIVITY partition,
+			// sorted newest-first by a time-leading sort key. Only stamped at create
+			// time — PATCH/DELETE below leave these intact so a comment keeps its
+			// place in the feed (creation-ordered). See comment-stack.ts GSI1.
+			GSI1PK: { S: 'ACTIVITY' },
+			GSI1SK: { S: `${now}#${noteUid}#${commentUid}` },
 		};
 		if (parentCommentUid) item.parentCommentUid = { S: parentCommentUid };
 		if (quote) item.quote = { S: JSON.stringify(quote) };

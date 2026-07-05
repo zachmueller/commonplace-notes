@@ -25,6 +25,7 @@ import { Logger } from './utils/logging';
 import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
+import { RecentCommentsView, RECENT_COMMENTS_VIEW } from './views/recentCommentsView';
 
 // defining interfaces to facilitate deregistering commands
 interface Commands {
@@ -142,11 +143,34 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
 		this.registerCommands();
 
+		// Recent Comments side panel (author-facing Phase 2).
+		this.registerView(RECENT_COMMENTS_VIEW, (leaf) => new RecentCommentsView(leaf, this));
+		this.addRibbonIcon('message-square', 'Recent comments', () => this.activateRecentCommentsView());
+
 		// Refresh indicators upon fully loading
 		this.app.workspace.onLayoutReady(async () => {
 			Logger.debug('Layout ready, initializing indicators');
 			await this.indicatorManager.updateAllVisibleIndicators();
+
+			// If the panel was restored open in this workspace, refresh it once when
+			// its data is >=8h stale. The view itself no-ops when the feed is fresh.
+			for (const leaf of this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW)) {
+				const view = leaf.view;
+				if (view instanceof RecentCommentsView) await view.refreshIfStale();
+			}
 		});
+	}
+
+	async activateRecentCommentsView() {
+		const existing = this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW);
+		if (existing.length > 0) {
+			this.app.workspace.revealLeaf(existing[0]);
+			return;
+		}
+		const leaf = this.app.workspace.getRightLeaf(false);
+		if (!leaf) return;
+		await leaf.setViewState({ type: RECENT_COMMENTS_VIEW, active: true });
+		this.app.workspace.revealLeaf(leaf);
 	}
 
 	private registerCommands() {
@@ -160,6 +184,12 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				}
 				await refreshCredentials(this, profile.id);
 			}
+		});
+
+		this.addCommand({
+			id: 'open-recent-comments',
+			name: 'Open recent comments panel',
+			callback: () => this.activateRecentCommentsView(),
 		});
 
 		this.addCommand({

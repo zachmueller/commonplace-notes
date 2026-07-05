@@ -34,6 +34,10 @@ export interface PublishingProfile {
 	cognitoAuth?: CognitoAuthProfile;
 	/** Self-hosted commenting toggle for this (public) site. */
 	commenting?: CommentingProfile;
+	/** Comments pulled from the recency GSI per Recent Comments panel refresh. Default 25. */
+	commentsFeedLimit?: number;
+	/** Epoch ms of the last successful Recent Comments panel refresh (8h-staleness check). */
+	commentsLastRefreshed?: number;
 }
 
 /**

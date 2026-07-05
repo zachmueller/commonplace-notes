@@ -745,6 +745,27 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.setName('Commenting')
 					.setDesc('Enabled. The comment box appears on published note pages — '
 						+ 'run "Publish all notes" and open a note to see it.');
+
+				new Setting(containerEl)
+					.setName('Recent comments to load per refresh')
+					.setDesc('How many recent comments the Recent Comments panel pulls from DynamoDB '
+						+ 'on each refresh. Default 25.')
+					.addText(text => text
+						.setPlaceholder('25')
+						.setValue(String(profile.commentsFeedLimit ?? 25))
+						.onChange(async (value) => {
+							const num = parseInt(value, 10);
+							if (!isNaN(num) && num >= 1 && num <= 200) {
+								this.plugin.settings.publishingProfiles[index].commentsFeedLimit = num;
+								await this.plugin.saveSettings();
+							}
+						}));
+
+				if (profile.commentsLastRefreshed) {
+					new Setting(containerEl)
+						.setName('Recent comments last refreshed')
+						.setDesc(new Date(profile.commentsLastRefreshed).toLocaleString());
+				}
 			}
 
 			if (state.imported) {
