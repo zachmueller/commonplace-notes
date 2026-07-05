@@ -158,10 +158,12 @@ async function main() {
 			{ canReply: true },
 		);
 		(el.querySelector('.comment-reply-btn') as any).click();
-		const textarea = el.querySelector('.comment-reply-form textarea') as any;
+		// The reply input is a contenteditable editor; setting textContent (no
+		// chips) is equivalent to the old textarea.value and serializes back to it.
+		const editor = el.querySelector('.comment-reply-form .comment-input[contenteditable="true"]') as any;
 		const submit = Array.from(el.querySelectorAll('.comment-reply-form .comment-submit'))[0] as any;
-		check(!!textarea && !!submit, 'clicking Reply must reveal a reply form with a textarea + submit');
-		textarea.value = 'my reply';
+		check(!!editor && !!submit, 'clicking Reply must reveal a reply form with an editor + submit');
+		editor.textContent = 'my reply';
 		fetchLog.length = 0;
 		win.__nextFetch__ = () => fakeResponse(201, { commentUid: 'r9', createdAt: 20 });
 		submit.click();

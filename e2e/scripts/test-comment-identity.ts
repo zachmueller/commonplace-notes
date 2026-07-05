@@ -13,7 +13,8 @@
  *   fetchMe:      401/403 -> { authenticated:false }; 200 -> { authenticated,username }
  *   postUsername: 200 -> { ok:true }; 409 -> { ok:false, error }
  *   renderComment: emits an escaped `@username` author, or `anonymous` when absent
- *   buildComposer: signed-out reader gets a DISABLED textarea (never typeable)
+ *   buildComposer: signed-out reader gets a DISABLED textarea (never typeable);
+ *     signed-in reader gets an editable contenteditable composer.
  *
  * Also asserts the deploy-side invariant that the comment stack template exposes
  * the /api/me route (or the composer can never learn auth state).
@@ -148,12 +149,14 @@ async function main() {
 			'a signed-out composer must offer sign-in');
 	}
 	// --- buildComposer: signed-in-with-username reader gets an ENABLED box ---
+	// The active composer is a contenteditable editor (so note-links can render as
+	// chips), not a <textarea>. It must be editable (contenteditable="true").
 	{
 		const region = win.document.createElement('div');
 		region.innerHTML = '<div class="comment-composer"></div>';
 		buildComposer({ dataset: { uid: 'u1' } }, { hash: '' }, region, () => {}, { authenticated: true, username: 'alice' });
-		const ta = region.querySelector('textarea');
-		check(!!ta && ta.disabled === false, 'a signed-in reader with a username must get an enabled textarea');
+		const editor = region.querySelector('.comment-composer .comment-input[contenteditable="true"]');
+		check(!!editor, 'a signed-in reader with a username must get an editable composer');
 	}
 
 	// --- deploy invariant: the comment stack exposes GET/POST /api/me ---

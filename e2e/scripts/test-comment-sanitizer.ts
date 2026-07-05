@@ -128,6 +128,57 @@ function main() {
 	mustNotContain('[[<script>alert(1)</script>]]', 'unpublished-link', 'non-UID wikilink is not treated as a UID');
 	mustNotContain('[[Some Title]]', 'href="#/u', 'lowercase/spaced wikilink is not a UID link');
 
+	// --- Comment editor chip serialize/deserialize round-trip ---
+	// The composer/reply/edit inputs are contenteditable editors that show a
+	// [[UID]] link as a name chip while serializing back to the exact [[UID]]
+	// Markdown that is stored. getValue() must be byte-identical to what the old
+	// <textarea> produced, so nothing downstream (backend/render) changes.
+	const buildCommentEditor = win.buildCommentEditor;
+	if (typeof buildCommentEditor === 'function' && typeof win.setNoteIndex === 'function') {
+		win.setNoteIndex({
+			JVZ6KPM29N: { title: 'My Note', content: '' },
+			ABCDEF1234: { title: 'Second Note', content: '' },
+		});
+
+		// setValue deserializes [[UID]] into chips; getValue serializes back.
+		const ed = buildCommentEditor('see [[JVZ6KPM29N]] here', '');
+		const chips = ed.el.querySelectorAll('.comment-chip[data-uid="JVZ6KPM29N"]');
+		check(chips.length === 1, `editor renders one chip for the UID — got ${chips.length}`);
+		check(chips.length === 1 && chips[0].textContent === 'My Note',
+			`chip shows the note title — got: ${chips.length ? chips[0].textContent : '(none)'}`);
+		check(ed.getValue() === 'see [[JVZ6KPM29N]] here',
+			`round-trips a single link — got: ${JSON.stringify(ed.getValue())}`);
+
+		// Two links plus surrounding text.
+		const md2 = 'a [[JVZ6KPM29N]] b [[ABCDEF1234]] c';
+		const ed2 = buildCommentEditor(md2, '');
+		check(ed2.el.querySelectorAll('.comment-chip').length === 2,
+			`two links -> two chips — got ${ed2.el.querySelectorAll('.comment-chip').length}`);
+		check(ed2.getValue() === md2, `round-trips two links — got: ${JSON.stringify(ed2.getValue())}`);
+
+		// An unknown-but-valid UID still becomes a chip (labeled with the raw UID)
+		// and round-trips unchanged.
+		const ed3 = buildCommentEditor('x [[ZZZZZZ9999]] y', '');
+		check(ed3.el.querySelectorAll('.comment-chip[data-uid="ZZZZZZ9999"]').length === 1,
+			'unknown UID still becomes a chip');
+		check(ed3.getValue() === 'x [[ZZZZZZ9999]] y',
+			`unknown-UID chip round-trips — got: ${JSON.stringify(ed3.getValue())}`);
+
+		// clear() empties the editor (so :empty placeholder shows).
+		ed.clear();
+		check(ed.getValue() === '', `clear() empties the editor — got: ${JSON.stringify(ed.getValue())}`);
+
+		// Chip title is set via textContent, never innerHTML — no HTML injection.
+		// (UID is valid Crockford Base32: no I/L/O/U.)
+		win.setNoteIndex({ HTM0CHP123: { title: '<img src=x onerror=alert(1)>', content: '' } });
+		const ed4 = buildCommentEditor('[[HTM0CHP123]]', '');
+		check(!/<img/i.test(ed4.el.innerHTML), 'chip title is not injected as raw HTML');
+		check(ed4.getValue() === '[[HTM0CHP123]]',
+			`chip with HTML-ish title still round-trips as UID — got: ${JSON.stringify(ed4.getValue())}`);
+	} else {
+		failures.push('buildCommentEditor/setNoteIndex not exposed on the window — cannot test chip round-trip');
+	}
+
 	report();
 }
 

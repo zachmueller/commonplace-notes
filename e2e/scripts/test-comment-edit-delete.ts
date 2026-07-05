@@ -16,7 +16,7 @@
  *   deleted comments never render owner actions.
  *   patchComment / deleteComment: correct method, URL and JSON body, and the
  *     createdAt integer round-trips verbatim (it reconstructs the DynamoDB SK).
- *   the inline edit textarea is prefilled with the RAW Markdown body.
+ *   the inline edit editor is prefilled with the RAW Markdown body.
  *
  * Pure unit test of the shipped runtime — no real browser, Obsidian, or AWS.
  * Mirrors the harness in test-comment-identity.ts.
@@ -142,8 +142,11 @@ async function main() {
 		const editBtn = Array.from(el.querySelectorAll('.comment-action'))
 			.find((b: any) => b.textContent === 'Edit') as any;
 		editBtn.click();
-		const ta = el.querySelector('.comment-edit-form textarea') as any;
-		check(!!ta && ta.value === raw, `edit textarea must prefill the raw markdown — got: ${ta && ta.value}`);
+		// The edit input is a contenteditable editor (so note-links prefill as
+		// chips). With no [[UID]] in the body its textContent is the raw markdown.
+		const editor = el.querySelector('.comment-edit-form .comment-input[contenteditable="true"]') as any;
+		check(!!editor && editor.textContent === raw,
+			`edit editor must prefill the raw markdown — got: ${editor && editor.textContent}`);
 	}
 
 	// --- patchComment request shape + createdAt round-trip ---

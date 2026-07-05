@@ -791,7 +791,41 @@ body.panel-resizing {
 	cursor: not-allowed;
 	background-color: var(--bg-secondary);
 }
-/* [[ ]] note-link autocomplete dropdown (positioned via JS under the textarea).
+/* The active comment inputs are contenteditable divs (so note-links can render
+   as inline chips). They reuse the .comment-input box above; these rules add the
+   textarea behaviors a div lacks. The signed-out preview stays a real <textarea>
+   and uses :disabled above. */
+div.comment-input {
+	overflow-y: auto;
+	max-height: 300px;
+	white-space: pre-wrap;
+	word-break: break-word;
+	cursor: text;
+}
+/* contenteditable has no native placeholder; show data-placeholder when empty. */
+div.comment-input:empty:before {
+	content: attr(data-placeholder);
+	color: var(--text-secondary);
+	pointer-events: none;
+}
+/* Committed [[UID]] note-link, shown as an atomic pill inside the editor. */
+.comment-chip {
+	display: inline-block;
+	padding: 0 6px 0 4px;
+	border-radius: 4px;
+	background-color: var(--unpublished-bg);
+	color: var(--link-color);
+	font-size: 0.9em;
+	line-height: 1.4;
+	white-space: nowrap;
+	user-select: all;
+}
+.comment-chip:before {
+	content: "🔗";
+	margin-right: 3px;
+	font-size: 0.85em;
+}
+/* [[ ]] note-link autocomplete dropdown (positioned via JS under the editor).
    Modeled on .search-results. */
 .comment-wikilink-menu {
 	position: absolute;
@@ -2209,11 +2243,10 @@ ${closeButton}
 				body.hidden = true;
 				const form = document.createElement('div');
 				form.className = 'comment-edit-form';
-				const textarea = document.createElement('textarea');
-				textarea.className = 'comment-input';
-				// Prefill with the RAW Markdown, never the rendered HTML.
-				textarea.value = c.body || '';
-				attachWikilinkAutocomplete(textarea);
+				// Prefill with the RAW Markdown; existing [[UID]] tokens deserialize
+				// into chips (title shown) and stay editable.
+				const editor = buildCommentEditor(c.body || '', '');
+				attachWikilinkAutocomplete(editor);
 				const save = document.createElement('button');
 				save.type = 'button';
 				save.className = 'comment-submit';
@@ -2224,7 +2257,7 @@ ${closeButton}
 				cancel.textContent = 'Cancel';
 				const editStatus = document.createElement('span');
 				editStatus.className = 'comment-status';
-				form.appendChild(textarea);
+				form.appendChild(editor.el);
 				form.appendChild(save);
 				form.appendChild(cancel);
 				form.appendChild(editStatus);
@@ -2237,7 +2270,7 @@ ${closeButton}
 				};
 				cancel.addEventListener('click', closeForm);
 				save.addEventListener('click', async () => {
-					const next = textarea.value.trim();
+					const next = editor.getValue().trim();
 					if (!next) return;
 					save.disabled = true;
 					editStatus.textContent = 'Saving…';
@@ -2315,10 +2348,8 @@ ${closeButton}
 				row.hidden = true;
 				const form = document.createElement('div');
 				form.className = 'comment-reply-form';
-				const textarea = document.createElement('textarea');
-				textarea.className = 'comment-input';
-				textarea.placeholder = 'Write a reply (Markdown supported)…';
-				attachWikilinkAutocomplete(textarea);
+				const editor = buildCommentEditor('', 'Write a reply (Markdown supported)…');
+				attachWikilinkAutocomplete(editor);
 				const submit = document.createElement('button');
 				submit.type = 'button';
 				submit.className = 'comment-submit';
@@ -2329,7 +2360,7 @@ ${closeButton}
 				cancel.textContent = 'Cancel';
 				const status = document.createElement('span');
 				status.className = 'comment-status';
-				form.appendChild(textarea);
+				form.appendChild(editor.el);
 				form.appendChild(submit);
 				form.appendChild(cancel);
 				form.appendChild(status);
@@ -2341,7 +2372,7 @@ ${closeButton}
 				};
 				cancel.addEventListener('click', closeForm);
 				submit.addEventListener('click', async () => {
-					const body = textarea.value.trim();
+					const body = editor.getValue().trim();
 					if (!body) return;
 					submit.disabled = true;
 					status.textContent = 'Posting…';
@@ -2505,52 +2536,164 @@ ${closeButton}
 			composer.appendChild(wrap);
 		}
 
-		// Obsidian-style [[ ]] note-link autocomplete for a comment textarea.
-		// Applied to the composer, reply, and edit textareas so all three behave
-		// consistently. Detects an open `[[query` token left of the caret, filters
-		// noteTitleList by case-insensitive title substring, and inserts `[[UID]]`
-		// on selection — the UID (not the title) is what persists, so links survive
-		// renames. No-ops entirely when noteTitleList is empty (content index not
-		// published), so the composer is unchanged in that case. Positioning is v1:
-		// the menu anchors to the textarea's bottom-left rather than the caret.
-		function attachWikilinkAutocomplete(textarea) {
+		// A committed [[UID]] note-link, shown in the editor as an atomic pill that
+		// displays the note's TITLE while carrying its UID in data-uid. Marked
+		// contenteditable=false so the browser treats it as one unit — a single
+		// Backspace deletes the whole link. The link glyph is a CSS ::before, so
+		// textContent holds only the title (set via textContent — never innerHTML).
+		function makeChip(uid, title) {
+			const chip = document.createElement('span');
+			chip.className = 'comment-chip';
+			chip.setAttribute('contenteditable', 'false');
+			chip.dataset.uid = uid;
+			chip.textContent = title;
+			return chip;
+		}
+
+		// Serialize a comment editor's DOM back into the Markdown string that is
+		// posted/stored: text nodes contribute their text, chips contribute
+		// [[UID]], and block/BR boundaries contribute newlines. This must match the
+		// exact string the old <textarea> produced so nothing downstream changes.
+		// Zero-width caret-safety spaces (​) are stripped.
+		function serializeCommentDom(root) {
+			let out = '';
+			root.childNodes.forEach(node => {
+				if (node.nodeType === 3) { // text
+					out += node.nodeValue;
+					return;
+				}
+				if (node.nodeType !== 1) return; // ignore comments etc.
+				if (node.classList && node.classList.contains('comment-chip') && node.dataset.uid) {
+					out += '[[' + node.dataset.uid + ']]';
+					return;
+				}
+				const tag = node.tagName;
+				if (tag === 'BR') { out += '\n'; return; }
+				if (tag === 'DIV' || tag === 'P') {
+					// contenteditable wraps new lines in blocks; treat each as a
+					// newline boundary. An empty block (<div><br></div>) is one \n.
+					if (out.length && !out.endsWith('\n')) out += '\n';
+					if (!(node.childNodes.length === 1 && node.firstChild.tagName === 'BR')) {
+						out += serializeCommentDom(node);
+					}
+					return;
+				}
+				out += serializeCommentDom(node); // inline wrapper
+			});
+			return out.replace(/​/g, '');
+		}
+
+		// Build a contenteditable comment input with a textarea-like API. Selecting
+		// a note from the [[ ]] autocomplete inserts a chip (title shown), but
+		// getValue() serializes back to [[UID]] so storage + rendering are
+		// unchanged. Returns { el, getValue, setValue, clear, focus }.
+		function buildCommentEditor(initialMarkdown, placeholder) {
+			const el = document.createElement('div');
+			el.className = 'comment-input';
+			el.setAttribute('contenteditable', 'true');
+			el.setAttribute('role', 'textbox');
+			el.setAttribute('aria-multiline', 'true');
+			if (placeholder) el.dataset.placeholder = placeholder;
+
+			// Deserialize [[UID]] Markdown into text + chip nodes. A UID missing from
+			// the index still becomes a chip labeled with the raw UID (stable
+			// round-trip; matches the greyed-out render fallback).
+			const setValue = (markdown) => {
+				el.innerHTML = '';
+				const md = markdown || '';
+				const re = /\[\[([0-9A-HJKMNP-TV-Z]{6,})\]\]/g;
+				let last = 0;
+				let m;
+				while ((m = re.exec(md))) {
+					if (m.index > last) el.appendChild(document.createTextNode(md.slice(last, m.index)));
+					const uid = m[1];
+					el.appendChild(makeChip(uid, noteTitleMap.get(uid) || uid));
+					last = m.index + m[0].length;
+				}
+				if (last < md.length) el.appendChild(document.createTextNode(md.slice(last)));
+			};
+
+			const getValue = () => serializeCommentDom(el);
+			const clear = () => { el.innerHTML = ''; };
+			const focus = () => {
+				el.focus();
+				const range = document.createRange();
+				range.selectNodeContents(el);
+				range.collapse(false);
+				const sel = window.getSelection();
+				if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+			};
+
+			// Paste as plain text only, so rich clipboard HTML can't inject arbitrary
+			// nodes into the editor (keeps serialization predictable; embedded \n
+			// render via white-space: pre-wrap, same as setValue).
+			el.addEventListener('paste', (e) => {
+				e.preventDefault();
+				const cd = e.clipboardData || window.clipboardData;
+				const text = cd ? cd.getData('text/plain') : '';
+				const sel = window.getSelection();
+				if (!sel || !sel.rangeCount) return;
+				const range = sel.getRangeAt(0);
+				range.deleteContents();
+				const tn = document.createTextNode(text);
+				range.insertNode(tn);
+				range.setStartAfter(tn);
+				range.collapse(true);
+				sel.removeAllRanges();
+				sel.addRange(range);
+			});
+
+			if (initialMarkdown) setValue(initialMarkdown);
+			return { el, getValue, setValue, clear, focus };
+		}
+
+		// Obsidian-style [[ ]] note-link autocomplete for a comment editor (the
+		// object from buildCommentEditor). Applied to the composer, reply, and edit
+		// editors so all three behave consistently. Detects an open `[[query` token
+		// left of the caret within a text node, filters noteTitleList by
+		// case-insensitive title substring, and on selection replaces the token with
+		// a chip (title shown, [[UID]] stored). No-ops entirely when noteTitleList is
+		// empty (content index not published). Menu anchors to the editor's
+		// bottom-left (the form containers are position:relative).
+		function attachWikilinkAutocomplete(editor) {
 			if (!noteTitleList.length) return; // no note index -> no autocomplete
-			// A single shared query regex: an unclosed [[ with no closing ]] or
-			// newline after it, anchored to the end of the text before the caret.
+			const el = editor.el;
+			// An unclosed [[ with no closing ]] or newline after it, anchored to the
+			// end of the text-node content before the caret.
 			const OPEN_TOKEN = /\[\[([^\]\n]*)$/;
 
-			let menu = null;      // dropdown element, or null when closed
-			let items = [];       // current [{ uid, title }] shown
-			let active = -1;      // highlighted index within items
-			let matchStart = -1;  // index of the '[[' that opened the token
+			let menu = null;       // dropdown element, or null when closed
+			let items = [];        // current [{ uid, title }] shown
+			let active = -1;       // highlighted index within items
+			let tokenNode = null;  // the text node holding the open [[query
+			let tokenStart = -1;   // index of '[[' within tokenNode
+			let tokenEnd = -1;     // caret index within tokenNode
 
 			const closeMenu = () => {
 				if (menu) { menu.remove(); menu = null; }
 				items = [];
 				active = -1;
-				matchStart = -1;
+				tokenNode = null;
+				tokenStart = -1;
+				tokenEnd = -1;
 			};
 
 			const renderMenu = () => {
 				if (!menu) {
 					menu = document.createElement('div');
 					menu.className = 'comment-wikilink-menu';
-					// Anchor to the textarea's bottom-left. The parent is made
-					// position:relative in CSS (.comment-composer / .comment-reply-form
-					// / .comment-edit-form), so these offsets place the menu just
-					// under the textarea. Precise caret positioning is a follow-up.
-					const parent = textarea.parentNode;
+					const parent = el.parentNode;
 					if (parent) parent.appendChild(menu);
-					menu.style.top = (textarea.offsetTop + textarea.offsetHeight) + 'px';
-					menu.style.left = textarea.offsetLeft + 'px';
-					menu.style.minWidth = textarea.offsetWidth + 'px';
+					menu.style.top = (el.offsetTop + el.offsetHeight) + 'px';
+					menu.style.left = el.offsetLeft + 'px';
+					menu.style.minWidth = el.offsetWidth + 'px';
 				}
 				menu.innerHTML = '';
 				items.forEach((it, i) => {
 					const row = document.createElement('div');
 					row.className = 'comment-wikilink-menu-item' + (i === active ? ' active' : '');
 					row.textContent = it.title;
-					// mousedown (not click) so it fires before the textarea blur.
+					// mousedown (not click) so it fires before the editor blur.
 					row.addEventListener('mousedown', (e) => {
 						e.preventDefault();
 						commit(i);
@@ -2561,25 +2704,43 @@ ${closeButton}
 
 			const commit = (i) => {
 				const it = items[i];
-				if (!it) return;
-				const value = textarea.value;
-				const caret = textarea.selectionStart;
-				const before = value.slice(0, matchStart);
-				const after = value.slice(caret);
-				const token = '[[' + it.uid + ']]';
-				textarea.value = before + token + after;
-				const pos = before.length + token.length;
-				textarea.setSelectionRange(pos, pos);
-				textarea.focus();
+				if (!it || !tokenNode) return;
+				const full = tokenNode.nodeValue;
+				const before = full.slice(0, tokenStart);
+				const after = full.slice(tokenEnd);
+				const parent = tokenNode.parentNode;
+				if (!parent) { closeMenu(); return; }
+				// tokenNode keeps the text before '[['; a chip + trailing text node
+				// (the text after the caret, or a zero-width space so the caret can
+				// land after the chip) follow it.
+				tokenNode.nodeValue = before;
+				const afterNode = document.createTextNode(after.length ? after : '​');
+				const chip = makeChip(it.uid, it.title);
+				parent.insertBefore(afterNode, tokenNode.nextSibling);
+				parent.insertBefore(chip, afterNode);
+				const range = document.createRange();
+				range.setStart(afterNode, 0);
+				range.collapse(true);
+				const sel = window.getSelection();
+				if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+				el.focus();
 				closeMenu();
 			};
 
 			const update = () => {
-				const caret = textarea.selectionStart;
-				const left = textarea.value.slice(0, caret);
-				const m = OPEN_TOKEN.exec(left);
+				const sel = window.getSelection();
+				if (!sel || !sel.rangeCount) { closeMenu(); return; }
+				const range = sel.getRangeAt(0);
+				const node = range.startContainer;
+				// The query only ever lives in a plain text node inside the editor
+				// (chips are separate non-editable nodes).
+				if (node.nodeType !== 3 || !el.contains(node)) { closeMenu(); return; }
+				const offset = range.startOffset;
+				const m = OPEN_TOKEN.exec(node.nodeValue.slice(0, offset));
 				if (!m) { closeMenu(); return; }
-				matchStart = m.index; // position of the opening '[['
+				tokenNode = node;
+				tokenStart = m.index;
+				tokenEnd = offset;
 				const query = m[1].toLowerCase();
 				items = noteTitleList
 					.filter(it => it.title.toLowerCase().includes(query))
@@ -2589,12 +2750,12 @@ ${closeButton}
 				renderMenu();
 			};
 
-			textarea.addEventListener('input', update);
+			el.addEventListener('input', update);
 			// Keep the menu in sync when the caret moves without editing (arrows,
 			// clicks) so a stale menu doesn't linger over a closed token.
-			textarea.addEventListener('click', update);
+			el.addEventListener('click', update);
 
-			textarea.addEventListener('keydown', (e) => {
+			el.addEventListener('keydown', (e) => {
 				if (!menu) return;
 				if (e.key === 'ArrowDown') {
 					e.preventDefault();
@@ -2614,7 +2775,7 @@ ${closeButton}
 			});
 
 			// Close on blur (deferred so a menu mousedown can commit first).
-			textarea.addEventListener('blur', () => { setTimeout(closeMenu, 100); });
+			el.addEventListener('blur', () => { setTimeout(closeMenu, 100); });
 		}
 
 		// Render the compose box. `auth` is { authenticated, username }: a
@@ -2639,10 +2800,8 @@ ${closeButton}
 				return;
 			}
 
-			const textarea = document.createElement('textarea');
-			textarea.className = 'comment-input';
-			textarea.placeholder = 'Add a comment (Markdown supported)…';
-			attachWikilinkAutocomplete(textarea);
+			const editor = buildCommentEditor('', 'Add a comment (Markdown supported)…');
+			attachWikilinkAutocomplete(editor);
 			const submit = document.createElement('button');
 			submit.className = 'comment-submit';
 			submit.textContent = 'Comment';
@@ -2650,13 +2809,13 @@ ${closeButton}
 			status.className = 'comment-status';
 
 			submit.addEventListener('click', async () => {
-				const body = textarea.value.trim();
+				const body = editor.getValue().trim();
 				if (!body) return;
 				submit.disabled = true;
 				status.textContent = 'Posting…';
 				try {
 					await postComment(panel.dataset.uid, noteData.hash || '', body);
-					textarea.value = '';
+					editor.clear();
 					status.textContent = 'Posted. It may take a moment to appear.';
 					setTimeout(refresh, 1500);
 				} catch (err) {
@@ -2671,7 +2830,7 @@ ${closeButton}
 				}
 			});
 
-			composer.appendChild(textarea);
+			composer.appendChild(editor.el);
 			composer.appendChild(submit);
 			composer.appendChild(status);
 		}
