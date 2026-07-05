@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, setIcon } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, setIcon } from 'obsidian';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { NoticeManager } from '../utils/notice';
@@ -19,6 +19,9 @@ export class RecentCommentsView extends ItemView {
 	private feed: RecentFeed | null = null;
 	private activeProfileId: string | null = null;
 	private isRefreshing = false;
+	// Owns the lifecycle of event handlers created while rendering comment
+	// Markdown; replaced on each render so handlers don't accumulate.
+	private feedComponent: Component | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: CommonplaceNotesPlugin) {
 		super(leaf);
@@ -102,6 +105,12 @@ export class RecentCommentsView extends ItemView {
 		container.empty();
 		container.addClass('cpn-recent-comments');
 
+		// Reset the child component that owns rendered-Markdown handlers, so they
+		// don't accumulate across re-renders. addChild auto-unloads on view close.
+		if (this.feedComponent) this.removeChild(this.feedComponent);
+		this.feedComponent = new Component();
+		this.addChild(this.feedComponent);
+
 		const profiles = this.commentingProfiles();
 		if (profiles.length === 0) {
 			this.renderEmptyState(container);
@@ -159,13 +168,10 @@ export class RecentCommentsView extends ItemView {
 
 	private lastRefreshedLabel(profile: PublishingProfile | null): string {
 		const ts = profile?.commentsLastRefreshed;
+		// Absolute timestamp: correct permanently, so it's set once at render with
+		// no interval to keep a relative "N ago" label current.
 		if (!ts) return 'Never refreshed';
-		const mins = Math.floor((Date.now() - ts) / 60000);
-		if (mins < 1) return 'Last refreshed just now';
-		if (mins < 60) return `Last refreshed ${mins}m ago`;
-		const hours = Math.floor(mins / 60);
-		if (hours < 24) return `Last refreshed ${hours}h ago`;
-		return `Last refreshed ${Math.floor(hours / 24)}d ago`;
+		return `Last refreshed ${new Date(ts).toLocaleString()}`;
 	}
 
 	private renderGroup(list: HTMLElement, group: RecentActivityGroup): void {
@@ -180,11 +186,7 @@ export class RecentCommentsView extends ItemView {
 			title.addClass('cpn-recent-comments-unresolved');
 		}
 
-		if (group.threadStale) {
-			card.createDiv({ cls: 'cpn-recent-comments-stale', text: 'context updating…' });
-		}
-
-		// The recent comments (from Tier 1) for this note, newest-first.
+		// The recent comments for this note, newest-first.
 		for (const comment of group.recent) {
 			this.renderComment(card, comment, group);
 		}
@@ -200,15 +202,21 @@ export class RecentCommentsView extends ItemView {
 			text: new Date(comment.createdAt * 1000).toLocaleString(),
 		});
 
-		// Body as PLAIN TEXT (v1). Bodies are attacker-influenced raw Markdown; using
-		// setText escapes it. A later increment can swap in the site's hardened
-		// safe-subset Markdown renderer.
 		const body = el.createDiv({ cls: 'cpn-recent-comments-body' });
 		if (comment.status === 'deleted' || comment.body == null) {
 			body.addClass('cpn-recent-comments-deleted');
 			body.setText('(comment deleted)');
-		} else {
-			body.setText(comment.body);
+			return;
+		}
+
+		// Bodies are Markdown; render via Obsidian's native renderer (matches
+		// formatting.ts). The feedComponent owns any handlers the render creates.
+		// Fall back to plain text on error.
+		const md = comment.body;
+		try {
+			void MarkdownRenderer.render(this.plugin.app, md, body, group.localPath ?? '', this.feedComponent!);
+		} catch {
+			body.setText(md);
 		}
 	}
 

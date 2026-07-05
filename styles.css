@@ -294,12 +294,6 @@
 	color: var(--text-muted);
 }
 
-.cpn-recent-comments-stale {
-	font-size: var(--font-ui-smaller);
-	color: var(--text-warning);
-	margin-bottom: 4px;
-}
-
 .cpn-recent-comments-comment {
 	padding: 4px 0 4px 8px;
 	border-left: 2px solid var(--background-modifier-border);
@@ -319,9 +313,17 @@
 }
 
 .cpn-recent-comments-body {
-	white-space: pre-wrap;
 	word-break: break-word;
 	margin-top: 2px;
+}
+
+/* Tighten Obsidian's default block margins for rendered Markdown in the panel. */
+.cpn-recent-comments-body > :first-child {
+	margin-top: 0;
+}
+
+.cpn-recent-comments-body > :last-child {
+	margin-bottom: 0;
 }
 
 .cpn-recent-comments-deleted {
