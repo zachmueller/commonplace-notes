@@ -703,6 +703,39 @@ body.panel-resizing {
 	color: var(--text-secondary);
 	font-style: italic;
 }
+.comment-edited {
+	color: var(--text-secondary);
+	font-size: 12px;
+	margin-left: 8px;
+}
+.comment-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 6px;
+}
+.comment-action {
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--text-secondary);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 12px;
+}
+.comment-action:hover {
+	color: var(--text-primary);
+}
+.comment-action:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.comment-edit-form {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 6px;
+}
 .comment-empty {
 	color: var(--text-secondary);
 	font-size: 14px;
@@ -1846,6 +1879,19 @@ ${closeButton}
 			});
 			out = out.replace(/\*\*([^*]+)\*\*/g, (_, c) => `<strong>${c}</strong>`);
 			out = out.replace(/(^|[^*])\*([^*]+)\*/g, (_, pre, c) => `${pre}<em>${c}</em>`);
+			// Underscore emphasis. Unlike asterisks, underscores use CommonMark's
+			// intraword rule: `_` counts as a word char in the boundary guards, so
+			// snake_case / foo_bar_baz / variable_name stay literal. Double before
+			// single so `__x__` isn't half-eaten by the italic rule.
+			// KNOWN LIMITATION (shared with the asterisk rules above): emphasis runs
+			// after the link rule, so an emitted <a href="…"> whose URL contains `_`
+			// adjacent to =?&/ can be corrupted (e.g. …=<em>foo</em>&…). This is a
+			// correctness bug, NOT XSS — the <em> sits inside a quoted, escapeHtml'd
+			// attribute value and executes nothing. A real fix (tokenize link vs text
+			// spans) is a follow-up; underscores in path segments (/foo_bar/) are
+			// guarded on both sides and unaffected.
+			out = out.replace(/(^|[^A-Za-z0-9_])__([^_\s](?:[^_]*[^_\s])?)__(?![A-Za-z0-9_])/g, (m, pre, c) => `${pre}<strong>${c}</strong>`);
+			out = out.replace(/(^|[^A-Za-z0-9_])_([^_\s](?:[^_]*[^_\s])?)_(?![A-Za-z0-9_])/g, (m, pre, c) => `${pre}<em>${c}</em>`);
 			return out;
 		}
 		function renderMarkdown(md) {
@@ -1940,7 +1986,11 @@ ${closeButton}
 			return byParent;
 		}
 
-		function renderComment(c) {
+		// Render a single comment. `ctx` (optional) = { currentUsername, noteUid,
+		// refresh }; when the comment is owned by the current reader it grows an
+		// Edit/Delete action row. Called with no ctx (e.g. in tests) it renders a
+		// read-only comment with no owner affordances.
+		function renderComment(c, ctx) {
 			const el = document.createElement('div');
 			el.className = 'comment-item';
 			el.dataset.commentUid = c.commentUid;
@@ -1951,30 +2001,158 @@ ${closeButton}
 			}
 			const when = c.createdAt ? new Date(c.createdAt * 1000).toLocaleString() : '';
 			const author = c.authorName ? '@' + c.authorName : 'anonymous';
+			// POST sets updatedAt === createdAt, so a strict > means a real edit.
+			const editedBadge = (c.updatedAt && c.createdAt && c.updatedAt > c.createdAt)
+				? '<span class="comment-edited">(edited)</span>' : '';
 			el.innerHTML = `
-				<div class="comment-meta"><span class="comment-author">${escapeHtml(author)}</span><span class="comment-when">${escapeHtml(when)}</span></div>
+				<div class="comment-meta"><span class="comment-author">${escapeHtml(author)}</span><span class="comment-when">${escapeHtml(when)}</span>${editedBadge}</div>
 				<div class="comment-body">${renderMarkdown(c.body)}</div>
 			`;
+
+			// Owner-only edit/delete. This is a DISPLAY gate only: usernames are
+			// unique + immutable (1:1 with the Cognito sub), so matching the
+			// denormalized authorName against the reader's own username is a sound
+			// proxy for ownership. The server re-checks the sub on every write, so a
+			// mis-fired gate can only ever produce a 403 — never an unauthorized edit.
+			const owned = !!(ctx && ctx.currentUsername && c.authorName === ctx.currentUsername);
+			if (owned) attachOwnerActions(el, c, ctx);
 			return el;
 		}
 
-		function renderThreadInto(container, comments) {
+		// Append an Edit/Delete action row to an owned comment element and wire up
+		// the inline edit form + delete flow. Built with createElement (not an
+		// innerHTML string) so the click listeners survive.
+		function attachOwnerActions(el, c, ctx) {
+			const body = el.querySelector('.comment-body');
+			const actions = document.createElement('div');
+			actions.className = 'comment-actions';
+			const editBtn = document.createElement('button');
+			editBtn.type = 'button';
+			editBtn.className = 'comment-action';
+			editBtn.textContent = 'Edit';
+			const delBtn = document.createElement('button');
+			delBtn.type = 'button';
+			delBtn.className = 'comment-action';
+			delBtn.textContent = 'Delete';
+			const status = document.createElement('span');
+			status.className = 'comment-status';
+			actions.appendChild(editBtn);
+			actions.appendChild(delBtn);
+			actions.appendChild(status);
+			el.appendChild(actions);
+
+			editBtn.addEventListener('click', () => {
+				actions.hidden = true;
+				body.hidden = true;
+				const form = document.createElement('div');
+				form.className = 'comment-edit-form';
+				const textarea = document.createElement('textarea');
+				textarea.className = 'comment-input';
+				// Prefill with the RAW Markdown, never the rendered HTML.
+				textarea.value = c.body || '';
+				const save = document.createElement('button');
+				save.type = 'button';
+				save.className = 'comment-submit';
+				save.textContent = 'Save';
+				const cancel = document.createElement('button');
+				cancel.type = 'button';
+				cancel.className = 'comment-action';
+				cancel.textContent = 'Cancel';
+				const editStatus = document.createElement('span');
+				editStatus.className = 'comment-status';
+				form.appendChild(textarea);
+				form.appendChild(save);
+				form.appendChild(cancel);
+				form.appendChild(editStatus);
+				el.insertBefore(form, actions);
+
+				const closeForm = () => {
+					form.remove();
+					body.hidden = false;
+					actions.hidden = false;
+				};
+				cancel.addEventListener('click', closeForm);
+				save.addEventListener('click', async () => {
+					const next = textarea.value.trim();
+					if (!next) return;
+					save.disabled = true;
+					editStatus.textContent = 'Saving…';
+					try {
+						await patchComment(c.commentUid, ctx.noteUid, c.createdAt, next);
+						// Optimistic local update through the same XSS boundary.
+						c.body = next;
+						body.innerHTML = renderMarkdown(next);
+						if (!el.querySelector('.comment-edited')) {
+							const meta = el.querySelector('.comment-meta');
+							if (meta) {
+								const badge = document.createElement('span');
+								badge.className = 'comment-edited';
+								badge.textContent = '(edited)';
+								meta.appendChild(badge);
+							}
+						}
+						closeForm();
+						if (ctx.refresh) setTimeout(ctx.refresh, 1500);
+					} catch (err) {
+						editStatus.textContent = err.message === 'auth'
+							? 'Your session expired — please sign in again.'
+							: 'Could not save changes.';
+						save.disabled = false;
+					}
+				});
+			});
+
+			delBtn.addEventListener('click', async () => {
+				if (!window.confirm('Delete this comment?')) return;
+				delBtn.disabled = true;
+				editBtn.disabled = true;
+				status.textContent = 'Deleting…';
+				try {
+					await deleteComment(c.commentUid, ctx.noteUid, c.createdAt);
+					// Optimistically show the deleted state. If this comment has rendered
+					// replies, keep it as a tombstone so the thread structure survives;
+					// otherwise remove it outright.
+					const replies = el.querySelector('.comment-replies');
+					if (replies) {
+						el.classList.add('comment-deleted');
+						body.innerHTML = '<em>[comment deleted]</em>';
+						actions.remove();
+					} else {
+						el.remove();
+					}
+					if (ctx.refresh) setTimeout(ctx.refresh, 1500);
+				} catch (err) {
+					status.textContent = err.message === 'auth'
+						? 'Your session expired — please sign in again.'
+						: 'Could not delete comment.';
+					delBtn.disabled = false;
+					editBtn.disabled = false;
+				}
+			});
+		}
+
+		function renderThreadInto(container, comments, ctx) {
 			const byParent = buildThread(comments);
 			const list = container.querySelector('.comment-list');
 			list.innerHTML = '';
 			const roots = byParent.get('__root__') || [];
+			let rendered = 0;
 			for (const root of roots) {
-				const item = renderComment(root);
 				const replies = byParent.get(root.commentUid) || [];
+				// A deleted root with no replies is dropped entirely; kept as a
+				// tombstone only when replies still hang off it (preserves threading).
+				if (root.status === 'deleted' && !replies.length) continue;
+				const item = renderComment(root, ctx);
 				if (replies.length) {
 					const repliesEl = document.createElement('div');
 					repliesEl.className = 'comment-replies';
-					for (const r of replies) repliesEl.appendChild(renderComment(r));
+					for (const r of replies) repliesEl.appendChild(renderComment(r, ctx));
 					item.appendChild(repliesEl);
 				}
 				list.appendChild(item);
+				rendered++;
 			}
-			if (!roots.length) {
+			if (!rendered) {
 				list.innerHTML = '<p class="comment-empty">No comments yet.</p>';
 			}
 		}
@@ -1991,6 +2169,40 @@ ${closeButton}
 			if (res.status === 401 || res.status === 403) {
 				throw new Error('auth');
 			}
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			return res.json();
+		}
+
+		// Edit / delete a comment. Both target /api/comments behind the cookie
+		// authorizer; ownership is enforced SERVER-SIDE (the write Lambda checks the
+		// stored authorId against the caller's Cognito sub), so the client gate is
+		// display-only and a spoofed request can only ever earn a 403. The backend
+		// reconstructs the DynamoDB key as COMMENT#<createdAt>#<commentUid>, so
+		// createdAt must be passed through verbatim from the loaded comment (it is an
+		// integer of unix seconds — never recompute it client-side).
+		async function patchComment(commentUid, noteUid, createdAt, body) {
+			const base = cpnConfig().commentWritePath || '/api/comments';
+			const res = await fetch(base, {
+				method: 'PATCH',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ commentUid, noteUid, createdAt, body }),
+			});
+			if (res.status === 401 || res.status === 403) throw new Error('auth');
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			return res.json();
+		}
+		async function deleteComment(commentUid, noteUid, createdAt) {
+			const base = cpnConfig().commentWritePath || '/api/comments';
+			// A JSON body on DELETE is intentional: this hits the API Gateway origin
+			// (not the S3/CDN comment cache), and the write Lambda parses event.body.
+			const res = await fetch(base, {
+				method: 'DELETE',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ commentUid, noteUid, createdAt }),
+			});
+			if (res.status === 401 || res.status === 403) throw new Error('auth');
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			return res.json();
 		}
@@ -2133,21 +2345,33 @@ ${closeButton}
 				<div class="comment-composer"></div>
 			`;
 
+			// Shared, mutable render context. `refresh` closes over it, so once the
+			// reader's identity is known (below) every later re-render — including
+			// the ones triggered after posting/editing/deleting — keeps the
+			// owner Edit/Delete affordances.
+			const ctx = { currentUsername: null, noteUid: noteUid, refresh: null };
 			const refresh = async () => {
 				const data = await loadComments(noteUid);
-				if (data) renderThreadInto(region, data.comments);
+				if (data) renderThreadInto(region, data.comments, ctx);
 			};
+			ctx.refresh = refresh;
 
 			const data = await loadComments(noteUid);
 			if (data === null) return; // network error — leave the region hidden
 			region.hidden = false;
-			renderThreadInto(region, data.comments);
+			// First paint without owner buttons — don't block on fetchMe so the
+			// thread appears as fast as before.
+			renderThreadInto(region, data.comments, ctx);
 
 			// Gate the composer on the reader's auth/identity state:
 			//   signed out            -> disabled box + "Sign in to comment"
 			//   signed in, no username -> one-time username-setup step
 			//   signed in, has username -> working composer
 			const auth = await fetchMe();
+			ctx.currentUsername = (auth.authenticated && auth.username) ? auth.username : null;
+			// Re-render with the identity known so owned comments grow Edit/Delete
+			// (reuses the already-loaded data — no extra network round-trip).
+			if (ctx.currentUsername) renderThreadInto(region, data.comments, ctx);
 			if (auth.authenticated && !auth.username) {
 				buildUsernameSetup(panel, noteData, region, refresh);
 			} else {

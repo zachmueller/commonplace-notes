@@ -74,6 +74,14 @@ function main() {
 	// --- Safe subset must still render ---
 	mustContain('**bold**', '<strong>bold</strong>', 'bold renders');
 	mustContain('*italic*', '<em>italic</em>', 'italic renders');
+	mustContain('__bold__', '<strong>bold</strong>', 'underscore bold renders');
+	mustContain('_italic_', '<em>italic</em>', 'underscore italic renders');
+	// CommonMark: underscores inside a word are NOT emphasis (unlike asterisks).
+	mustNotContain('foo_bar_baz', '<em>', 'intraword single underscore stays literal');
+	mustNotContain('snake_case_name', '<em>', 'snake_case stays literal');
+	mustNotContain('a__b__c', '<strong>', 'intraword double underscore stays literal');
+	// Underscores in a link path are guarded on both sides and left intact.
+	mustContain('[x](https://e.com/a_b_c)', 'href="https://e.com/a_b_c"', 'underscores in link path preserved');
 	mustContain('`code`', '<code>code</code>', 'code span renders');
 	mustContain('[CPN](https://example.com)', 'href="https://example.com"', 'https link renders');
 	mustContain('[mail](mailto:a@b.com)', 'href="mailto:a@b.com"', 'mailto link renders');
