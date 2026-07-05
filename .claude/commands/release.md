@@ -2,6 +2,18 @@
 
 Push a new versioned release of the Commonplace Notes Obsidian plugin. Bump the version, commit, tag, and push — triggering the GitHub Actions workflow that builds and creates a draft GitHub release.
 
+## Git operations
+
+This project has the **git MCP** configured. Use the MCP tools — not raw `git` CLI commands — for any operation the MCP supports:
+
+- `mcp__git__status` — check the working tree
+- `mcp__git__commit` — stage (`files`) and commit in one call
+- `mcp__git__log` — recent commit history
+
+> **Do not prepend `[Claude] ` to commit summaries.** The `mcp__git__commit` tool adds that prefix automatically — writing it yourself produces a doubled `[Claude] [Claude] ` prefix.
+
+The git MCP has **no `push` or `tag` tool**, and `mcp__git__log` cannot take a commit range. Those specific operations (Steps 6, 7, and the range query in Step 8) still use the `git` CLI.
+
 ## Prerequisites
 
 - Working tree is clean (no uncommitted changes unrelated to this release)
@@ -21,9 +33,7 @@ Ask the user (or confirm from context) what the new version number should be. It
 
 ## Step 2: Check the working tree is clean
 
-```bash
-git status --porcelain
-```
+Use `mcp__git__status` to inspect the working tree.
 
 If any unexpected modified or untracked files appear, stop and ask the user how to proceed before making any version changes.
 
@@ -61,30 +71,23 @@ All should reflect the new version. If any mismatch exists, fix it manually befo
 
 ## Step 5: Commit the version bump
 
-Stage only the four version files:
+Commit with `mcp__git__commit`, staging only the four version files. The tool stages the paths in `files` and builds the message from the structured fields — so **do not** prepend `[Claude] ` to the summary (the tool does that automatically):
 
-```bash
-git add manifest.json versions.json package.json package-lock.json
-```
-
-Then commit (as a standalone command):
-
-```bash
-git commit -m "[Claude] Version bump: {PREV_VERSION} → {NEW_VERSION}
-
-- Updated manifest.json version to {NEW_VERSION}
-- Updated versions.json with {NEW_VERSION} → minAppVersion mapping
-- Updated package.json version to {NEW_VERSION}
-- Updated package-lock.json version to {NEW_VERSION}
-
----
-
-Release {NEW_VERSION}"
-```
+- `files`: `["manifest.json", "versions.json", "package.json", "package-lock.json"]`
+- `summary`: `Version bump: {PREV_VERSION} → {NEW_VERSION}`
+- `change_details` (each entry is a plain string; the tool prepends `- ` itself):
+  - `Updated manifest.json version to {NEW_VERSION}`
+  - `Updated versions.json with {NEW_VERSION} → minAppVersion mapping`
+  - `Updated package.json version to {NEW_VERSION}`
+  - `Updated package-lock.json version to {NEW_VERSION}`
+- `human_input`: the user's release prompt
+- `workflow`: `release`
 
 ---
 
 ## Step 6: Push the commit to main
+
+The git MCP has no push tool, so use the CLI:
 
 ```bash
 git push origin main
@@ -94,7 +97,7 @@ git push origin main
 
 ## Step 7: Create and push the release tag
 
-Create an annotated tag matching the version exactly:
+The git MCP has no tag tool, so use the CLI. Create an annotated tag matching the version exactly:
 
 ```bash
 git tag -a {NEW_VERSION} -m "Release {NEW_VERSION}"
@@ -115,7 +118,7 @@ Pushing the tag triggers the GitHub Actions release workflow (`.github/workflows
 
 ## Step 8: Draft the CHANGELOG summary
 
-Review all commits since the previous release tag and draft a CHANGELOG entry summarizing what was implemented. Get the commit list with:
+Review all commits since the previous release tag and draft a CHANGELOG entry summarizing what was implemented. `mcp__git__log` can't take a commit range, so use the CLI to get the commit list:
 
 ```bash
 git log --oneline {PREV_VERSION}..{NEW_VERSION}
