@@ -1,4 +1,4 @@
-import { TFile } from 'obsidian';
+import { TFile, requestUrl } from 'obsidian';
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
@@ -6,12 +6,15 @@ import { refreshCredentials } from '../publish/awsCredentials';
 import { Logger } from './logging';
 
 /**
- * Recent Comments panel data layer (author-facing Phase 2).
+ * Recent Comments panel data layer (author-facing Phase 2). Two-tier sourcing:
  *
- * "What's new" (paid, rare): a single DynamoDB Query on the recency GSI
- * (GSI1PK='ACTIVITY', newest-first) returns the newest-N comments site-wide,
- * grouped by note for display. Incurred only on manual refresh or an >=8h-stale
- * panel open.
+ *   Tier 1 — "what's new" (paid, rare): a single DynamoDB Query on the recency
+ *     GSI (GSI1PK='ACTIVITY', newest-first) returns the newest-N comments
+ *     site-wide. Incurred only on manual refresh or an >=8h-stale panel open.
+ *   Tier 2 — "full context" (CDN-cached, ~free): for each distinct note in the
+ *     Tier 1 result, GET the already-exported /comments/{uid}.json so each
+ *     recent comment renders within its note's complete thread (replies nested
+ *     one level under their root — matching the published site).
  *
  * See the "Recent comments activity side panel" idea note.
  */
@@ -43,17 +46,25 @@ export interface CommentItem {
 	quote?: { text: string; lineStart?: number; lineEnd?: number } | null;
 }
 
-/** The recent comments for a single note (grouped from the site-wide feed). */
+/** One note's recent activity plus its full thread for context. */
 export interface RecentActivityGroup {
 	noteUid: string;
-	noteTitle?: string;      // resolved locally if the note is in the vault
-	localPath?: string;      // vault path if resolvable (for click-to-open)
-	recent: CommentItem[];   // this note's comments that appeared in the feed (newest-first)
+	noteTitle?: string;         // resolved locally if the note is in the vault
+	localPath?: string;         // vault path if resolvable (for click-to-open)
+	recent: CommentItem[];      // this note's comments that appeared in the feed (newest-first)
+	thread: CommentItem[];      // full note thread (chronological) for one-level nesting
+	recentUids: Set<string>;    // commentUids that are newly-arrived (for highlighting)
 }
 
 export interface RecentFeed {
 	groups: RecentActivityGroup[]; // ordered by newest recent comment first
 	fetchedAt: number;             // epoch ms
+}
+
+/** Shape of the exported /comments/{uid}.json envelope. */
+interface CommentExport {
+	version: number;
+	comments: CommentItem[];
 }
 
 /**
@@ -94,6 +105,28 @@ async function queryRecent(
 	}
 }
 
+/**
+ * Tier 2: fetch a note's exported thread from the CDN. Uses Obsidian's
+ * `requestUrl` (not `fetch`) to avoid a CORS preflight against the CloudFront
+ * origin. 403/404 both mean "no export yet" (S3 OAC returns 403 for a missing
+ * object) — treated as "no thread available", not an error. Exported comments
+ * are already chronologically sorted and carry `parentCommentUid`.
+ */
+async function fetchThread(profile: PublishingProfile, noteUid: string): Promise<CommentItem[] | null> {
+	const base = profile.baseUrl.replace(/\/?$/, '/');
+	const url = `${base}comments/${encodeURIComponent(noteUid)}.json`;
+	try {
+		const r = await requestUrl({ url, throw: false });
+		if (r.status >= 400) return null; // 403/404 = no export yet; other errors = no thread
+		const json = r.json as CommentExport | CommentItem[] | undefined;
+		if (!json) return null;
+		return Array.isArray(json) ? json : (json.comments ?? null);
+	} catch (e) {
+		Logger.debug(`Failed to fetch thread for ${noteUid}:`, e);
+		return null;
+	}
+}
+
 /** Read-only reverse lookup: comment noteUid -> local vault file (if published here). */
 function resolveLocalNote(plugin: CommonplaceNotesPlugin, noteUid: string): TFile | null {
 	// Pure metadataCache read — do NOT use FrontmatterManager.getNoteUID, which
@@ -104,8 +137,21 @@ function resolveLocalNote(plugin: CommonplaceNotesPlugin, noteUid: string): TFil
 }
 
 /**
+ * Merge any recent items missing from the exported thread (export lag) so a
+ * just-posted comment/reply is never dropped while the export catches up.
+ * Returns a chronologically-sorted thread.
+ */
+function mergeThread(thread: CommentItem[], recent: CommentItem[]): CommentItem[] {
+	const byUid = new Map<string, CommentItem>();
+	for (const c of thread) byUid.set(c.commentUid, c);
+	for (const c of recent) if (!byUid.has(c.commentUid)) byUid.set(c.commentUid, c);
+	return [...byUid.values()].sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
  * Build the recent-activity feed: query the recency GSI for the newest-N
- * comments site-wide, group by note (newest-first order preserved), and resolve
+ * comments site-wide, group by note (newest-first order preserved), fetch each
+ * distinct note's full exported thread for one-level reply nesting, and resolve
  * each note's local source file for click-to-open.
  */
 export async function buildRecentFeed(
@@ -126,7 +172,18 @@ export async function buildRecentFeed(
 		byNote.get(item.noteUid)!.push(item);
 	}
 
+	// Tier 2: fetch each distinct note's thread in parallel (bounded by `limit`).
+	const threads = await Promise.all(
+		order.map(async (noteUid) => ({ noteUid, thread: await fetchThread(profile, noteUid) })),
+	);
+	const threadByNote = new Map(threads.map((t) => [t.noteUid, t.thread]));
+
 	const groups: RecentActivityGroup[] = order.map((noteUid) => {
+		const recentForNote = byNote.get(noteUid)!;
+		// Fall back to the recent items when the export lags/404s so brand-new
+		// comments still show (just without older context).
+		const fetched = threadByNote.get(noteUid) ?? [];
+		const thread = mergeThread(fetched, recentForNote);
 		const file = resolveLocalNote(plugin, noteUid);
 		return {
 			noteUid,
@@ -134,7 +191,9 @@ export async function buildRecentFeed(
 				? (plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') ?? file.basename)
 				: undefined,
 			localPath: file?.path,
-			recent: byNote.get(noteUid)!,
+			recent: recentForNote,
+			thread,
+			recentUids: new Set(recentForNote.map((c) => c.commentUid)),
 		};
 	});
 

@@ -300,6 +300,19 @@
 	margin-bottom: 4px;
 }
 
+/* One-level reply nesting, mirroring the site's .comment-replies. */
+.cpn-recent-comments-replies {
+	margin-left: 16px;
+	padding-left: 8px;
+	border-left: 2px solid var(--background-modifier-border);
+}
+
+/* Emphasize newly-arrived comments within the full thread. */
+.cpn-recent-comments-new {
+	border-left-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+
 .cpn-recent-comments-meta {
 	display: flex;
 	gap: 8px;

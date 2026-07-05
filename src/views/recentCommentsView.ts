@@ -186,14 +186,35 @@ export class RecentCommentsView extends ItemView {
 			title.addClass('cpn-recent-comments-unresolved');
 		}
 
-		// The recent comments for this note, newest-first.
-		for (const comment of group.recent) {
-			this.renderComment(card, comment, group);
+		// Render the full thread with one-level nesting (mirrors the published
+		// site's buildThread/renderThreadInto): roots in chronological order, each
+		// reply nested one level under its root. Replies never nest further.
+		const byParent = new Map<string, CommentItem[]>();
+		for (const c of group.thread) {
+			const key = c.parentCommentUid || '__root__';
+			if (!byParent.has(key)) byParent.set(key, []);
+			byParent.get(key)!.push(c);
+		}
+
+		const roots = byParent.get('__root__') ?? [];
+		for (const root of roots) {
+			const replies = byParent.get(root.commentUid) ?? [];
+			// A deleted root with no replies is dropped; kept as a tombstone only
+			// when replies still hang off it (preserves threading context).
+			if (root.status === 'deleted' && replies.length === 0) continue;
+
+			this.renderComment(card, root, group);
+			if (replies.length > 0) {
+				const repliesEl = card.createDiv({ cls: 'cpn-recent-comments-replies' });
+				for (const reply of replies) this.renderComment(repliesEl, reply, group);
+			}
 		}
 	}
 
 	private renderComment(card: HTMLElement, comment: CommentItem, group: RecentActivityGroup): void {
 		const el = card.createDiv({ cls: 'cpn-recent-comments-comment' });
+		// Highlight newly-arrived comments within the full thread.
+		if (group.recentUids.has(comment.commentUid)) el.addClass('cpn-recent-comments-new');
 
 		const meta = el.createDiv({ cls: 'cpn-recent-comments-meta' });
 		meta.createSpan({ cls: 'cpn-recent-comments-author', text: comment.authorName || 'Anonymous' });
