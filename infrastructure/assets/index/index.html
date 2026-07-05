@@ -1315,25 +1315,39 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		// Returns a hash string, or THROWS on an unknown type / unresolvable id —
 		// callers decide whether to swallow (base load → error panel) or degrade
 		// (diff target → render base note alone).
+		// In-memory memo for the static mapping files. Keyed by path -> Promise of the
+		// parsed JSON, so N concurrent resolveHash() callers (e.g. a stack of notes
+		// fanning out in loadPanelsFromURL) share ONE in-flight fetch per file instead
+		// of issuing N identical requests. The mapping files are static per deploy, so
+		// caching for the page session is safe. Failures are not cached (the entry is
+		// dropped) so a transient error can be retried on the next call.
+		const mappingCache = new Map();
+		function fetchMapping(path) {
+			if (!mappingCache.has(path)) {
+				mappingCache.set(path, fetch(path).then(r => {
+					if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+					return r.json();
+				}).catch(err => { mappingCache.delete(path); throw err; }));
+			}
+			return mappingCache.get(path);
+		}
+
 		async function resolveHash(type, value) {
 			let hash;
 			switch (type) {
 				case 't': // Title/slug
 					console.log('Resolving by title');
-					const slugResponse = await fetch('/static/mapping/slug-to-uid.json');
-					const slugMap = await slugResponse.json();
+					const slugMap = await fetchMapping('/static/mapping/slug-to-uid.json');
 					const uid = slugMap[value];
 					if (!uid) throw new Error(`No note found with title: ${value}`);
 
-					const uidResponse = await fetch('/static/mapping/uid-to-hash.json');
-					const uidMap = await uidResponse.json();
+					const uidMap = await fetchMapping('/static/mapping/uid-to-hash.json');
 					hash = uidMap[uid];
 					break;
 
 				case 'u': // UUID
 					console.log('Resolving by UUID');
-					const uidMapResponse = await fetch('/static/mapping/uid-to-hash.json');
-					const uidHashMap = await uidMapResponse.json();
+					const uidHashMap = await fetchMapping('/static/mapping/uid-to-hash.json');
 					hash = uidHashMap[value];
 					break;
 
@@ -1554,9 +1568,28 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				}
 				return;
 			}
-			for (const param of params) {
-				await addPanel(param.type, param.value, null, null, param.params);
+			// Fan out all note fetches concurrently, then attach in strict URL order.
+			// Promise.all preserves index order regardless of which fetch resolves
+			// first, and resolvePanelData never rejects, so one bad note degrades to an
+			// error panel without failing the batch. This replaces the old serial
+			// `await addPanel(...)` loop where panel N's fetch didn't start until panel
+			// N-1 was fully in the DOM (the visible per-note staggered-render delay).
+			const resolved = await Promise.all(
+				params.map(p => resolvePanelData(p.type, p.value, p.params))
+			);
+
+			let firstPanel = null;
+			for (const r of resolved) {
+				const panel = attachResolvedPanel(r);
+				if (panel && !firstPanel) firstPanel = panel;
 			}
+
+			// Bookkeeping once for the whole batch: refresh link state, write a single
+			// history entry (replaceState — the initial load shouldn't push K entries),
+			// and scroll once to the base (leftmost) note rather than K times.
+			updateOpenedNoteLinks();
+			updateURL(true);
+			if (firstPanel) firstPanel.scrollIntoView({ behavior: 'smooth', inline: 'start' });
 		}
 
 		// Store loaded panels to prevent duplicates
@@ -2517,22 +2550,16 @@ ${closeButton}
 			return { html, leftHash, rightHash };
 		}
 
-		async function addPanel(paramType, paramValue, afterPanel = null, headingSlug = null, params = null) {
-			console.log('addPanel called with:', paramType, paramValue);
-
+		// Resolve phase: fetch + build all the data a panel needs WITHOUT touching the
+		// DOM or the URL. Never throws — a failure returns an object with `error: true`
+		// so a single bad note can't reject a whole batch of concurrent resolves (see
+		// loadPanelsFromURL's Promise.all fan-out). Returns:
+		//   { paramType, paramValue, params, panelId, noteData }   on success
+		//   { paramType, paramValue, params, panelId, error: true } on failure
+		async function resolvePanelData(paramType, paramValue, params = null) {
 			// Unique identifier for the panel. Folds in any ;diff= target so a diffed
 			// view of a note is distinct from the plain note (see panelKey).
 			const panelId = panelKey(paramType, paramValue, params);
-
-			// Check if panel is already loaded
-			if (loadedPanels.has(panelId)) {
-				console.log('Panel already loaded, scrolling to:', panelId);
-				const openPanel = scrollToPanel(panelId);
-				if (headingSlug && openPanel) scrollToHeading(openPanel, headingSlug);
-				return;
-			}
-
-			console.log('Creating new panel:', panelId);
 			try {
 				const noteData = await loadNoteByParameter(paramType, paramValue);
 				if (!noteData) {
@@ -2558,67 +2585,105 @@ ${closeButton}
 					}
 				}
 
-				const container = document.getElementById('panels');
-				const panel = createPanel(noteData, loadedPanels.size);
-
-				// Store parameter information
-				panel.dataset.paramType = paramType;
-				panel.dataset.paramValue = paramValue;
-				panel.dataset.panelId = panelId;
-				// Persist the diff target so updateURL re-emits ;diff= (see
-				// collectPanelParams). Only set when a diff was actually rendered, so a
-				// degraded/empty diff doesn't pin a broken target into the URL.
-				if (params && params.diff && noteData.diffHtml) {
-					panel.dataset.diff = params.diff;
-				}
-
-				// Apply any per-note parameters carried in the URL (v1: width).
-				applyPanelWidth(panel, resolveWidth(params && params.width));
-
-				// Insert after the source panel if provided, otherwise append to end
-				const referenceNode = afterPanel ? afterPanel.nextElementSibling : null;
-				container.insertBefore(panel, referenceNode);
-				loadedPanels.add(panelId);
-
-				panel.scrollIntoView({ behavior: 'smooth', inline: 'start' });
-				updateOpenedNoteLinks();
-				updateURL();
-
-				// If a section anchor was requested, scroll to it after the panel's
-				// content (and its heading ids) are in the DOM. createPanel set the
-				// innerHTML synchronously, so the target exists; defer one frame so the
-				// vertical scroll runs after layout settles and doesn't fight the
-				// horizontal panel.scrollIntoView above (different scroll containers).
-				if (headingSlug) {
-					requestAnimationFrame(() => scrollToHeading(panel, headingSlug));
-				}
-
+				return { paramType, paramValue, params, panelId, noteData };
 			} catch (error) {
-				const container = document.getElementById('panels');
+				console.error('Error resolving panel:', error);
+				return { paramType, paramValue, params, panelId, error: true };
+			}
+		}
 
-				// Create error note data with specific messages based on error type
+		// Attach phase: synchronous DOM construction + insertion for one resolved panel.
+		// Does NOT call updateOpenedNoteLinks/updateURL/scrollIntoView — the CALLER owns
+		// those so a batch can run them once at the end (loadPanelsFromURL) while a
+		// single click keeps its per-panel behavior (addPanel). Dedupe is enforced here
+		// via loadedPanels so the same note appearing twice in one URL only inserts once.
+		// Returns the inserted panel element, or null if it was a duplicate (skipped).
+		function attachResolvedPanel(resolved, { afterPanel = null } = {}) {
+			const { paramType, paramValue, params, panelId } = resolved;
+
+			// Duplicate guard: a note already in the stack (same panelKey) is not
+			// re-inserted. Returning null lets the caller detect the skip.
+			if (loadedPanels.has(panelId)) {
+				return null;
+			}
+
+			const container = document.getElementById('panels');
+			const referenceNode = afterPanel ? afterPanel.nextElementSibling : null;
+
+			if (resolved.error) {
+				// Error panel: degrade in place without aborting the rest of a batch.
 				const errorNoteData = {
 					uid: panelId,
 					title: 'Error Loading Note',
 					paramType,
 					paramValue
 				};
-
 				const panel = createPanel(errorNoteData, loadedPanels.size, true);
-
-				// Store parameter information even for error panels
 				panel.dataset.paramType = paramType;
 				panel.dataset.paramValue = paramValue;
 				panel.dataset.panelId = panelId;
-
-				// Insert after the source panel if provided, otherwise append to end
-				const referenceNode = afterPanel ? afterPanel.nextElementSibling : null;
 				container.insertBefore(panel, referenceNode);
 				loadedPanels.add(panelId);
+				return panel;
+			}
 
-				panel.scrollIntoView({ behavior: 'smooth', inline: 'start' });
-				updateOpenedNoteLinks();
-				updateURL();
+			const noteData = resolved.noteData;
+			const panel = createPanel(noteData, loadedPanels.size);
+
+			// Store parameter information
+			panel.dataset.paramType = paramType;
+			panel.dataset.paramValue = paramValue;
+			panel.dataset.panelId = panelId;
+			// Persist the diff target so updateURL re-emits ;diff= (see
+			// collectPanelParams). Only set when a diff was actually rendered, so a
+			// degraded/empty diff doesn't pin a broken target into the URL.
+			if (params && params.diff && noteData.diffHtml) {
+				panel.dataset.diff = params.diff;
+			}
+
+			// Apply any per-note parameters carried in the URL (v1: width).
+			applyPanelWidth(panel, resolveWidth(params && params.width));
+
+			container.insertBefore(panel, referenceNode);
+			loadedPanels.add(panelId);
+			return panel;
+		}
+
+		// Single-panel entry point (click-to-open, home-note fallback). Resolves then
+		// attaches one panel and keeps its historical per-panel tail: scroll to the new
+		// panel, refresh link state, push a history entry, and honor a heading anchor.
+		// Shares resolvePanelData/attachResolvedPanel with the batch path so there's one
+		// source of truth for how a panel is built.
+		async function addPanel(paramType, paramValue, afterPanel = null, headingSlug = null, params = null) {
+			console.log('addPanel called with:', paramType, paramValue);
+
+			const panelId = panelKey(paramType, paramValue, params);
+
+			// Check if panel is already loaded
+			if (loadedPanels.has(panelId)) {
+				console.log('Panel already loaded, scrolling to:', panelId);
+				const openPanel = scrollToPanel(panelId);
+				if (headingSlug && openPanel) scrollToHeading(openPanel, headingSlug);
+				return;
+			}
+
+			console.log('Creating new panel:', panelId);
+			const resolved = await resolvePanelData(paramType, paramValue, params);
+			const panel = attachResolvedPanel(resolved, { afterPanel });
+			if (!panel) return; // raced to a duplicate between the guard above and attach
+
+			panel.scrollIntoView({ behavior: 'smooth', inline: 'start' });
+			updateOpenedNoteLinks();
+			updateURL();
+
+			// If a section anchor was requested, scroll to it after the panel's
+			// content (and its heading ids) are in the DOM. createPanel set the
+			// innerHTML synchronously, so the target exists; defer one frame so the
+			// vertical scroll runs after layout settles and doesn't fight the
+			// horizontal panel.scrollIntoView above (different scroll containers).
+			// (Only meaningful for a successfully loaded note, but harmless otherwise.)
+			if (headingSlug && !resolved.error) {
+				requestAnimationFrame(() => scrollToHeading(panel, headingSlug));
 			}
 		}
 
