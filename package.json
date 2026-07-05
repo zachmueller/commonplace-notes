@@ -21,6 +21,7 @@
 		"test:comment-loading": "npx tsx e2e/scripts/test-comment-loading.ts",
 		"test:comment-identity": "npx tsx e2e/scripts/test-comment-identity.ts",
 		"test:comment-edit-delete": "npx tsx e2e/scripts/test-comment-edit-delete.ts",
+		"test:comment-threading": "npx tsx e2e/scripts/test-comment-threading.ts",
 		"test:cert-match": "npx tsx e2e/scripts/test-cert-match.ts",
 		"test:site-config-matrix": "npx tsx e2e/scripts/test-site-config-matrix.ts",
 		"test:password-edge": "npx tsx e2e/scripts/test-password-edge.ts",

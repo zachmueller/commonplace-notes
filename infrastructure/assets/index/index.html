@@ -681,6 +681,27 @@ body.panel-resizing {
 	padding-left: 16px;
 	border-left: 2px solid var(--border-color);
 }
+.comment-reply-row {
+	margin-top: 6px;
+}
+.comment-reply-btn {
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--text-secondary);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 12px;
+}
+.comment-reply-btn:hover {
+	color: var(--text-primary);
+}
+.comment-reply-form {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 6px;
+}
 .comment-meta {
 	font-size: 12px;
 	color: var(--text-secondary);
@@ -1987,10 +2008,14 @@ ${closeButton}
 		}
 
 		// Render a single comment. `ctx` (optional) = { currentUsername, noteUid,
-		// refresh }; when the comment is owned by the current reader it grows an
-		// Edit/Delete action row. Called with no ctx (e.g. in tests) it renders a
-		// read-only comment with no owner affordances.
-		function renderComment(c, ctx) {
+		// noteHash, refresh }; when the comment is owned by the current reader it
+		// grows an Edit/Delete action row. `opts` (optional) = { canReply }: when
+		// set AND the reader is signed in, an active (non-deleted) comment grows a
+		// Reply affordance. `canReply` is passed only for ROOT comments, so a reply
+		// never itself sprouts a Reply button — that caps threads at one level.
+		// Called with no ctx/opts (e.g. in tests) it renders a read-only comment
+		// with no affordances.
+		function renderComment(c, ctx, opts) {
 			const el = document.createElement('div');
 			el.className = 'comment-item';
 			el.dataset.commentUid = c.commentUid;
@@ -2016,6 +2041,11 @@ ${closeButton}
 			// mis-fired gate can only ever produce a 403 — never an unauthorized edit.
 			const owned = !!(ctx && ctx.currentUsername && c.authorName === ctx.currentUsername);
 			if (owned) attachOwnerActions(el, c, ctx);
+			// Reply is NOT owner-gated (any signed-in reader may reply) and lives in
+			// its own element, so it never disturbs the owner-only .comment-actions row.
+			if (opts && opts.canReply && ctx && ctx.currentUsername && c.status !== 'deleted') {
+				attachReplyAction(el, c, ctx);
+			}
 			return el;
 		}
 
@@ -2131,6 +2161,69 @@ ${closeButton}
 			});
 		}
 
+		// Append a Reply affordance to a root comment: a "Reply" button that swaps
+		// itself for an inline compose form. Built with createElement (not an
+		// innerHTML string) so listeners survive, mirroring attachOwnerActions and
+		// the inline edit form. The reply is posted with parentCommentUid set to the
+		// root's commentUid; the same 1500ms optimistic refresh as the main composer
+		// then pulls the freshly-nested reply back into view.
+		function attachReplyAction(el, rootComment, ctx) {
+			const row = document.createElement('div');
+			row.className = 'comment-reply-row';
+			const replyBtn = document.createElement('button');
+			replyBtn.type = 'button';
+			replyBtn.className = 'comment-reply-btn';
+			replyBtn.textContent = 'Reply';
+			row.appendChild(replyBtn);
+			el.appendChild(row);
+
+			replyBtn.addEventListener('click', () => {
+				row.hidden = true;
+				const form = document.createElement('div');
+				form.className = 'comment-reply-form';
+				const textarea = document.createElement('textarea');
+				textarea.className = 'comment-input';
+				textarea.placeholder = 'Write a reply (Markdown supported)…';
+				const submit = document.createElement('button');
+				submit.type = 'button';
+				submit.className = 'comment-submit';
+				submit.textContent = 'Reply';
+				const cancel = document.createElement('button');
+				cancel.type = 'button';
+				cancel.className = 'comment-action';
+				cancel.textContent = 'Cancel';
+				const status = document.createElement('span');
+				status.className = 'comment-status';
+				form.appendChild(textarea);
+				form.appendChild(submit);
+				form.appendChild(cancel);
+				form.appendChild(status);
+				el.appendChild(form);
+
+				const closeForm = () => {
+					form.remove();
+					row.hidden = false;
+				};
+				cancel.addEventListener('click', closeForm);
+				submit.addEventListener('click', async () => {
+					const body = textarea.value.trim();
+					if (!body) return;
+					submit.disabled = true;
+					status.textContent = 'Posting…';
+					try {
+						await postComment(ctx.noteUid, ctx.noteHash || '', body, rootComment.commentUid);
+						status.textContent = 'Posted. It may take a moment to appear.';
+						if (ctx.refresh) setTimeout(ctx.refresh, 1500);
+					} catch (err) {
+						status.textContent = err.message === 'auth'
+							? 'Your session expired — please sign in again.'
+							: 'Could not post reply.';
+						submit.disabled = false;
+					}
+				});
+			});
+		}
+
 		function renderThreadInto(container, comments, ctx) {
 			const byParent = buildThread(comments);
 			const list = container.querySelector('.comment-list');
@@ -2142,7 +2235,9 @@ ${closeButton}
 				// A deleted root with no replies is dropped entirely; kept as a
 				// tombstone only when replies still hang off it (preserves threading).
 				if (root.status === 'deleted' && !replies.length) continue;
-				const item = renderComment(root, ctx);
+				// Only roots opt into a Reply button; replies do not, which caps the
+				// thread at one level even though the backend could store deeper chains.
+				const item = renderComment(root, ctx, { canReply: true });
 				if (replies.length) {
 					const repliesEl = document.createElement('div');
 					repliesEl.className = 'comment-replies';
@@ -2158,13 +2253,19 @@ ${closeButton}
 		}
 
 		// --- Compose / write -------------------------------------------------
-		async function postComment(noteUid, noteHash, body) {
+		// `parentCommentUid` (optional) turns a top-level comment into a reply. It
+		// is only added to the payload when supplied, so top-level posts are
+		// unchanged. The write Lambda persists it verbatim (see comment-write.js),
+		// and the renderer nests replies one level under their parent.
+		async function postComment(noteUid, noteHash, body, parentCommentUid) {
 			const base = cpnConfig().commentWritePath || '/api/comments';
+			const payload = { noteUid, noteHash, body };
+			if (parentCommentUid) payload.parentCommentUid = parentCommentUid;
 			const res = await fetch(base, {
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ noteUid, noteHash, body }),
+				body: JSON.stringify(payload),
 			});
 			if (res.status === 401 || res.status === 403) {
 				throw new Error('auth');
@@ -2349,7 +2450,7 @@ ${closeButton}
 			// reader's identity is known (below) every later re-render — including
 			// the ones triggered after posting/editing/deleting — keeps the
 			// owner Edit/Delete affordances.
-			const ctx = { currentUsername: null, noteUid: noteUid, refresh: null };
+			const ctx = { currentUsername: null, noteUid: noteUid, noteHash: noteData.hash || '', refresh: null };
 			const refresh = async () => {
 				const data = await loadComments(noteUid);
 				if (data) renderThreadInto(region, data.comments, ctx);
