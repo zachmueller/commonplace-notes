@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, setIcon } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, Keymap, PaneType, setIcon } from 'obsidian';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { NoticeManager } from '../utils/notice';
@@ -181,7 +181,15 @@ export class RecentCommentsView extends ItemView {
 		title.setText(group.noteTitle ?? group.noteUid);
 		if (group.localPath) {
 			title.addClass('cpn-recent-comments-clickable');
-			title.addEventListener('click', () => this.openLocalNote(group));
+			// Plain click → active pane; Cmd/Ctrl+click → new tab (Keymap.isModEvent
+			// returns a PaneType|boolean suited for getLeaf); middle-click → new tab.
+			title.addEventListener('click', (evt) => this.openLocalNote(group, Keymap.isModEvent(evt)));
+			title.addEventListener('auxclick', (evt) => {
+				if (evt.button === 1) {
+					evt.preventDefault();
+					this.openLocalNote(group, 'tab');
+				}
+			});
 		} else {
 			title.addClass('cpn-recent-comments-unresolved');
 		}
@@ -242,7 +250,7 @@ export class RecentCommentsView extends ItemView {
 	}
 
 	/** Open the local source note for a group; notice fallback when unresolved. */
-	private async openLocalNote(group: RecentActivityGroup): Promise<void> {
+	private async openLocalNote(group: RecentActivityGroup, newLeaf: PaneType | boolean = false): Promise<void> {
 		if (!group.localPath) {
 			NoticeManager.showNotice('Source note not found locally');
 			return;
@@ -252,6 +260,6 @@ export class RecentCommentsView extends ItemView {
 			NoticeManager.showNotice('Source note not found locally');
 			return;
 		}
-		await this.plugin.app.workspace.getLeaf(false).openFile(file);
+		await this.plugin.app.workspace.getLeaf(newLeaf).openFile(file);
 	}
 }
