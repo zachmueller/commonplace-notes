@@ -1,11 +1,12 @@
 import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, S3ServiceException } from '@aws-sdk/client-s3';
 import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
-import { TFile } from 'obsidian';
+import { TFile, parseYaml } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { Logger } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs, renderVendorJs } from './siteRenderer';
+import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
 
 const MAX_CONCURRENCY = 5;
 
@@ -313,16 +314,39 @@ export async function pushSiteAssetsToS3(
 		// Resolve home note UID from the configured home note path
 		const homeNoteUid = resolveHomeNoteUid(plugin, profile);
 
+		// Discover per-profile snippet customizations authored as vault notes
+		// (route 2). Pre-resolved here so the (synchronous) renderers receive
+		// them the same way homeNoteUid is threaded in.
+		const assetsDir = getAssetsDir(plugin.settings.cpnDirectory, profileId);
+		const { customizations, errors: customizationErrors } = await discoverAssetCustomizations(
+			plugin.app.vault,
+			plugin.app.metadataCache,
+			assetsDir,
+			parseYaml,
+		);
+		if (customizationErrors.length > 0) {
+			for (const err of customizationErrors) {
+				Logger.warn(`Asset customization skipped: ${err.filePath} — ${err.message}`);
+			}
+			NoticeManager.showNotice(
+				`${customizationErrors.length} asset customization note(s) skipped; see console.`,
+				8000
+			);
+		}
+		if (customizations.length > 0) {
+			Logger.info(`Applying ${customizations.length} asset customization snippet(s) for profile ${profileId}`);
+		}
+
 		const assets: { key: string; body: string; contentType: string; cacheControl: string }[] = [
 			{
 				key: `${s3Prefix}index.html`,
-				body: renderIndexHtml(profile, homeNoteUid),
+				body: renderIndexHtml(profile, homeNoteUid, customizations),
 				contentType: 'text/html',
 				cacheControl: 'no-cache',
 			},
 			{
 				key: `${s3Prefix}styles.css`,
-				body: renderStylesCss(profile),
+				body: renderStylesCss(profile, customizations),
 				contentType: 'text/css',
 				cacheControl: 'public, max-age=31536000, immutable',
 			},

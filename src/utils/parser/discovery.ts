@@ -90,7 +90,7 @@ export async function discoverParserExtensions(
  * Collect all `.md` files directly under a vault directory (non-recursive —
  * parser stages are flat in `<cpnDir>/parsers/`). Empty array if absent.
  */
-function collectMarkdownFiles(vault: Vault, dirPath: string): TFile[] {
+export function collectMarkdownFiles(vault: Vault, dirPath: string): TFile[] {
 	const dir = vault.getAbstractFileByPath(dirPath);
 	if (!dir || !isFolder(dir)) return [];
 

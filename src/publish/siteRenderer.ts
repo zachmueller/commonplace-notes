@@ -1,5 +1,7 @@
 import { PublishingProfile, HeaderLink, SiteCustomization } from '../types';
 import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, FLEXSEARCH_MIN_JS, VENDOR_JS } from './siteAssets';
+import { applyIndexHtmlSlots, applyStylesCssSlots } from './assetCustomizations/parse';
+import type { AssetCustomization } from './assetCustomizations/types';
 
 const DEFAULT_SITE_TITLE = 'Notes';
 const DEFAULT_PANEL_WIDTH = 600;
@@ -31,7 +33,11 @@ function renderHeaderLinksHtml(headerLinks: HeaderLink[], homeNoteUid?: string):
 	return `${homeLink}\n\t\t\t${customLinks}`;
 }
 
-export function renderIndexHtml(profile: PublishingProfile, homeNoteUid?: string): string {
+export function renderIndexHtml(
+	profile: PublishingProfile,
+	homeNoteUid?: string,
+	customizations: AssetCustomization[] = [],
+): string {
 	const custom = getCustomization(profile);
 
 	let html = SITE_INDEX_TEMPLATE;
@@ -45,16 +51,24 @@ export function renderIndexHtml(profile: PublishingProfile, homeNoteUid?: string
 		html = html.replace('{{HOME_NOTE_UID_SCRIPT}}', '');
 	}
 
+	// Per-profile snippet injection (route 2). Runs after the structured
+	// substitutions above; empty/absent slots no-op (see applyIndexHtmlSlots).
+	html = applyIndexHtmlSlots(html, customizations);
+
 	return html;
 }
 
-export function renderStylesCss(profile: PublishingProfile): string {
+export function renderStylesCss(
+	profile: PublishingProfile,
+	customizations: AssetCustomization[] = [],
+): string {
 	const custom = getCustomization(profile);
 	const panelWidth = custom.panelWidth || DEFAULT_PANEL_WIDTH;
 
 	let css = SITE_STYLES_CSS;
 	css = css.replace(/flex: 0 0 600px/g, `flex: 0 0 ${panelWidth}px`);
 	css = css.replace(/width: 600px/g, `width: ${panelWidth}px`);
+	css = applyStylesCssSlots(css, customizations);
 	return css;
 }
 
