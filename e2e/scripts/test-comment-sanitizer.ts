@@ -93,6 +93,41 @@ function main() {
 	// A safe link must carry rel/nofollow hardening.
 	mustContain('[x](https://e.com)', 'rel="nofollow noopener noreferrer"', 'links hardened with rel');
 
+	// --- [[UID]] wikilink note-links ---
+	// Seed a known uid->title mapping. setNoteIndex is a hoisted function on the
+	// window; it populates the noteTitleMap that renderInline resolves against.
+	// UIDs are Crockford Base32 (uppercase A-Z minus I/L/O/U, plus digits).
+	if (typeof win.setNoteIndex === 'function') {
+		win.setNoteIndex({
+			JVZ6KPM29N: { title: 'My Note', content: '' },
+			// Valid Crockford Base32 UID (no I/L/O/U) whose title carries raw HTML.
+			ESCAPE0TST: { title: 'A <b>bold</b> title', content: '' },
+		});
+
+		// Resolved UID -> in-site note anchor with the CURRENT title as link text.
+		mustContain('[[JVZ6KPM29N]]', 'href="#/uJVZ6KPM29N"', 'resolved wikilink emits #/u note anchor');
+		mustContain('[[JVZ6KPM29N]]', 'class="comment-wikilink"', 'resolved wikilink carries comment-wikilink class');
+		mustContain('[[JVZ6KPM29N]]', '>My Note<', 'resolved wikilink shows the current title');
+		mustNotContain('[[JVZ6KPM29N]]', '[[jvz6kpm29n]]', 'resolved wikilink leaves no raw [[UID]] text');
+		// The resolved title is author-controlled and must pass through escapeHtml.
+		mustNotContain('[[ESCAPE0TST]]', '<b>bold</b>', 'wikilink title is escaped (no raw HTML)');
+		mustContain('[[ESCAPE0TST]]', '&lt;b&gt;bold&lt;/b&gt;', 'wikilink title escaped entities present');
+
+		// Unknown UID (valid shape, not in the index) -> greyed-out inert span.
+		mustContain('[[ABCDEF1234]]', 'class="unpublished-link"', 'unresolved wikilink is greyed-out');
+		mustNotContain('[[ABCDEF1234]]', 'href="#/u', 'unresolved wikilink is not a live link');
+	} else {
+		failures.push('setNoteIndex was not exposed on the window — cannot test wikilink rendering');
+	}
+
+	// A [[ ]] token that is NOT a valid UID must never become a link and must
+	// stay escaped. This guards the XSS boundary: [[<script>]] and [[Some Title]]
+	// fall through the strict UID regex untouched.
+	mustNotContain('[[<script>alert(1)</script>]]', '<script', 'non-UID wikilink stays escaped (no live script)');
+	mustNotContain('[[<script>alert(1)</script>]]', 'href="#/u', 'non-UID wikilink is not a link');
+	mustNotContain('[[<script>alert(1)</script>]]', 'unpublished-link', 'non-UID wikilink is not treated as a UID');
+	mustNotContain('[[Some Title]]', 'href="#/u', 'lowercase/spaced wikilink is not a UID link');
+
 	report();
 }
 

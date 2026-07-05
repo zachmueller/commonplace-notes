@@ -767,6 +767,13 @@ body.panel-resizing {
 	flex-direction: column;
 	gap: 8px;
 }
+/* position:relative so the absolutely-positioned [[ ]] autocomplete menu
+   anchors to the textarea within each form (composer/reply/edit). */
+.comment-composer,
+.comment-reply-form,
+.comment-edit-form {
+	position: relative;
+}
 .comment-input {
 	width: 100%;
 	min-height: 70px;
@@ -783,6 +790,35 @@ body.panel-resizing {
 	opacity: 0.6;
 	cursor: not-allowed;
 	background-color: var(--bg-secondary);
+}
+/* [[ ]] note-link autocomplete dropdown (positioned via JS under the textarea).
+   Modeled on .search-results. */
+.comment-wikilink-menu {
+	position: absolute;
+	z-index: 1000;
+	max-height: 220px;
+	overflow-y: auto;
+	background: var(--bg-primary);
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	box-shadow: 0 4px 12px var(--shadow-color);
+}
+.comment-wikilink-menu-item {
+	padding: 6px 12px;
+	font-size: 14px;
+	color: var(--text-primary);
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.comment-wikilink-menu-item:hover,
+.comment-wikilink-menu-item.active {
+	background-color: var(--bg-secondary);
+}
+/* Resolved [[UID]] note-links inside comment bodies. */
+.comment-body a.comment-wikilink {
+	color: var(--link-color);
 }
 .comment-username-setup {
 	display: flex;
@@ -1111,6 +1147,20 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 	<script>
 
 
+		// --- Note-title index ------------------------------------------------
+		// Shared by the header FlexSearch box AND the comment [[ ]] wikilink
+		// feature. contentIndex.json ({ [uid]: { title, content } }) is fetched
+		// ONCE per page load and memoized (mirrors fetchMapping's shared-promise
+		// pattern) so both consumers share a single network round-trip. When the
+		// file is absent (publishContentIndex off) the fetch resolves to null and
+		// both structures stay empty: header search has nothing to index and
+		// comment wikilinks degrade to inert greyed-out text with no autocomplete.
+		// Declared before searchIndex so these initialize even in the jsdom unit
+		// test, where the FlexSearch constructor below is unavailable and throws.
+		const noteTitleMap = new Map();   // uid -> current display title (render path)
+		let noteTitleList = [];           // [{ uid, title }] (composer autocomplete)
+		let noteIndexPromise = null;
+
 		// Create a new FlexSearch index
 		const searchIndex = new FlexSearch.Document({
 			document: {
@@ -1126,17 +1176,46 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			}
 		});
 
-		// load in notes data
-		async function loadContentIndex() {
-			try {
-				const contentIndex = await fetch('/static/content/contentIndex.json');
-				const data = await contentIndex.json();
-				console.log('Content index loaded successfully:', Object.keys(data).length, 'entries');
-				return data;
-			} catch (error) {
-				console.error('Error loading content index:', error);
-				return null;
+		// Populate the two derived structures from a parsed content index. Kept
+		// as a named (hoisted) function so the comment-sanitizer test can seed a
+		// known uid->title mapping before exercising the wikilink render rule.
+		function setNoteIndex(indexData) {
+			noteTitleMap.clear();
+			noteTitleList = [];
+			if (!indexData) return;
+			Object.keys(indexData).forEach(uid => {
+				const entry = indexData[uid];
+				const title = entry && entry.title;
+				if (typeof title === 'string' && title.length) {
+					noteTitleMap.set(uid, title);
+					noteTitleList.push({ uid, title });
+				}
+			});
+		}
+
+		// Memoized fetch of the content index. Resolves to the parsed map, or
+		// null on 404/error. A failed fetch is not cached hard — the memo is
+		// cleared so a later caller can retry. On first success the derived
+		// structures above are populated via setNoteIndex.
+		function loadNoteIndexOnce() {
+			if (!noteIndexPromise) {
+				noteIndexPromise = fetch('/static/content/contentIndex.json')
+					.then(res => {
+						if (!res.ok) throw new Error('HTTP ' + res.status);
+						return res.json();
+					})
+					.then(data => {
+						console.log('Content index loaded successfully:', Object.keys(data).length, 'entries');
+						setNoteIndex(data);
+						return data;
+					})
+					.catch(error => {
+						console.error('Error loading content index:', error);
+						noteIndexPromise = null;
+						return null;
+					});
 			}
+			return noteIndexPromise;
 		}
 
 		// Updated search function using FlexSearch
@@ -1244,7 +1323,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
     // Main search initialization
     async function initializeSearch() {
         try {
-            const contentIndex = await loadContentIndex();
+            const contentIndex = await loadNoteIndexOnce();
             if (!contentIndex) {
                 console.error('Failed to load content index');
                 return;
@@ -1922,8 +2001,29 @@ ${closeButton}
 		}
 		function renderInline(text) {
 			// Operates on already-escaped text. Order: code spans first (so their
-			// contents are not further interpreted), then links, bold, italic.
+			// contents are not further interpreted), then wikilinks, links, bold,
+			// italic.
 			let out = text.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
+			// Wikilink note-links: [[UID]] where UID is a Crockford Base32 token
+			// (digits + uppercase A–Z minus I/L/O/U). Persisted as the UID (not the
+			// title) so links survive renames; resolved to the note's CURRENT title
+			// at render time via noteTitleMap. Runs before the markdown-link and
+			// emphasis rules: [[…]] can't match the ](  link syntax, and UIDs carry
+			// no _/* so they never collide with emphasis — ordering is defensive.
+			// Length is not pinned ({6,}) because uidLength is author-configurable
+			// (default 8); the floor limits false hits on ordinary all-caps text.
+			// A resolved UID becomes an in-site note anchor (#/u{uid}, routed by the
+			// delegated handler in initComments); an unknown UID degrades to inert,
+			// greyed-out text via the shared .unpublished-link style. Tokens that
+			// don't match the strict UID shape (e.g. [[Some Title]], [[&lt;script&gt;]])
+			// are left untouched and stay escaped.
+			out = out.replace(/\[\[([0-9A-HJKMNP-TV-Z]{6,})\]\]/g, (m, uid) => {
+				const title = noteTitleMap.get(uid);
+				if (title) {
+					return `<a href="#/u${uid}" class="comment-wikilink">${escapeHtml(title)}</a>`;
+				}
+				return `<span class="unpublished-link">[[${uid}]]</span>`;
+			});
 			out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, url) => {
 				// url here is escaped; decode the few entities we produced to test the protocol.
 				const decoded = url.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
@@ -2113,6 +2213,7 @@ ${closeButton}
 				textarea.className = 'comment-input';
 				// Prefill with the RAW Markdown, never the rendered HTML.
 				textarea.value = c.body || '';
+				attachWikilinkAutocomplete(textarea);
 				const save = document.createElement('button');
 				save.type = 'button';
 				save.className = 'comment-submit';
@@ -2217,6 +2318,7 @@ ${closeButton}
 				const textarea = document.createElement('textarea');
 				textarea.className = 'comment-input';
 				textarea.placeholder = 'Write a reply (Markdown supported)…';
+				attachWikilinkAutocomplete(textarea);
 				const submit = document.createElement('button');
 				submit.type = 'button';
 				submit.className = 'comment-submit';
@@ -2403,6 +2505,118 @@ ${closeButton}
 			composer.appendChild(wrap);
 		}
 
+		// Obsidian-style [[ ]] note-link autocomplete for a comment textarea.
+		// Applied to the composer, reply, and edit textareas so all three behave
+		// consistently. Detects an open `[[query` token left of the caret, filters
+		// noteTitleList by case-insensitive title substring, and inserts `[[UID]]`
+		// on selection — the UID (not the title) is what persists, so links survive
+		// renames. No-ops entirely when noteTitleList is empty (content index not
+		// published), so the composer is unchanged in that case. Positioning is v1:
+		// the menu anchors to the textarea's bottom-left rather than the caret.
+		function attachWikilinkAutocomplete(textarea) {
+			if (!noteTitleList.length) return; // no note index -> no autocomplete
+			// A single shared query regex: an unclosed [[ with no closing ]] or
+			// newline after it, anchored to the end of the text before the caret.
+			const OPEN_TOKEN = /\[\[([^\]\n]*)$/;
+
+			let menu = null;      // dropdown element, or null when closed
+			let items = [];       // current [{ uid, title }] shown
+			let active = -1;      // highlighted index within items
+			let matchStart = -1;  // index of the '[[' that opened the token
+
+			const closeMenu = () => {
+				if (menu) { menu.remove(); menu = null; }
+				items = [];
+				active = -1;
+				matchStart = -1;
+			};
+
+			const renderMenu = () => {
+				if (!menu) {
+					menu = document.createElement('div');
+					menu.className = 'comment-wikilink-menu';
+					// Anchor to the textarea's bottom-left. The parent is made
+					// position:relative in CSS (.comment-composer / .comment-reply-form
+					// / .comment-edit-form), so these offsets place the menu just
+					// under the textarea. Precise caret positioning is a follow-up.
+					const parent = textarea.parentNode;
+					if (parent) parent.appendChild(menu);
+					menu.style.top = (textarea.offsetTop + textarea.offsetHeight) + 'px';
+					menu.style.left = textarea.offsetLeft + 'px';
+					menu.style.minWidth = textarea.offsetWidth + 'px';
+				}
+				menu.innerHTML = '';
+				items.forEach((it, i) => {
+					const row = document.createElement('div');
+					row.className = 'comment-wikilink-menu-item' + (i === active ? ' active' : '');
+					row.textContent = it.title;
+					// mousedown (not click) so it fires before the textarea blur.
+					row.addEventListener('mousedown', (e) => {
+						e.preventDefault();
+						commit(i);
+					});
+					menu.appendChild(row);
+				});
+			};
+
+			const commit = (i) => {
+				const it = items[i];
+				if (!it) return;
+				const value = textarea.value;
+				const caret = textarea.selectionStart;
+				const before = value.slice(0, matchStart);
+				const after = value.slice(caret);
+				const token = '[[' + it.uid + ']]';
+				textarea.value = before + token + after;
+				const pos = before.length + token.length;
+				textarea.setSelectionRange(pos, pos);
+				textarea.focus();
+				closeMenu();
+			};
+
+			const update = () => {
+				const caret = textarea.selectionStart;
+				const left = textarea.value.slice(0, caret);
+				const m = OPEN_TOKEN.exec(left);
+				if (!m) { closeMenu(); return; }
+				matchStart = m.index; // position of the opening '[['
+				const query = m[1].toLowerCase();
+				items = noteTitleList
+					.filter(it => it.title.toLowerCase().includes(query))
+					.slice(0, 8);
+				if (!items.length) { closeMenu(); return; }
+				active = 0;
+				renderMenu();
+			};
+
+			textarea.addEventListener('input', update);
+			// Keep the menu in sync when the caret moves without editing (arrows,
+			// clicks) so a stale menu doesn't linger over a closed token.
+			textarea.addEventListener('click', update);
+
+			textarea.addEventListener('keydown', (e) => {
+				if (!menu) return;
+				if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					active = (active + 1) % items.length;
+					renderMenu();
+				} else if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					active = (active - 1 + items.length) % items.length;
+					renderMenu();
+				} else if (e.key === 'Enter' || e.key === 'Tab') {
+					e.preventDefault();
+					commit(active);
+				} else if (e.key === 'Escape') {
+					e.preventDefault();
+					closeMenu();
+				}
+			});
+
+			// Close on blur (deferred so a menu mousedown can commit first).
+			textarea.addEventListener('blur', () => { setTimeout(closeMenu, 100); });
+		}
+
 		// Render the compose box. `auth` is { authenticated, username }: a
 		// signed-out reader gets a DISABLED textarea plus the sign-in link, so the
 		// input is never typeable without comment access. Signed-in-with-username
@@ -2428,6 +2642,7 @@ ${closeButton}
 			const textarea = document.createElement('textarea');
 			textarea.className = 'comment-input';
 			textarea.placeholder = 'Add a comment (Markdown supported)…';
+			attachWikilinkAutocomplete(textarea);
 			const submit = document.createElement('button');
 			submit.className = 'comment-submit';
 			submit.textContent = 'Comment';
@@ -2479,20 +2694,55 @@ ${closeButton}
 				<div class="comment-composer"></div>
 			`;
 
+			// Delegated click handler for [[UID]] note-links inside comment bodies.
+			// The per-note-body handler (see createPanel) only wires links present at
+			// note-render time; comment bodies render later and on every refresh, so
+			// their anchors need routing here. Bound once to the stable region so it
+			// survives renderThreadInto's innerHTML swaps. Mirrors the note-body
+			// handler's parse -> panelKey -> scroll-or-addPanel logic.
+			region.addEventListener('click', (e) => {
+				const a = e.target.closest('a.comment-wikilink');
+				if (!a || !region.contains(a)) return;
+				e.preventDefault();
+				const parsed = parseURLFragment(a.getAttribute('href').slice(1));
+				if (!parsed.length) return;
+				const { type, value, params: segParams } = parsed[0];
+				const id = panelKey(type, value, segParams);
+				if (loadedPanels.has(id)) {
+					scrollToPanel(id);
+				} else {
+					setTimeout(() => addPanel(type, value, panel, null, segParams), 0);
+				}
+			});
+
 			// Shared, mutable render context. `refresh` closes over it, so once the
 			// reader's identity is known (below) every later re-render — including
 			// the ones triggered after posting/editing/deleting — keeps the
-			// owner Edit/Delete affordances.
-			const ctx = { currentUsername: null, noteUid: noteUid, noteHash: noteData.hash || '', refresh: null };
+			// owner Edit/Delete affordances. `lastComments` caches the most recent
+			// thread so the note-index-load re-render (below) can repaint resolved
+			// [[UID]] titles without a second fetch.
+			const ctx = { currentUsername: null, noteUid: noteUid, noteHash: noteData.hash || '', refresh: null, lastComments: [] };
 			const refresh = async () => {
 				const data = await loadComments(noteUid);
-				if (data) renderThreadInto(region, data.comments, ctx);
+				if (data) {
+					ctx.lastComments = data.comments;
+					renderThreadInto(region, data.comments, ctx);
+				}
 			};
 			ctx.refresh = refresh;
+
+			// Ensure the note-title index is loaded so [[UID]] wikilinks in comment
+			// bodies resolve to titles. Idempotent + memoized, so this shares the
+			// header-search fetch. If it lands after the first paint, repaint the
+			// cached thread so greyed-out placeholders become resolved links.
+			loadNoteIndexOnce().then(idx => {
+				if (idx && ctx.lastComments.length) renderThreadInto(region, ctx.lastComments, ctx);
+			});
 
 			const data = await loadComments(noteUid);
 			if (data === null) return; // network error — leave the region hidden
 			region.hidden = false;
+			ctx.lastComments = data.comments;
 			// First paint without owner buttons — don't block on fetchMe so the
 			// thread appears as fast as before.
 			renderThreadInto(region, data.comments, ctx);

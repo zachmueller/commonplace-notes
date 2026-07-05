@@ -746,6 +746,20 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.setDesc('Enabled. The comment box appears on published note pages — '
 						+ 'run "Publish all notes" and open a note to see it.');
 
+				// The commenter [[ ]] note-link autocomplete + rendering is powered
+				// by the published content index (see "Include site-wide content
+				// search" under Content). Surface that dependency here so it is
+				// discoverable from the commenting section.
+				new Setting(containerEl)
+					.setName('Note links in comments')
+					.setDesc(profile.publishContentIndex
+						? 'Enabled. Commenters can autocomplete and link to other notes '
+							+ 'with [[ ]]; links are stored as note UIDs so they survive renames.'
+						: 'Turn on "Include site-wide content search" (under Content) to let '
+							+ 'commenters autocomplete and link to other notes with [[ ]]. '
+							+ 'Without it, autocomplete is unavailable and existing [[ ]] links '
+							+ 'render greyed-out.');
+
 				new Setting(containerEl)
 					.setName('Recent comments to load per refresh')
 					.setDesc('How many recent comments the Recent Comments panel pulls from DynamoDB '
