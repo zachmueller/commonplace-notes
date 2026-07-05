@@ -75,17 +75,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
-			.setName('URL scheme')
-			.setDesc('Format used when generating note links. "Current" produces #/uABC123; "Original" produces #u=ABC123. Parsing always accepts both.')
-			.addDropdown(dropdown => dropdown
-				.addOption('current', 'Current (#/uABC123)')
-				.addOption('original', 'Original (#u=ABC123)')
-				.setValue(this.plugin.settings.urlScheme ?? 'current')
-				.onChange(async (value: 'current' | 'original') => {
-					this.plugin.settings.urlScheme = value;
-					await this.plugin.saveSettings();
-				}));
+		// NOTE: The URL scheme ('current' vs 'original') is intentionally not
+		// exposed in the UI. It defaults to 'current' and only existed as a
+		// dropdown to bridge a one-time migration. Power users can still override
+		// it by setting `urlScheme` directly in the plugin's data.json.
 
 		new Setting(containerEl)
 			.setName('URL stack window (seconds)')
