@@ -1640,8 +1640,12 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				return `/${type}${encodeURIComponent(value)}${serializeParams(collectPanelParams(panel))}`;
 			}).join('');
 
-			// Read slug from first panel for the base note name
-			const slug = panels[0].dataset.slug || '';
+			// Read slug from first panel for the base note name. Strip '/' (slugs of
+			// folder-nested notes preserve '/') → the fragment's first '/'-delimited
+			// segment is a single decorative token, so parseURLFragment discards exactly
+			// one segment. Without this, a shared URL's multi-segment slug leaks its tail
+			// into the note list as bogus panels.
+			const slug = (panels[0].dataset.slug || '').replace(/\//g, '-');
 			const newURL = slug ? `#${slug}${paramPath}` : `#${paramPath}`;
 
 			if (useReplaceState) {

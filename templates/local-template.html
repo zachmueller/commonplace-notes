@@ -733,8 +733,8 @@ async function loadNoteByParameter(type, value) {
 				return `/${type}${encodeURIComponent(value)}`;
 			}).join('');
 
-			// Derive base slug from first panel
-			const firstSlug = panels[0].dataset.slug;
+			// Derive base slug from first panel (strip '/' — see index.html rationale)
+			const firstSlug = (panels[0].dataset.slug || '').replace(/\//g, '-');
 			if (firstSlug) {
 				newURL = `#${firstSlug}${paramPath}`;
 			} else {

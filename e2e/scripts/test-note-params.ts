@@ -323,6 +323,39 @@ async function main() {
 		eq(panel?.style.width, '', 'C4: out-of-range width → no inline style (default)');
 	}
 
+	// Reset.
+	W.__loadedPanels.clear();
+	(doc.getElementById('panels') as HTMLElement).innerHTML = '';
+	window.history.replaceState(null, '', '/');
+
+	// =====================================================================
+	// D. Decorative slug containing '/' — must be '/'-stripped so a shared
+	// URL parses back to exactly ONE note (folder-nested notes keep '/' in
+	// their slug; without stripping, the slug tail leaks into the note list
+	// as phantom panels). Regression for the shared-URL breakage.
+	// =====================================================================
+	await W.__addPanel('u', UID);
+	await nextTick(0);
+	{
+		const panel = panelOf();
+		check(!!panel, 'D1: panel created for slug case');
+		// Simulate a folder-nested note whose slug preserves '/'.
+		panel.dataset.slug = 'projects/my-note';
+		W.__updateURL(true);
+		// '/' collapses to '-' -> a single decorative leading segment.
+		eq(
+			window.location.hash,
+			'#projects-my-note/u' + UID,
+			'D2: slug "/" is replaced with "-" in the emitted fragment'
+		);
+		// Round-trip: the shared URL yields exactly one note, not phantoms.
+		eq(
+			W.__parseURLFragment(window.location.hash),
+			[{ type: 'u', value: UID, params: {} }],
+			'D3: fragment with slugged prefix parses back to a single note'
+		);
+	}
+
 	report();
 }
 
