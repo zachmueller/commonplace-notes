@@ -5,10 +5,10 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { LambdaClient } from '@aws-sdk/client-lambda';
 import { IAMClient } from '@aws-sdk/client-iam';
-import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
+import { buildProfileCredentialProvider } from './awsCredentialChain';
 
 export class AwsSdkManager {
 	private plugin: CommonplaceNotesPlugin;
@@ -112,27 +112,7 @@ export class AwsSdkManager {
 	}
 
 	private buildCredentialProvider(profile: PublishingProfile): AwsCredentialIdentityProvider {
-		const awsProfile = profile.awsSettings!.awsProfile;
-
-		const providers: AwsCredentialIdentityProvider[] = [
-			fromEnv(),
-			fromIni({ profile: awsProfile }),
-			fromSSO({ profile: awsProfile }),
-		];
-
-		return async (identityProperties?: Record<string, any>) => {
-			for (const provider of providers) {
-				try {
-					return await provider(identityProperties);
-				} catch {
-					// Fall through to next provider
-				}
-			}
-			throw new Error(
-				`No valid AWS credentials found for profile "${awsProfile}". ` +
-				`Checked: environment variables, shared credentials file, SSO.`
-			);
-		};
+		return buildProfileCredentialProvider(profile.awsSettings!.awsProfile);
 	}
 
 	invalidateClients(profileId: string): void {

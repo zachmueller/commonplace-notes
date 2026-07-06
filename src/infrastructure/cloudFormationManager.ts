@@ -23,10 +23,10 @@ import {
 	ListHostedZonesCommand,
 	CreateHostedZoneCommand,
 } from '@aws-sdk/client-route-53';
-import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { OrphanedEdgeResource, PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
+import { buildProfileCredentialProvider } from '../utils/awsCredentialChain';
 import {
 	CERTIFICATE_TEMPLATE,
 	COGNITO_AUTH_TEMPLATE,
@@ -1028,6 +1028,31 @@ export class CloudFormationManager {
 		}
 	}
 
+	/**
+	 * Drop every cached client that resolves credentials for `awsProfile`, so the
+	 * next call rebuilds a client that re-resolves credentials from disk. Called by
+	 * `refreshCredentials` alongside AwsSdkManager.invalidateClients — this manager
+	 * keeps its OWN client caches, so a refresh that only cleared AwsSdkManager
+	 * would leave a stale client here with memoized (expired) credentials.
+	 *
+	 * The route53/acm/cfClients maps are keyed by `awsProfile:region` (route53/acm
+	 * pin us-east-1, cfClients vary by region), so match the profile as either the
+	 * whole key or the `${awsProfile}:` prefix. `profileId` is accepted for a
+	 * signature symmetric with AwsSdkManager but the caches are AWS-profile-keyed.
+	 */
+	invalidateClients(_profileId: string, awsProfile: string): void {
+		const matches = (key: string) => key === awsProfile || key.startsWith(`${awsProfile}:`);
+		for (const [key, client] of this.cfClients) {
+			if (matches(key)) { client.destroy(); this.cfClients.delete(key); }
+		}
+		for (const [key, client] of this.acmClients) {
+			if (matches(key)) { client.destroy(); this.acmClients.delete(key); }
+		}
+		for (const [key, client] of this.route53Clients) {
+			if (matches(key)) { client.destroy(); this.route53Clients.delete(key); }
+		}
+	}
+
 	dispose(): void {
 		for (const client of this.cfClients.values()) client.destroy();
 		for (const client of this.acmClients.values()) client.destroy();
@@ -1094,25 +1119,7 @@ export class CloudFormationManager {
 	}
 
 	private buildCredentialProvider(awsProfile: string): AwsCredentialIdentityProvider {
-		const providers: AwsCredentialIdentityProvider[] = [
-			fromEnv(),
-			fromIni({ profile: awsProfile }),
-			fromSSO({ profile: awsProfile }),
-		];
-
-		return async (identityProperties?: Record<string, any>) => {
-			for (const provider of providers) {
-				try {
-					return await provider(identityProperties);
-				} catch {
-					// Fall through to next provider
-				}
-			}
-			throw new Error(
-				`No valid AWS credentials found for profile "${awsProfile}". ` +
-				`Checked: environment variables, shared credentials file, SSO.`
-			);
-		};
+		return buildProfileCredentialProvider(awsProfile);
 	}
 
 	private sleep(ms: number): Promise<void> {

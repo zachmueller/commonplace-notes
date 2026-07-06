@@ -42,6 +42,10 @@ export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profile
 		}
 
 		plugin.awsSdkManager.invalidateClients(profileId);
+		// CloudFormationManager keeps its OWN client caches (deploys, stack updates,
+		// the "Sync callback URL" button) — invalidate those too, or a stale client
+		// with memoized expired credentials survives the refresh.
+		plugin.cloudFormationManager.invalidateClients(profileId, profile.awsSettings.awsProfile);
 	} catch (error) {
 		Logger.error('Failed to refresh credentials:', error);
 		NoticeManager.showNotice('Failed to refresh credentials: ' + (error as Error).message);
