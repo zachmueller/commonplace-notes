@@ -155,6 +155,32 @@ export class CloudFormationManager {
 	}
 
 	/**
+	 * Every Cognito auth sub-stack template parameter key. Used to build a
+	 * targeted update that changes only a named subset and inherits the rest via
+	 * UsePreviousValue.
+	 */
+	private static readonly COGNITO_AUTH_PARAM_KEYS = [
+		'VariantName', 'GoogleClientId', 'GoogleClientSecret', 'CallbackURL', 'AuthDomainPrefix',
+	] as const;
+
+	/**
+	 * Build UpdateStack parameters that change only the keys present in
+	 * `overrides` and keep every other key at its currently-deployed value
+	 * (UsePreviousValue). Critical for a callback-only re-sync: the Google client
+	 * secret is never persisted in the plugin, so re-passing the full parameter
+	 * set from a partial config (via buildCognitoAuthParameters) would resolve
+	 * GoogleClientSecret to '' and wipe the Google IdP secret. ParameterValue and
+	 * UsePreviousValue are mutually exclusive per key.
+	 */
+	private buildCognitoAuthUpdateParameters(overrides: Partial<Record<string, string>>) {
+		return CloudFormationManager.COGNITO_AUTH_PARAM_KEYS.map((key) =>
+			key in overrides
+				? { ParameterKey: key, ParameterValue: overrides[key] }
+				: { ParameterKey: key, UsePreviousValue: true },
+		);
+	}
+
+	/**
 	 * Phase 1 of the two-phase Cognito deploy: create the auth sub-stack (user
 	 * pool + Google IdP + Hosted UI + app client + viewer-request edge fn).
 	 * Pinned to us-east-1 because it owns a Lambda@Edge function; needs
@@ -427,6 +453,38 @@ export class CloudFormationManager {
 			StackName: stackName,
 			TemplateBody: template,
 			Parameters: this.buildFullStackUpdateParameters({ AuthLambdaEdgeArn: authLambdaEdgeArn }),
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: profile.id },
+			],
+		}));
+
+		return stackName;
+	}
+
+	/**
+	 * Targeted update of the Cognito auth sub-stack that re-points ONLY the OAuth
+	 * callback URL at the given value, inheriting every other parameter via
+	 * UsePreviousValue. The stack wires both the app client's CallbackURLs and the
+	 * callback Lambda's REDIRECT_URI env var off the single CallbackURL parameter,
+	 * so one update fixes both sides. Use this to fix a `redirect_mismatch` after
+	 * the site domain / baseUrl changes post-deploy (the wizard only sets the
+	 * callback once, during the initial deploy). Pinned to us-east-1 because the
+	 * auth stack owns a Lambda@Edge function; UsePreviousTemplate avoids shipping
+	 * the template body just to change a parameter.
+	 */
+	async updateCognitoCallbackUrl(
+		stackName: string,
+		callbackUrl: string,
+		profile: PublishingProfile,
+	): Promise<string> {
+		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+
+		await client.send(new UpdateStackCommand({
+			StackName: stackName,
+			UsePreviousTemplate: true,
+			Parameters: this.buildCognitoAuthUpdateParameters({ CallbackURL: callbackUrl }),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },

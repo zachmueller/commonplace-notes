@@ -736,6 +736,52 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 							navigator.clipboard.writeText(redirectUri);
 							new Notice('Copied!');
 						}));
+
+				// Re-sync the Cognito OAuth callback URL to the current site domain.
+				// The wizard sets this callback only once, at initial deploy; if the
+				// site domain / baseUrl changes afterward (e.g. a custom domain added
+				// later), the published sign-in link sends a redirect_uri the app
+				// client no longer trusts, and Cognito rejects it with
+				// "redirect_mismatch" before ever reaching Google. This button
+				// re-points the app client callback (and the callback Lambda's
+				// REDIRECT_URI) at baseUrl + /auth/callback, preserving the Google
+				// secret via UsePreviousValue.
+				if (profile.baseUrl) {
+					const callbackUrl = profile.baseUrl.replace(/\/+$/, '') + '/auth/callback';
+					new Setting(containerEl)
+						.setName('Sync Google sign-in with site domain')
+						.setDesc(`Points Cognito's OAuth callback at ${callbackUrl}. `
+							+ 'Run this after changing the custom domain or site URL — otherwise '
+							+ 'sign-in fails with a "redirect_mismatch" error.')
+						.addButton(btn => btn
+							.setButtonText('Sync callback URL')
+							.onClick(async () => {
+								btn.setDisabled(true);
+								btn.setButtonText('Syncing...');
+								try {
+									const cfManager = this.plugin.cloudFormationManager;
+									const stackName = cfManager.getStackName(state.variantName || '', 'cognito');
+									await cfManager.updateCognitoCallbackUrl(stackName, callbackUrl, profile);
+									const finalStatus = await cfManager.pollStackUntilComplete(
+										stackName,
+										profile,
+										() => {},
+										'us-east-1',
+									);
+									if (finalStatus === 'UPDATE_COMPLETE') {
+										new Notice(`Google sign-in callback synced to ${callbackUrl}.`);
+									} else {
+										new Notice(`Stack update ended with status: ${finalStatus}`);
+									}
+								} catch (err: any) {
+									Logger.error('Error syncing Cognito callback URL:', err);
+									new Notice(`Sync failed: ${err.message}`);
+								} finally {
+									btn.setDisabled(false);
+									btn.setButtonText('Sync callback URL');
+								}
+							}));
+				}
 			}
 
 			// Commenting: the widget only renders on published note pages, so a
