@@ -836,16 +836,14 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						).open();
 					}));
 
-			if (profile.awsSettings?.bucketName && profile.awsSettings?.cloudFrontDistributionId) {
-				new Setting(containerEl)
-					.setName('Import existing stack')
-					.setDesc('Import a stack deployed via CDK to track it here')
-					.addButton(btn => btn
-						.setButtonText('Import')
-						.onClick(() => {
-							this.openImportStackModal(profile);
-						}));
-			}
+			new Setting(containerEl)
+				.setName('Import existing stack')
+				.setDesc('Import a stack deployed via CDK to track it here')
+				.addButton(btn => btn
+					.setButtonText('Import')
+					.onClick(() => {
+						this.openImportStackModal(profile);
+					}));
 		}
 	}
 
@@ -1046,18 +1044,30 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 	private openImportStackModal(profile: PublishingProfile): void {
 		const modal = new Modal(this.app);
-		let stackName = 'PublishedCommonplaceNotesStack';
+		this.initAWSSettings(profile);
+		let awsProfileName = profile.awsSettings?.awsProfile || '';
+		let awsAccountId = profile.awsSettings?.awsAccountId || '';
 		let region = profile.awsSettings?.region || 'us-east-1';
+		let stackName = 'PublishedCommonplaceNotesStack';
 
 		modal.onOpen = () => {
 			modal.titleEl.setText('Import Existing Stack');
 
 			new Setting(modal.contentEl)
-				.setName('Stack name')
-				.setDesc('The CloudFormation stack name to import')
+				.setName('AWS profile')
+				.setDesc('The AWS CLI/SSO profile that has credentials for this account')
 				.addText(text => text
-					.setValue(stackName)
-					.onChange(v => { stackName = v; }));
+					.setPlaceholder('notes')
+					.setValue(awsProfileName)
+					.onChange(v => { awsProfileName = v; }));
+
+			new Setting(modal.contentEl)
+				.setName('AWS account ID (optional)')
+				.setDesc('Used for display/verification only')
+				.addText(text => text
+					.setPlaceholder('123456789012')
+					.setValue(awsAccountId)
+					.onChange(v => { awsAccountId = v; }));
 
 			new Setting(modal.contentEl)
 				.setName('Region')
@@ -1067,6 +1077,13 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.onChange(v => { region = v; }));
 
 			new Setting(modal.contentEl)
+				.setName('Stack name')
+				.setDesc('The CloudFormation stack name to import')
+				.addText(text => text
+					.setValue(stackName)
+					.onChange(v => { stackName = v; }));
+
+			new Setting(modal.contentEl)
 				.addButton(btn => btn
 					.setButtonText('Cancel')
 					.onClick(() => modal.close()))
@@ -1074,11 +1091,17 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.setButtonText('Import')
 					.setCta()
 					.onClick(async () => {
-						if (!stackName || !region) {
-							new Notice('Stack name and region are required.');
+						if (!awsProfileName || !region || !stackName) {
+							new Notice('AWS profile, region, and stack name are required.');
 							return;
 						}
 						try {
+							// Persist credential/target fields FIRST — getCloudFormationClientForProfile
+							// reads profile.awsSettings.awsProfile directly (not from a param).
+							profile.awsSettings!.awsProfile = awsProfileName;
+							profile.awsSettings!.region = region;
+							if (awsAccountId) profile.awsSettings!.awsAccountId = awsAccountId;
+
 							const outputs = await this.plugin.cloudFormationManager.importStack(stackName, profile, region);
 							profile.infrastructureState = {
 								status: 'deployed',
