@@ -7,6 +7,7 @@ import {
 	DescribeStacksCommand,
 	DescribeStackEventsCommand,
 	ListStackResourcesCommand,
+	Stack,
 } from '@aws-sdk/client-cloudformation';
 import {
 	ListObjectVersionsCommand,
@@ -40,10 +41,12 @@ import type {
 	CognitoAuthOutputs,
 	CommentStackOutputs,
 	DeploymentConfig,
+	DiscoveredStack,
 	DnsValidationRecord,
 	HostedZoneInfo,
 	StackEvent,
 	StackOutputs,
+	StackRole,
 } from './types';
 import { certCoversDomain } from './certMatch';
 import { Logger } from '../utils/logging';
@@ -75,6 +78,116 @@ const TERMINAL_STATUSES = new Set([
 	'UPDATE_ROLLBACK_COMPLETE',
 	'UPDATE_ROLLBACK_FAILED',
 ]);
+
+/**
+ * Stack statuses representing a live, importable stack (a *_COMPLETE resting
+ * state whose resources exist). UPDATE_ROLLBACK_COMPLETE is included — a failed
+ * update that rolled back leaves the prior working resources intact.
+ */
+const IMPORTABLE_STATUSES = new Set([
+	'CREATE_COMPLETE',
+	'UPDATE_COMPLETE',
+	'UPDATE_ROLLBACK_COMPLETE',
+	'IMPORT_COMPLETE',
+]);
+
+/** Flatten an SDK Outputs array into an OutputKey → OutputValue record. */
+export function outputsToRecord(outputs?: Array<{ OutputKey?: string; OutputValue?: string }>): Record<string, string> {
+	const record: Record<string, string> = {};
+	for (const o of outputs || []) {
+		if (o.OutputKey) record[o.OutputKey] = o.OutputValue || '';
+	}
+	return record;
+}
+
+/** Flatten an SDK Parameters array into a ParameterKey → ParameterValue record. */
+export function parametersToRecord(parameters?: Array<{ ParameterKey?: string; ParameterValue?: string }>): Record<string, string> {
+	const record: Record<string, string> = {};
+	for (const p of parameters || []) {
+		if (p.ParameterKey) record[p.ParameterKey] = p.ParameterValue || '';
+	}
+	return record;
+}
+
+/** Map a site (full) stack's outputs into StackOutputs. Shared by getStackOutputs and the import path. */
+export function mapSiteOutputs(o: Record<string, string>): StackOutputs {
+	return {
+		bucketName: o['BucketName'] || '',
+		distributionDomainName: o['DistributionDomainName'] || '',
+		distributionId: o['DistributionID'] || '',
+		siteUrl: o['SiteUrl'] || '',
+		originAccessIdentityId: o['OriginAccessIdentityId'] || undefined,
+	};
+}
+
+/** Map a Cognito auth stack's outputs into CognitoAuthOutputs. */
+export function mapCognitoOutputs(o: Record<string, string>): CognitoAuthOutputs {
+	return {
+		edgeFunctionVersionArn: o['EdgeFunctionVersionArn'] || '',
+		userPoolId: o['UserPoolId'] || '',
+		userPoolClientId: o['UserPoolClientId'] || '',
+		hostedUiDomain: o['HostedUiDomain'] || '',
+		jwksUri: o['JwksUri'] || '',
+		issuer: o['Issuer'] || '',
+		callbackApiDomain: o['CallbackApiDomain'] || '',
+	};
+}
+
+/** Map a password auth stack's outputs (just the edge fn version ARN). */
+export function mapPasswordOutputs(o: Record<string, string>): { edgeFunctionVersionArn: string } {
+	return { edgeFunctionVersionArn: o['EdgeFunctionVersionArn'] || '' };
+}
+
+/** Map a comment stack's outputs into CommentStackOutputs. */
+export function mapCommentOutputs(o: Record<string, string>): CommentStackOutputs {
+	return {
+		bucketName: o['CommentBucketName'] || '',
+		bucketDomainName: o['CommentBucketDomainName'] || '',
+		apiDomain: o['CommentApiDomain'] || '',
+		tableName: o['CommentTableName'] || '',
+	};
+}
+
+/**
+ * Detect a stack's role from its Output-key signatures, most-specific first,
+ * falling back to the cpn-<role>- name prefix. Output keys are authoritative:
+ * the full stack takes CertificateArn as a *parameter* but never emits it as an
+ * output, and both auth stacks emit EdgeFunctionVersionArn (so cognito must be
+ * caught by its UserPoolId output before the bare-edge-ARN password case).
+ */
+export function detectStackRole(stackName: string, outputs: Record<string, string>): StackRole {
+	if ('CommentBucketName' in outputs || 'CommentTableName' in outputs) return 'comment';
+	if ('UserPoolId' in outputs) return 'cognito';
+	if ('BucketName' in outputs && 'DistributionID' in outputs) return 'full';
+	if ('EdgeFunctionVersionArn' in outputs) return 'password';
+	if ('CertificateArn' in outputs) return 'cert';
+
+	// Fallback: infer from the naming convention when outputs are absent/ambiguous.
+	if (stackName.startsWith('cpn-cert-')) return 'cert';
+	if (stackName.startsWith('cpn-cognito-')) return 'cognito';
+	if (stackName.startsWith('cpn-password-')) return 'password';
+	if (stackName.startsWith('cpn-comment-')) return 'comment';
+	if (stackName.startsWith('cpn-')) return 'full';
+	return 'unknown';
+}
+
+/**
+ * Parse the variant suffix from a stack name for a given role and confirm it
+ * reconstructs the exact name via the getStackName convention. Returns undefined
+ * for non-conventional names (the role is still trusted from outputs, but no
+ * variant can be inferred). `unknown` has no naming convention → always undefined.
+ */
+export function deriveVariantSuffix(stackName: string, role: StackRole): string | undefined {
+	if (role === 'unknown') return undefined;
+	const prefix = role === 'full' ? 'cpn-' : `cpn-${role}-`;
+	if (!stackName.startsWith(prefix)) return undefined;
+	const suffix = stackName.slice(prefix.length);
+	// The 'full' prefix (cpn-) is a prefix of every other role's name, so guard
+	// against e.g. 'cpn-cert-default' being read as a full stack with suffix
+	// 'cert-default'. A valid full suffix never begins with a known role segment.
+	if (role === 'full' && /^(cert|cognito|password|comment)-/.test(suffix)) return undefined;
+	return suffix || 'default';
+}
 
 export class CloudFormationManager {
 	private plugin: CommonplaceNotesPlugin;
@@ -236,18 +349,7 @@ export class CloudFormationManager {
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Cognito auth stack ${stackName} not found`);
 
-		const outputs = stack.Outputs || [];
-		const get = (key: string) => outputs.find(o => o.OutputKey === key)?.OutputValue || '';
-
-		return {
-			edgeFunctionVersionArn: get('EdgeFunctionVersionArn'),
-			userPoolId: get('UserPoolId'),
-			userPoolClientId: get('UserPoolClientId'),
-			hostedUiDomain: get('HostedUiDomain'),
-			jwksUri: get('JwksUri'),
-			issuer: get('Issuer'),
-			callbackApiDomain: get('CallbackApiDomain'),
-		};
+		return mapCognitoOutputs(outputsToRecord(stack.Outputs));
 	}
 
 	/**
@@ -283,10 +385,7 @@ export class CloudFormationManager {
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Password auth stack ${stackName} not found`);
 
-		const outputs = stack.Outputs || [];
-		return {
-			edgeFunctionVersionArn: outputs.find(o => o.OutputKey === 'EdgeFunctionVersionArn')?.OutputValue || '',
-		};
+		return mapPasswordOutputs(outputsToRecord(stack.Outputs));
 	}
 
 	private buildFullStackParameters(config: DeploymentConfig) {
@@ -374,15 +473,7 @@ export class CloudFormationManager {
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Comment stack ${stackName} not found`);
 
-		const outputs = stack.Outputs || [];
-		const get = (key: string) => outputs.find(o => o.OutputKey === key)?.OutputValue || '';
-
-		return {
-			bucketName: get('CommentBucketName'),
-			bucketDomainName: get('CommentBucketDomainName'),
-			apiDomain: get('CommentApiDomain'),
-			tableName: get('CommentTableName'),
-		};
+		return mapCommentOutputs(outputsToRecord(stack.Outputs));
 	}
 
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
@@ -725,16 +816,7 @@ export class CloudFormationManager {
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Stack ${stackName} not found`);
 
-		const outputs = stack.Outputs || [];
-		const get = (key: string) => outputs.find(o => o.OutputKey === key)?.OutputValue || '';
-
-		return {
-			bucketName: get('BucketName'),
-			distributionDomainName: get('DistributionDomainName'),
-			distributionId: get('DistributionID'),
-			siteUrl: get('SiteUrl'),
-			originAccessIdentityId: get('OriginAccessIdentityId') || undefined,
-		};
+		return mapSiteOutputs(outputsToRecord(stack.Outputs));
 	}
 
 	async getCertificateArn(stackName: string, profile: PublishingProfile): Promise<string> {
@@ -968,8 +1050,73 @@ export class CloudFormationManager {
 		}
 	}
 
-	async importStack(stackName: string, profile: PublishingProfile, region?: string): Promise<StackOutputs> {
-		return this.getStackOutputs(stackName, profile, region);
+	/**
+	 * Discover this plugin's stacks across one or more regions for the import flow.
+	 * Uses DescribeStacks with no StackName (one paginated call per region) — which
+	 * returns Tags, Outputs AND Parameters per stack in a single round trip, so
+	 * role detection and state reconstruction need no follow-up describe. Takes the
+	 * awsProfile explicitly (not from profile.awsSettings) so a scan never depends
+	 * on or mutates persisted settings. Regions are de-duplicated, so passing the
+	 * site region and us-east-1 when they coincide scans only once. A stack is kept
+	 * when it is tagged cpn:managed=true OR its name starts with `cpn-` (the tag is
+	 * authoritative; the prefix is a fallback for a stack whose tags were stripped).
+	 */
+	async listCpnStacks(awsProfile: string, regions: string[]): Promise<DiscoveredStack[]> {
+		const uniqueRegions = Array.from(new Set(regions.filter(Boolean)));
+		const discovered: DiscoveredStack[] = [];
+
+		for (const region of uniqueRegions) {
+			const client = this.getCfClient(awsProfile, region);
+			const stacks = await this.describeAllStacks(client);
+
+			for (const stack of stacks) {
+				const stackName = stack.StackName;
+				if (!stackName) continue;
+
+				const tags: Record<string, string> = {};
+				for (const t of stack.Tags || []) {
+					if (t.Key) tags[t.Key] = t.Value || '';
+				}
+				const managed = tags['cpn:managed'] === 'true';
+				if (!managed && !stackName.startsWith('cpn-')) continue;
+
+				const status = stack.StackStatus || '';
+				// A deleted stack lingers queryable by name for a while — never offer it.
+				if (status === 'DELETE_COMPLETE') continue;
+
+				const outputs = outputsToRecord(stack.Outputs);
+				const role = detectStackRole(stackName, outputs);
+
+				discovered.push({
+					stackName,
+					region,
+					status,
+					healthy: IMPORTABLE_STATUSES.has(status),
+					managed,
+					profileTag: tags['cpn:profile'] || undefined,
+					outputs,
+					parameters: parametersToRecord(stack.Parameters),
+					role,
+					variantSuffix: deriveVariantSuffix(stackName, role),
+				});
+			}
+		}
+
+		return discovered;
+	}
+
+	/** Page through every stack in the client's region via DescribeStacks + NextToken. */
+	private async describeAllStacks(client: CloudFormationClient): Promise<Stack[]> {
+		const stacks: Stack[] = [];
+		let nextToken: string | undefined;
+
+		do {
+			const response = await client.send(new DescribeStacksCommand({ NextToken: nextToken }));
+			if (response.Stacks) stacks.push(...response.Stacks);
+			nextToken = response.NextToken;
+		} while (nextToken);
+
+		return stacks;
 	}
 
 	async listHostedZones(profile: PublishingProfile): Promise<HostedZoneInfo[]> {
@@ -1062,32 +1209,32 @@ export class CloudFormationManager {
 		this.route53Clients.clear();
 	}
 
-	private getCloudFormationClient(config: DeploymentConfig, region: string): CloudFormationClient {
-		const key = `${config.awsProfile}:${region}`;
+	/**
+	 * Cache-keyed (`${awsProfile}:${region}`) CloudFormation client. The single
+	 * source of client construction — the config- and profile-based accessors both
+	 * delegate here, and discovery uses it directly with an explicitly-passed
+	 * awsProfile (so scanning never reads or mutates profile.awsSettings).
+	 */
+	private getCfClient(awsProfile: string, region: string): CloudFormationClient {
+		const key = `${awsProfile}:${region}`;
 		const existing = this.cfClients.get(key);
 		if (existing) return existing;
 
 		const client = new CloudFormationClient({
 			region,
-			credentials: this.buildCredentialProvider(config.awsProfile),
+			credentials: this.buildCredentialProvider(awsProfile),
 		});
 		this.cfClients.set(key, client);
 		return client;
 	}
 
-	private getCloudFormationClientForProfile(profile: PublishingProfile, region?: string): CloudFormationClient {
-		const awsProfile = profile.awsSettings!.awsProfile;
-		const resolvedRegion = region || profile.awsSettings!.region;
-		const key = `${awsProfile}:${resolvedRegion}`;
-		const existing = this.cfClients.get(key);
-		if (existing) return existing;
+	private getCloudFormationClient(config: DeploymentConfig, region: string): CloudFormationClient {
+		return this.getCfClient(config.awsProfile, region);
+	}
 
-		const client = new CloudFormationClient({
-			region: resolvedRegion,
-			credentials: this.buildCredentialProvider(awsProfile),
-		});
-		this.cfClients.set(key, client);
-		return client;
+	private getCloudFormationClientForProfile(profile: PublishingProfile, region?: string): CloudFormationClient {
+		const resolvedRegion = region || profile.awsSettings!.region;
+		return this.getCfClient(profile.awsSettings!.awsProfile, resolvedRegion);
 	}
 
 	private getRoute53Client(profile: PublishingProfile): Route53Client {

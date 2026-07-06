@@ -4,6 +4,7 @@ import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from
 import { Logger } from './utils/logging';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
+import { ImportStackModal } from './infrastructure/importStackModal';
 import { googleOAuthUrls } from './infrastructure/cognitoUrls';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from './publish/awsUpload';
 
@@ -884,8 +885,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(containerEl)
-				.setName('Import existing stack')
-				.setDesc('Import a stack deployed via CDK to track it here')
+				.setName('Import existing deployment')
+				.setDesc('Scan an AWS account and import your deployed stacks (site, certificate, auth, comments)')
 				.addButton(btn => btn
 					.setButtonText('Import')
 					.onClick(() => {
@@ -1146,89 +1147,14 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	}
 
 	private openImportStackModal(profile: PublishingProfile): void {
-		const modal = new Modal(this.app);
 		this.initAWSSettings(profile);
-		let awsProfileName = profile.awsSettings?.awsProfile || '';
-		let awsAccountId = profile.awsSettings?.awsAccountId || '';
-		let region = profile.awsSettings?.region || 'us-east-1';
-		let stackName = 'PublishedCommonplaceNotesStack';
-
-		modal.onOpen = () => {
-			modal.titleEl.setText('Import Existing Stack');
-
-			new Setting(modal.contentEl)
-				.setName('AWS profile')
-				.setDesc('The AWS CLI/SSO profile that has credentials for this account')
-				.addText(text => text
-					.setPlaceholder('notes')
-					.setValue(awsProfileName)
-					.onChange(v => { awsProfileName = v; }));
-
-			new Setting(modal.contentEl)
-				.setName('AWS account ID (optional)')
-				.setDesc('Used for display/verification only')
-				.addText(text => text
-					.setPlaceholder('123456789012')
-					.setValue(awsAccountId)
-					.onChange(v => { awsAccountId = v; }));
-
-			new Setting(modal.contentEl)
-				.setName('Region')
-				.setDesc('AWS region where the stack is deployed')
-				.addText(text => text
-					.setValue(region)
-					.onChange(v => { region = v; }));
-
-			new Setting(modal.contentEl)
-				.setName('Stack name')
-				.setDesc('The CloudFormation stack name to import')
-				.addText(text => text
-					.setValue(stackName)
-					.onChange(v => { stackName = v; }));
-
-			new Setting(modal.contentEl)
-				.addButton(btn => btn
-					.setButtonText('Cancel')
-					.onClick(() => modal.close()))
-				.addButton(btn => btn
-					.setButtonText('Import')
-					.setCta()
-					.onClick(async () => {
-						if (!awsProfileName || !region || !stackName) {
-							new Notice('AWS profile, region, and stack name are required.');
-							return;
-						}
-						try {
-							// Persist credential/target fields FIRST — getCloudFormationClientForProfile
-							// reads profile.awsSettings.awsProfile directly (not from a param).
-							profile.awsSettings!.awsProfile = awsProfileName;
-							profile.awsSettings!.region = region;
-							if (awsAccountId) profile.awsSettings!.awsAccountId = awsAccountId;
-
-							const outputs = await this.plugin.cloudFormationManager.importStack(stackName, profile, region);
-							profile.infrastructureState = {
-								status: 'deployed',
-								imported: true,
-								fullStackName: stackName,
-								region,
-								useRoute53: false,
-								originAccessMethod: 'oai',
-							};
-							profile.awsSettings!.bucketName = outputs.bucketName;
-							profile.awsSettings!.cloudFrontDistributionId = outputs.distributionId;
-							profile.baseUrl = `https://${outputs.siteUrl}/`;
-							await this.plugin.saveSettings();
-							modal.close();
-							this.renderActiveProfile();
-							new Notice('Stack imported successfully.');
-						} catch (err: any) {
-							Logger.error('Error importing stack:', err);
-							new Notice(`Import failed: ${err.message}`);
-						}
-					}));
-		};
-
-		modal.open();
+		new ImportStackModal(
+			this.app,
+			this.plugin,
+			this.plugin.cloudFormationManager,
+			profile,
+			() => this.renderActiveProfile(),
+		).open();
 	}
 
 	private openAuthLambdaModal(profile: PublishingProfile): void {

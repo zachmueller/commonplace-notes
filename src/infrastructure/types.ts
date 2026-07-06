@@ -171,6 +171,42 @@ export interface StackOutputs {
 	originAccessIdentityId?: string;
 }
 
+/**
+ * The role a discovered CloudFormation stack plays in a deployment, matched to
+ * an InfrastructureState slot: full→fullStackName, cert→certStackName,
+ * cognito→cognitoAuth, password→passwordAuth, comment→comment. `unknown` is a
+ * cpn-* (or cpn:managed-tagged) stack whose Outputs match no known role — the
+ * import UI leaves it unchecked with a manual role-override dropdown.
+ */
+export type StackRole = 'full' | 'cert' | 'cognito' | 'password' | 'comment' | 'unknown';
+
+/**
+ * A CloudFormation stack found by scanning an account/region during import.
+ * Populated from a single DescribeStacks call (no StackName) — carrying the raw
+ * Outputs AND Parameters so role detection and state reconstruction need no
+ * second round trip. `parameters` supplies values that are never emitted as
+ * outputs (the full stack's AuthLambdaEdgeArn/CustomDomain/UseRoute53/HostedZone*,
+ * the cognito stack's GoogleClientId/AuthDomainPrefix).
+ */
+export interface DiscoveredStack {
+	stackName: string;
+	region: string;
+	/** Raw CloudFormation StackStatus. */
+	status: string;
+	/** True when status is a *_COMPLETE terminal state — only these are importable. */
+	healthy: boolean;
+	/** True when tagged cpn:managed=true (this plugin deployed it). */
+	managed: boolean;
+	/** Value of the cpn:profile tag, if present (groups stacks by originating profile). */
+	profileTag?: string;
+	outputs: Record<string, string>;
+	parameters: Record<string, string>;
+	/** Auto-detected from output-key signatures, with the cpn- name prefix as fallback. */
+	role: StackRole;
+	/** Variant suffix parsed from the name and validated via getStackName(); undefined if the name is non-conventional. */
+	variantSuffix?: string;
+}
+
 export interface DnsValidationRecord {
 	name: string;
 	value: string;
