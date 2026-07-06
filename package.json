@@ -22,6 +22,7 @@
 		"test:comment-identity": "npx tsx e2e/scripts/test-comment-identity.ts",
 		"test:comment-edit-delete": "npx tsx e2e/scripts/test-comment-edit-delete.ts",
 		"test:comment-threading": "npx tsx e2e/scripts/test-comment-threading.ts",
+		"test:comment-wikilinks": "npx tsx e2e/scripts/test-comment-wikilinks.ts",
 		"test:cert-match": "npx tsx e2e/scripts/test-cert-match.ts",
 		"test:site-config-matrix": "npx tsx e2e/scripts/test-site-config-matrix.ts",
 		"test:asset-customizations": "npx tsx e2e/scripts/test-asset-customizations.ts",

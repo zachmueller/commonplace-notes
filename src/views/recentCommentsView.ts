@@ -1,8 +1,9 @@
-import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, Keymap, PaneType, setIcon } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, Keymap, PaneType, TFile, setIcon } from 'obsidian';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { NoticeManager } from '../utils/notice';
 import { buildRecentFeed, RecentFeed, RecentActivityGroup, CommentItem } from '../utils/recentComments';
+import { rewriteCommentWikilinks } from '../utils/commentWikilinks';
 
 export const RECENT_COMMENTS_VIEW = 'cpn-recent-comments';
 
@@ -22,6 +23,9 @@ export class RecentCommentsView extends ItemView {
 	// Owns the lifecycle of event handlers created while rendering comment
 	// Markdown; replaced on each render so handlers don't accumulate.
 	private feedComponent: Component | null = null;
+	// UID → local note file, rebuilt once per render() so [[UID]] comment links
+	// resolve to the note's current title + a working internal link.
+	private uidToFile: Map<string, TFile> = new Map();
 
 	constructor(leaf: WorkspaceLeaf, plugin: CommonplaceNotesPlugin) {
 		super(leaf);
@@ -110,6 +114,11 @@ export class RecentCommentsView extends ItemView {
 		if (this.feedComponent) this.removeChild(this.feedComponent);
 		this.feedComponent = new Component();
 		this.addChild(this.feedComponent);
+
+		// Rebuild the UID → file map once per render (fresh each time; used to
+		// resolve [[UID]] links in comment bodies). One vault scan per render pass
+		// beats a scan per link token.
+		this.uidToFile = this.buildUidToFileMap();
 
 		const profiles = this.commentingProfiles();
 		if (profiles.length === 0) {
@@ -241,12 +250,37 @@ export class RecentCommentsView extends ItemView {
 		// Bodies are Markdown; render via Obsidian's native renderer (matches
 		// formatting.ts). The feedComponent owns any handlers the render creates.
 		// Fall back to plain text on error.
-		const md = comment.body;
+		//
+		// First rewrite [[UID]] note-links: a resolvable UID becomes
+		// [[<linktext>|<Title>]] so it displays the note's current title and, once
+		// rendered, is a working internal link that opens the right note (Obsidian's
+		// own internal-link handling — no custom click wiring). Unresolvable UIDs
+		// degrade to plain UID text.
+		const md = rewriteCommentWikilinks(comment.body, (uid) => {
+			const file = this.uidToFile.get(uid);
+			if (!file) return null;
+			return {
+				linktext: this.plugin.app.metadataCache.fileToLinktext(file, group.localPath ?? '', true),
+				title: this.plugin.frontmatterManager.getNoteTitle(file),
+			};
+		});
 		try {
 			void MarkdownRenderer.render(this.plugin.app, md, body, group.localPath ?? '', this.feedComponent!);
 		} catch {
 			body.setText(md);
 		}
+	}
+
+	/** Scan the vault once for cpn-uid → file (first file wins on duplicate UID). */
+	private buildUidToFileMap(): Map<string, TFile> {
+		const map = new Map<string, TFile>();
+		for (const f of this.plugin.app.vault.getMarkdownFiles()) {
+			// Pure metadataCache read — NOT getNoteUID, which mints/queues a UID as
+			// a side effect (see resolveLocalNote in recentComments.ts).
+			const uid = this.plugin.frontmatterManager.getFrontmatterValue(f, 'cpn-uid');
+			if (uid && !map.has(uid)) map.set(uid, f);
+		}
+		return map;
 	}
 
 	/** Open the local source note for a group; notice fallback when unresolved. */
