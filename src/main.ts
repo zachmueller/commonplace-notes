@@ -603,6 +603,42 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	}
 
 	/**
+	 * Disconnect a profile from its AWS backend WITHOUT deleting anything in AWS
+	 * and WITHOUT touching the profile's local publish state.
+	 *
+	 * This is the recovery path for a profile stuck with a partial/broken backend
+	 * link (e.g. left over from an older, buggy import): it clears every field that
+	 * is re-derivable from AWS on a fresh import/deploy — the whole
+	 * infrastructureState, the read-gate/Cognito/commenting intent, baseUrl, and the
+	 * awsSettings resource pointers (bucketName, cloudFrontDistributionId) — so the
+	 * user can immediately re-run the import (or redeploy) against the same or a new
+	 * backend.
+	 *
+	 * Deliberately PRESERVED: the AWS account coordinates (awsProfile/region/
+	 * awsAccountId) to pre-fill re-import and to keep deferred edge cleanup working;
+	 * `pendingEdgeCleanup` (real orphaned resources awaiting deletion); and the
+	 * entire on-disk `profiles/<id>/` tree (slug↔uid mappings, publish history,
+	 * content index) — irreplaceable local work with no backend counterpart.
+	 *
+	 * Contrast: `destroyInfrastructure` deletes the CloudFormation stacks; deleting
+	 * the profile loses the local mapping data. Unlink does neither — it makes no
+	 * AWS API calls and no on-disk changes; it only invalidates in-memory SDK client
+	 * caches so a later re-import/deploy rebuilds them cleanly.
+	 */
+	async unlinkInfrastructure(profile: PublishingProfile): Promise<void> {
+		await this.resetInfrastructureState(profile);   // infrastructureState + readGate/cognito/comment; saves once
+		if (profile.awsSettings) {
+			this.awsSdkManager.invalidateClients(profile.id);
+			this.cloudFormationManager.invalidateClients(profile.id, profile.awsSettings.awsProfile);
+			profile.awsSettings.bucketName = '';
+			profile.awsSettings.cloudFrontDistributionId = undefined;
+		}
+		profile.baseUrl = '';
+		// pendingEdgeCleanup + the on-disk profiles/<id>/ tree are intentionally left intact.
+		await this.saveSettings();
+	}
+
+	/**
 	 * Tear down a profile's deployed infrastructure: delete its CloudFormation
 	 * stacks in dependency order, polling each to completion. Shared by the
 	 * `destroy-infrastructure` command and the Settings "Danger Zone" button.

@@ -893,6 +893,65 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						this.openImportStackModal(profile);
 					}));
 		}
+
+		// "Unlink from AWS backend" — clears the (re-derivable) backend link so a
+		// profile stuck with a partial/broken link (commonly an old, buggy import)
+		// can re-run the import. Unlike Destroy, it makes NO AWS calls and works even
+		// for imported stacks (no `imported` guard). Shown for every status once
+		// there is actually a link to clear.
+		const isLinked =
+			status !== 'none' ||
+			!!state?.fullStackName ||
+			!!state?.certStackName ||
+			!!profile.awsSettings?.bucketName ||
+			!!profile.awsSettings?.cloudFrontDistributionId;
+		if (isLinked) {
+			new Setting(containerEl)
+				.setName('Unlink from AWS backend')
+				.setDesc('Disconnect this profile from its AWS backend without deleting anything in AWS. '
+					+ 'Your published site, S3 buckets, CloudFront distribution, and any comments keep running '
+					+ '(and keep incurring cost). Local publish history and note mappings are preserved. '
+					+ 'Use this to recover from a broken import and re-run the import cleanly.')
+				.addButton(button => {
+					let isConfirmState = false;
+
+					button
+						.setButtonText('Unlink')
+						.setClass('mod-warning')
+						.onClick(async () => {
+							if (!isConfirmState) {
+								button.setButtonText('Click again to confirm unlink');
+								button.setClass('mod-error');
+								isConfirmState = true;
+
+								setTimeout(() => {
+									if (isConfirmState) {
+										button.setButtonText('Unlink');
+										button.setClass('mod-warning');
+										isConfirmState = false;
+									}
+								}, 3000);
+								return;
+							}
+
+							button.setDisabled(true);
+							button.setButtonText('Unlinking...');
+							try {
+								await this.plugin.unlinkInfrastructure(profile);
+								new Notice('Profile unlinked from backend. AWS resources were left running — you can now re-import or redeploy.');
+								this.renderActiveProfile();
+							} catch (err) {
+								Logger.error('Error unlinking infrastructure:', err);
+								new Notice(`Failed to unlink: ${err instanceof Error ? err.message : String(err)}`);
+								button.setDisabled(false);
+								button.setButtonText('Unlink');
+								button.setClass('mod-warning');
+								isConfirmState = false;
+							}
+						});
+					return button;
+				});
+		}
 	}
 
 	/**
