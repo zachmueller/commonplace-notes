@@ -78,8 +78,17 @@ export class TestContext {
 	async screenshot(name: string): Promise<string> {
 		fs.mkdirSync(this.screenshotsDir, { recursive: true });
 		const file = path.join(this.screenshotsDir, `${name}.png`);
-		await this.page.screenshot({ path: file, fullPage: true });
-		return file;
+		try {
+			// Viewport-only: fullPage evaluates a page-side measuring helper that
+			// throws "__name is not defined" in Obsidian's Electron renderer (the
+			// same reason run-and-collect.ts guards its fullPage screenshots). A
+			// viewport capture of the app window is the meaningful artifact anyway.
+			await this.page.screenshot({ path: file });
+			return file;
+		} catch (err) {
+			console.warn(`  [screenshot] "${name}" failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+			return "";
+		}
 	}
 }
 
