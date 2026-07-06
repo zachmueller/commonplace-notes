@@ -5,9 +5,16 @@ import {
 	BulkPublishContextMapping,
 	BulkPublishContextConfig,
 	PublishContextChange,
-	PublishingProfile
+	PublishingProfile,
+	OrphanedEdgeResource
 } from './types';
 import { StackEvent } from './infrastructure/types';
+import { DeleteFunctionCommand } from '@aws-sdk/client-lambda';
+import {
+	ListAttachedRolePoliciesCommand,
+	DetachRolePolicyCommand,
+	DeleteRoleCommand,
+} from '@aws-sdk/client-iam';
 import { PathUtils } from './utils/path';
 import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
@@ -158,7 +165,25 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				const view = leaf.view;
 				if (view instanceof RecentCommentsView) await view.refreshIfStale();
 			}
+
+			// Opportunistically retry deferred cleanup of orphaned Lambda@Edge
+			// resources from a prior force-clean — hours have likely passed since the
+			// last session, so CloudFront may finally have removed the replicas.
+			// Fire-and-forget so a slow/failed AWS call never blocks startup.
+			this.sweepPendingEdgeCleanup();
 		});
+	}
+
+	/** Fire-and-forget retry of deferred Lambda@Edge cleanup for every profile with
+	 * pending orphans. Each profile's failures are isolated so one bad profile can't
+	 * abort the sweep; nothing is awaited by the caller. */
+	private sweepPendingEdgeCleanup(): void {
+		for (const profile of this.settings.publishingProfiles) {
+			if (!profile.pendingEdgeCleanup?.length) continue;
+			this.cleanupOrphanedEdgeResources(profile).catch(err =>
+				Logger.warn(`Deferred edge cleanup failed for profile ${profile.name}:`, err),
+			);
+		}
 	}
 
 	async activateRecentCommentsView() {
@@ -717,20 +742,24 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	/**
 	 * Finish tearing down leftover stacks a polite destroy could not remove
 	 * (commonly Lambda@Edge auth stacks stuck in DELETE_FAILED). Force-deletes each
-	 * still-present stack via `forceDeleteStack` (retaining resources it can't
-	 * delete, e.g. still-replicating edge functions). When `opts.deleteBuckets` is
-	 * set, also empties and removes the otherwise-RETAINed S3 buckets (published
-	 * content + comments) so a redeploy of a fixed-name bucket doesn't collide.
+	 * still-present stack via `forceDeleteStack` (which uses DeletionMode
+	 * FORCE_DELETE_STACK to orphan resources it can't delete yet — e.g. a
+	 * still-replicating edge function and its role — and drain the stack). Those
+	 * orphaned resources are parked in `profile.pendingEdgeCleanup` for a deferred,
+	 * retry-until-success deletion. When `opts.deleteBuckets` is set, also empties and
+	 * removes the otherwise-RETAINed S3 buckets (published content + comments) so a
+	 * redeploy of a fixed-name bucket doesn't collide.
 	 *
 	 * Only ever invoked from the Settings action after an explicit confirm. Resets
 	 * the profile to the clean default when every targeted stack is gone; otherwise
-	 * leaves `status: 'failed'` and reports which stacks remain.
+	 * leaves `status: 'failed'` and reports which stacks remain. `orphanedEdgeCount`
+	 * tells the caller how many edge resources were scheduled for deferred cleanup.
 	 */
 	async forceCleanInfrastructure(
 		profile: PublishingProfile,
 		opts: { deleteBuckets: boolean },
 		onEvent?: (event: StackEvent) => void,
-	): Promise<{ fullyCleaned: boolean; leftoverStacks: string[] }> {
+	): Promise<{ fullyCleaned: boolean; leftoverStacks: string[]; orphanedEdgeCount: number }> {
 		const state = profile.infrastructureState;
 		if (!state) {
 			throw new Error('No infrastructure state for this profile.');
@@ -744,6 +773,9 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		// Stacks confirmed removed (DELETE_COMPLETE or already gone) — a retained
 		// bucket may only be deleted once its owning stack is in this set.
 		const removedStacks = new Set<string>();
+		// Lambda@Edge resources orphaned to drain a stuck stack — parked on the profile
+		// for deferred deletion once CloudFront removes their replicas.
+		const orphanedEdge: OrphanedEdgeResource[] = [];
 
 		// Force-delete a stack if it is still present, retaining any resources
 		// CloudFormation can't remove (e.g. a still-replicating Lambda@Edge fn).
@@ -751,7 +783,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			const status = await cf.getStackStatusSafe(stackName, profile, region);
 			if (status === null) { removedStacks.add(stackName); return; } // Already gone.
 
-			const finalStatus = await cf.forceDeleteStack(stackName, profile, region, onEvent);
+			const { status: finalStatus, orphaned } = await cf.forceDeleteStack(stackName, profile, region, onEvent);
+			// Orphaned edge resources are collected whether or not the stack fully
+			// drained — they exist in AWS and must be cleaned up regardless.
+			orphanedEdge.push(...orphaned);
 			if (finalStatus === 'DELETE_COMPLETE') {
 				removedStacks.add(stackName);
 			} else {
@@ -792,14 +827,138 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			}
 		}
 
+		// Park any orphaned edge resources for deferred cleanup BEFORE the possible
+		// resetInfrastructureState below — the reset wipes infrastructureState, but
+		// pendingEdgeCleanup lives on the profile and must survive it. Kick off an
+		// opportunistic cleanup attempt too (most will be still-replicating and get
+		// left for a later retry).
+		if (orphanedEdge.length > 0) {
+			profile.pendingEdgeCleanup = [...(profile.pendingEdgeCleanup || []), ...orphanedEdge];
+			await this.saveSettings();
+			void this.cleanupOrphanedEdgeResources(profile);
+		}
+
 		if (leftoverStacks.length === 0 && !bucketCleanupFailed) {
 			await this.resetInfrastructureState(profile);
-			return { fullyCleaned: true, leftoverStacks: [] };
+			return { fullyCleaned: true, leftoverStacks: [], orphanedEdgeCount: orphanedEdge.length };
 		}
 
 		state.status = 'failed';
 		await this.saveSettings();
-		return { fullyCleaned: false, leftoverStacks };
+		return { fullyCleaned: false, leftoverStacks, orphanedEdgeCount: orphanedEdge.length };
+	}
+
+	/**
+	 * Delete Lambda@Edge functions (and their execution roles) that a force-clean
+	 * had to orphan to drain a stuck stack. These can't be deleted until CloudFront
+	 * finishes removing their edge replicas (up to a few hours), so this is a
+	 * retry-until-success pass: a still-replicating function is left in
+	 * `pendingEdgeCleanup` for a later attempt; an already-gone or successfully
+	 * deleted resource is cleared. Safe to call repeatedly (on load, or from the
+	 * Settings button). Returns how many resources were cleaned vs. still pending.
+	 */
+	async cleanupOrphanedEdgeResources(
+		profile: PublishingProfile,
+	): Promise<{ cleaned: number; stillPending: number }> {
+		const pending = profile.pendingEdgeCleanup;
+		if (!pending || pending.length === 0) return { cleaned: 0, stillPending: 0 };
+
+		let cleaned = 0;
+		const remaining: OrphanedEdgeResource[] = [];
+
+		for (const entry of pending) {
+			const next: OrphanedEdgeResource = { ...entry };
+
+			// Delete the function first. A "replicated function" error means CloudFront
+			// hasn't finished removing replicas yet — leave it (and its role) for a
+			// later retry so we don't strand the role behind a still-present function.
+			if (next.functionName) {
+				const outcome = await this.deleteOrphanedFunction(profile, next.region, next.functionName);
+				if (outcome === 'deleted' || outcome === 'gone') {
+					cleaned += 1;
+					next.functionName = undefined;
+				} else {
+					// still-replicating — keep the whole entry as-is for next time.
+					remaining.push(entry);
+					continue;
+				}
+			}
+
+			if (next.roleName) {
+				const outcome = await this.deleteOrphanedRole(profile, next.region, next.roleName);
+				if (outcome === 'deleted' || outcome === 'gone') {
+					cleaned += 1;
+					next.roleName = undefined;
+				}
+				// A role delete rarely fails transiently; if it did, we keep it below.
+			}
+
+			// Keep the entry only if something still needs deleting.
+			if (next.functionName || next.roleName) remaining.push(next);
+		}
+
+		profile.pendingEdgeCleanup = remaining.length > 0 ? remaining : undefined;
+		await this.saveSettings();
+
+		const stillPending = remaining.reduce(
+			(n, e) => n + (e.functionName ? 1 : 0) + (e.roleName ? 1 : 0),
+			0,
+		);
+		return { cleaned, stillPending };
+	}
+
+	/** Delete one orphaned Lambda@Edge function. Returns 'gone' if it no longer
+	 * exists, 'deleted' on success, or 'replicating' if CloudFront hasn't cleared
+	 * its replicas yet (retry later). Unexpected errors are logged and treated as
+	 * 'replicating' so the entry is retried rather than silently dropped. */
+	private async deleteOrphanedFunction(
+		profile: PublishingProfile,
+		region: string,
+		functionName: string,
+	): Promise<'deleted' | 'gone' | 'replicating'> {
+		const client = this.awsSdkManager.getLambdaClient(profile, region);
+		try {
+			await client.send(new DeleteFunctionCommand({ FunctionName: functionName }));
+			Logger.info(`Deleted orphaned Lambda@Edge function ${functionName}`);
+			return 'deleted';
+		} catch (err: any) {
+			const name = err?.name || err?.Code;
+			if (name === 'ResourceNotFoundException') return 'gone';
+			// CloudFront still has replicas — the canonical "not ready yet" error.
+			if (name === 'InvalidParameterValueException' || /replicated function/i.test(String(err?.message || err))) {
+				Logger.info(`Lambda@Edge ${functionName} still replicating; will retry later.`);
+				return 'replicating';
+			}
+			Logger.warn(`Could not delete orphaned Lambda function ${functionName}:`, err);
+			return 'replicating';
+		}
+	}
+
+	/** Delete one orphaned edge-function execution role: detach its managed policies
+	 * (the stack attaches AWSLambdaBasicExecutionRole) then delete it. Returns 'gone'
+	 * if it no longer exists, 'deleted' on success, or 'failed' otherwise. */
+	private async deleteOrphanedRole(
+		profile: PublishingProfile,
+		region: string,
+		roleName: string,
+	): Promise<'deleted' | 'gone' | 'failed'> {
+		const client = this.awsSdkManager.getIamClient(profile, region);
+		try {
+			const attached = await client.send(new ListAttachedRolePoliciesCommand({ RoleName: roleName }));
+			for (const policy of attached.AttachedPolicies || []) {
+				if (policy.PolicyArn) {
+					await client.send(new DetachRolePolicyCommand({ RoleName: roleName, PolicyArn: policy.PolicyArn }));
+				}
+			}
+			await client.send(new DeleteRoleCommand({ RoleName: roleName }));
+			Logger.info(`Deleted orphaned edge-fn role ${roleName}`);
+			return 'deleted';
+		} catch (err: any) {
+			const name = err?.name || err?.Code;
+			if (name === 'NoSuchEntityException') return 'gone';
+			Logger.warn(`Could not delete orphaned IAM role ${roleName}:`, err);
+			return 'failed';
+		}
 	}
 
 	async loadSettings() {

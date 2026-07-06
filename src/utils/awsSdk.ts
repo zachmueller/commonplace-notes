@@ -3,6 +3,8 @@ import { STSClient } from '@aws-sdk/client-sts';
 import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { LambdaClient } from '@aws-sdk/client-lambda';
+import { IAMClient } from '@aws-sdk/client-iam';
 import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { PublishingProfile } from '../types';
@@ -14,6 +16,10 @@ export class AwsSdkManager {
 	private stsClients: Map<string, STSClient> = new Map();
 	private cfClients: Map<string, CloudFrontClient> = new Map();
 	private ddbClients: Map<string, DynamoDBDocumentClient> = new Map();
+	// Lambda/IAM clients are keyed by `${profile.id}:${region}` — orphaned
+	// Lambda@Edge cleanup targets us-east-1, which differs from the site region.
+	private lambdaClients: Map<string, LambdaClient> = new Map();
+	private iamClients: Map<string, IAMClient> = new Map();
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
@@ -70,6 +76,41 @@ export class AwsSdkManager {
 		return client;
 	}
 
+	/**
+	 * Lambda client for deleting orphaned Lambda@Edge functions. Defaults to
+	 * us-east-1 (where all Lambda@Edge functions live), region-keyed so it never
+	 * collides with a site-region client.
+	 */
+	getLambdaClient(profile: PublishingProfile, region: string = 'us-east-1'): LambdaClient {
+		const key = `${profile.id}:${region}`;
+		const existing = this.lambdaClients.get(key);
+		if (existing) return existing;
+
+		const client = new LambdaClient({
+			region,
+			credentials: this.buildCredentialProvider(profile),
+		});
+		this.lambdaClients.set(key, client);
+		return client;
+	}
+
+	/**
+	 * IAM client for deleting orphaned edge-function execution roles. IAM is global;
+	 * the region only sets the endpoint. Keyed like the Lambda client for symmetry.
+	 */
+	getIamClient(profile: PublishingProfile, region: string = 'us-east-1'): IAMClient {
+		const key = `${profile.id}:${region}`;
+		const existing = this.iamClients.get(key);
+		if (existing) return existing;
+
+		const client = new IAMClient({
+			region,
+			credentials: this.buildCredentialProvider(profile),
+		});
+		this.iamClients.set(key, client);
+		return client;
+	}
+
 	private buildCredentialProvider(profile: PublishingProfile): AwsCredentialIdentityProvider {
 		const awsProfile = profile.awsSettings!.awsProfile;
 
@@ -106,6 +147,15 @@ export class AwsSdkManager {
 
 		const ddb = this.ddbClients.get(profileId);
 		if (ddb) { ddb.destroy(); this.ddbClients.delete(profileId); }
+
+		// Lambda/IAM maps are region-keyed (`${profileId}:${region}`) — drop every
+		// region entry for this profile.
+		for (const [key, client] of this.lambdaClients) {
+			if (key === profileId || key.startsWith(`${profileId}:`)) { client.destroy(); this.lambdaClients.delete(key); }
+		}
+		for (const [key, client] of this.iamClients) {
+			if (key === profileId || key.startsWith(`${profileId}:`)) { client.destroy(); this.iamClients.delete(key); }
+		}
 	}
 
 	dispose(): void {
@@ -113,9 +163,13 @@ export class AwsSdkManager {
 		for (const client of this.stsClients.values()) client.destroy();
 		for (const client of this.cfClients.values()) client.destroy();
 		for (const client of this.ddbClients.values()) client.destroy();
+		for (const client of this.lambdaClients.values()) client.destroy();
+		for (const client of this.iamClients.values()) client.destroy();
 		this.s3Clients.clear();
 		this.stsClients.clear();
 		this.cfClients.clear();
 		this.ddbClients.clear();
+		this.lambdaClients.clear();
+		this.iamClients.clear();
 	}
 }

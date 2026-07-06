@@ -3,6 +3,7 @@ import {
 	CreateStackCommand,
 	UpdateStackCommand,
 	DeleteStackCommand,
+	DeletionMode,
 	DescribeStacksCommand,
 	DescribeStackEventsCommand,
 	ListStackResourcesCommand,
@@ -24,7 +25,7 @@ import {
 } from '@aws-sdk/client-route-53';
 import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
-import type { PublishingProfile } from '../types';
+import type { OrphanedEdgeResource, PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
 import {
 	CERTIFICATE_TEMPLATE,
@@ -584,29 +585,53 @@ export class CloudFormationManager {
 
 	/**
 	 * Delete a stack and wait for it to be fully gone, forcing past a stuck delete.
-	 * First attempts a normal delete; if the stack lands in DELETE_FAILED, it lists
-	 * the DELETE_FAILED resources and re-issues the delete with those logical IDs in
-	 * RetainResources (orphaning e.g. a still-replicating Lambda@Edge fn), then polls
-	 * to completion. Returns the final status ('DELETE_COMPLETE' when the stack is
-	 * gone, or the terminal status if it still could not be removed).
+	 * First attempts a normal delete; if the stack lands in DELETE_FAILED it re-issues
+	 * the delete with DeletionMode FORCE_DELETE_STACK — the API behind the console's
+	 * "Force delete this entire stack", which retains every resource that can't be
+	 * deleted PLUS its dependencies (so a still-replicating Lambda@Edge fn and its
+	 * execution role) and drains the stack to DELETE_COMPLETE in a single call. This
+	 * replaces the old single-retry-with-RetainResources approach, which never handled
+	 * the auth stacks' wave failures (Version → Function → Role) and left them stuck.
+	 *
+	 * Returns the final status ('DELETE_COMPLETE' once the stack is gone) plus any edge
+	 * resources that had to be orphaned to get there, so the caller can schedule their
+	 * deferred deletion once CloudFront removes the replicas.
 	 */
 	async forceDeleteStack(
 		stackName: string,
 		profile: PublishingProfile,
 		region: string | undefined,
 		onEvent?: (event: StackEvent) => void,
-	): Promise<string> {
+	): Promise<{ status: string; orphaned: OrphanedEdgeResource[] }> {
 		const client = this.getCloudFormationClientForProfile(profile, region);
-		return this.forceDeleteStackByClient(client, stackName, onEvent);
+		const { status, orphanedFunctionName, orphanedRoleName } =
+			await this.forceDeleteStackByClient(client, stackName, onEvent);
+
+		// Only a fully-drained stack actually orphaned its resources; a stack still in
+		// DELETE_FAILED keeps owning them (it will be retried as a leftover).
+		if (status !== 'DELETE_COMPLETE' || (!orphanedFunctionName && !orphanedRoleName)) {
+			return { status, orphaned: [] };
+		}
+		return {
+			status,
+			orphaned: [{
+				stackName,
+				region: region || 'us-east-1',
+				functionName: orphanedFunctionName,
+				roleName: orphanedRoleName,
+				orphanedAt: Date.now(),
+			}],
+		};
 	}
 
 	/** Client-based core of forceDeleteStack, shared with the deploy-path recovery
-	 * guard (which holds a config-scoped client). */
+	 * guard (which holds a config-scoped client). Returns the terminal status and the
+	 * physical names of the edge fn / role that a force delete would orphan. */
 	private async forceDeleteStackByClient(
 		client: CloudFormationClient,
 		stackName: string,
 		onEvent?: (event: StackEvent) => void,
-	): Promise<string> {
+	): Promise<{ status: string; orphanedFunctionName?: string; orphanedRoleName?: string }> {
 		const pollGone = async (): Promise<string> => {
 			try {
 				return await this.pollStackUntilCompleteByClient(client, stackName, onEvent);
@@ -618,25 +643,22 @@ export class CloudFormationManager {
 
 		await client.send(new DeleteStackCommand({ StackName: stackName }));
 		let status = await pollGone();
-		if (status !== 'DELETE_FAILED') return status;
+		if (status !== 'DELETE_FAILED') return { status };
 
-		// Stuck: retain the resources that failed to delete and try once more.
+		// Stuck. Capture the edge resources a force delete will orphan NOW, while the
+		// stack still exists — a DELETE_COMPLETE stack is no longer queryable by name,
+		// and these physical names are what the deferred cleanup needs.
 		const resources = await this.listStackResourcesByClient(client, stackName);
-		const retain = resources
-			.filter(r => r.resourceStatus === 'DELETE_FAILED')
-			.map(r => r.logicalId);
-
-		// Nothing to retain means a second identical delete would just fail the same
-		// way (the blocker is stack-level, not a specific resource) — don't burn
-		// another poll cycle; report the DELETE_FAILED so the caller can advise a retry.
-		if (retain.length === 0) return status;
+		const orphanedFunctionName = resources.find(r => r.resourceType === 'AWS::Lambda::Function')?.physicalId;
+		const orphanedRoleName = resources.find(r => r.resourceType === 'AWS::IAM::Role')?.physicalId;
 
 		await client.send(new DeleteStackCommand({
 			StackName: stackName,
-			RetainResources: retain,
+			DeletionMode: DeletionMode.FORCE_DELETE_STACK,
 		}));
 		status = await pollGone();
-		return status;
+
+		return { status, orphanedFunctionName, orphanedRoleName };
 	}
 
 	async getStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<StackOutputs> {

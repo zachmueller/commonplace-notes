@@ -408,6 +408,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		this.displayDestroyInfrastructure(dangerSection, profile);
 		this.displayForceCleanLeftovers(dangerSection, profile);
+		this.displayOrphanedEdgeCleanup(dangerSection, profile);
 
 		const deleteButtonContainer = dangerSection.createDiv({ cls: 'cpn-profile-delete-container' });
 
@@ -984,12 +985,19 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 									this.appendStackEventLine(eventLog, event);
 								},
 							);
+							// When edge resources were orphaned to drain a stuck stack, they
+							// linger in AWS until CloudFront removes their replicas; the
+							// plugin retries their deletion in the background (and via the
+							// "Clean up orphaned edge resources" button).
+							const orphanNote = result.orphanedEdgeCount > 0
+								? ` ${result.orphanedEdgeCount} Lambda@Edge resource(s) were orphaned and will be cleaned up automatically once CloudFront removes their replicas (may take a few hours).`
+								: '';
 							if (result.fullyCleaned) {
-								new Notice('Leftover infrastructure cleaned. You can now redeploy.');
+								new Notice('Leftover infrastructure cleaned. You can now redeploy.' + orphanNote);
 							} else {
 								new Notice(
 									`Some stacks still could not be deleted (${result.leftoverStacks.join(', ')}). ` +
-									'Lambda@Edge replicas can take up to a few hours to clear — try again later.',
+									'Lambda@Edge replicas can take up to a few hours to clear — try again later.' + orphanNote,
 								);
 							}
 							this.renderActiveProfile();
@@ -998,6 +1006,55 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 							new Notice(`Force-clean failed: ${err instanceof Error ? err.message : String(err)}`);
 							button.setDisabled(false);
 							button.setButtonText('Force-clean');
+						}
+					});
+				return button;
+			});
+	}
+
+	/**
+	 * "Clean up orphaned edge resources" action in the Danger Zone. Shown only when a
+	 * prior force-clean orphaned Lambda@Edge resources (retained to drain a stuck
+	 * stack) that are awaiting deletion. Deletion can only succeed once CloudFront has
+	 * removed the replicas (up to a few hours); the plugin also retries automatically
+	 * on load, so this button is a manual nudge.
+	 */
+	private displayOrphanedEdgeCleanup(containerEl: HTMLElement, profile: PublishingProfile): void {
+		if (profile.publishMechanism !== 'AWS') return;
+		const pending = profile.pendingEdgeCleanup;
+		if (!pending || pending.length === 0) return;
+
+		const count = pending.reduce(
+			(n, e) => n + (e.functionName ? 1 : 0) + (e.roleName ? 1 : 0),
+			0,
+		);
+
+		new Setting(containerEl)
+			.setName(`Clean up orphaned edge resources (${count} pending)`)
+			.setDesc('A force-clean orphaned these Lambda@Edge resources so a stuck stack could be removed. They can only be deleted once CloudFront finishes removing their edge replicas (up to a few hours). The plugin retries automatically on load; use this to retry now.')
+			.addButton(button => {
+				button
+					.setButtonText('Clean up now')
+					.setClass('mod-warning')
+					.onClick(async () => {
+						button.setDisabled(true);
+						button.setButtonText('Cleaning...');
+						try {
+							const result = await this.plugin.cleanupOrphanedEdgeResources(profile);
+							if (result.stillPending === 0) {
+								new Notice('Orphaned edge resources cleaned up.');
+							} else {
+								new Notice(
+									`Cleaned ${result.cleaned}; ${result.stillPending} still replicating. ` +
+									'CloudFront can take a few hours to remove edge replicas — try again later.',
+								);
+							}
+							this.renderActiveProfile();
+						} catch (err) {
+							Logger.error('Error cleaning orphaned edge resources:', err);
+							new Notice(`Cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+							button.setDisabled(false);
+							button.setButtonText('Clean up now');
 						}
 					});
 				return button;

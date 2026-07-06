@@ -38,6 +38,34 @@ export interface PublishingProfile {
 	commentsFeedLimit?: number;
 	/** Epoch ms of the last successful Recent Comments panel refresh (8h-staleness check). */
 	commentsLastRefreshed?: number;
+	/**
+	 * Lambda@Edge resources orphaned by a force-clean (retained so a stuck stack
+	 * could reach DELETE_COMPLETE). They can't be deleted until CloudFront finishes
+	 * removing their edge replicas (hours), so they are parked here for a deferred,
+	 * retry-until-success cleanup. Lives on the profile — not infrastructureState —
+	 * because a successful teardown resets infrastructureState, and this must outlive
+	 * that reset. See CommonplaceNotesPlugin.cleanupOrphanedEdgeResources.
+	 */
+	pendingEdgeCleanup?: OrphanedEdgeResource[];
+}
+
+/**
+ * A Lambda@Edge function (and its execution role) left behind by force-clean,
+ * awaiting deletion once CloudFront removes its replicas. `functionName` /
+ * `roleName` are cleared as each is successfully deleted; the entry is dropped
+ * once both are gone.
+ */
+export interface OrphanedEdgeResource {
+	/** Stack the resource was orphaned from (for display/traceability). */
+	stackName: string;
+	/** Region the resource lives in (Lambda@Edge is always us-east-1). */
+	region: string;
+	/** Physical name of the orphaned Lambda function; cleared once deleted. */
+	functionName?: string;
+	/** Physical name of the orphaned IAM execution role; cleared once deleted. */
+	roleName?: string;
+	/** Epoch ms the resource was orphaned (so the UI can show how long ago). */
+	orphanedAt: number;
 }
 
 /**
