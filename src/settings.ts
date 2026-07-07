@@ -555,15 +555,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	private displayAWSAuthSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
 		this.initAWSSettings(profile);
 
-		if (profile.awsSettings!.awsCliPath) {
-			new Setting(containerEl)
-				.setName('AWS CLI Path (deprecated)')
-				.setDesc('This setting is no longer used. The plugin now uses the AWS SDK directly. You can clear this field.')
-				.addText(text => text
-					.setValue(profile.awsSettings?.awsCliPath || '')
-					.setDisabled(true));
-		}
-
 		new Setting(containerEl)
 			.setName('AWS account ID')
 			.setDesc('The AWS account ID to use for authentication')
@@ -628,6 +619,19 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						if (profile.awsSettings) {
 							profile.awsSettings.credentialRefreshCommands = value;
+							await this.plugin.saveSettings();
+						}
+					}));
+		} else {
+			new Setting(containerEl)
+				.setName('AWS CLI path (optional)')
+				.setDesc('Full path to the aws binary (e.g. /opt/homebrew/bin/aws). Used as a fallback to run "aws sso login" when SDK-native renewal cannot refresh an expired SSO session.')
+				.addText(text => text
+					.setPlaceholder('/opt/homebrew/bin/aws')
+					.setValue(profile.awsSettings?.awsCliPath || '')
+					.onChange(async (value) => {
+						if (profile.awsSettings) {
+							profile.awsSettings.awsCliPath = value;
 							await this.plugin.saveSettings();
 						}
 					}));

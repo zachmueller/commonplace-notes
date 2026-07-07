@@ -111,7 +111,11 @@ export interface AWSProfileSettings {
 	cloudFrontDistributionId?: string;
 	credentialMode: 'sdk' | 'custom-command';
     credentialRefreshCommands: string;
-	/** @deprecated No longer used — SDK runs natively. Will be removed in a future version. */
+	/**
+	 * Full path to the `aws` binary (e.g. `/opt/homebrew/bin/aws`). Used as a
+	 * fallback to run `aws sso login` when SDK-native renewal can't refresh an
+	 * expired SSO session (e.g. a profile without a modern `sso_session` block).
+	 */
 	awsCliPath?: string;
 }
 

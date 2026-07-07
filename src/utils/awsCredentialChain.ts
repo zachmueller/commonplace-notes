@@ -54,11 +54,37 @@ export function buildProfileCredentialProvider(awsProfile: string): AwsCredentia
 }
 
 /**
+ * Result of attempting to resolve credentials for a profile.
+ * `expiredSso` distinguishes the "SSO session needs re-login" case (which the
+ * caller can recover from by triggering a login) from other failures.
+ */
+export type CredentialResolution =
+	| { ok: true }
+	| { ok: false; expiredSso: boolean; error: Error };
+
+/**
+ * Actively resolve credentials for a profile by invoking the standard chain
+ * once. On success this also triggers the SDK's silent SSO refresh-token
+ * renewal (and rewrites the token cache) when the cached token has merely aged
+ * out. On failure it reports whether the cause looks like an expired/invalid
+ * SSO session so the caller can decide whether to trigger a re-login.
+ */
+export async function resolveProfileCredentials(awsProfile: string): Promise<CredentialResolution> {
+	try {
+		await buildProfileCredentialProvider(awsProfile)();
+		return { ok: true };
+	} catch (err) {
+		const error = err instanceof Error ? err : new Error(String(err));
+		return { ok: false, expiredSso: looksLikeExpiredSso(err), error };
+	}
+}
+
+/**
  * Heuristic: does this error indicate an expired/invalid SSO token (as opposed
  * to a missing profile or a config typo)? Covers the SSO service's typical
  * rejections and any "token"-mentioning message.
  */
-function looksLikeExpiredSso(err: unknown): boolean {
+export function looksLikeExpiredSso(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
 	const haystack = `${err.name} ${err.message}`.toLowerCase();
 	return (
