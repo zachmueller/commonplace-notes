@@ -18,6 +18,14 @@
 // page while still holding a `cpn_pw` cookie means the edge just rejected it,
 // so the page shows the error and clears the stale cookie on load.
 //
+// Navigation vs. data: only a top-level document navigation gets the HTML unlock
+// page. A gated *data* request (fetch of /notes/*.json, /static/**, config.json)
+// gets a small `401 {x-cpn-auth: required}` JSON instead — so the SPA can tell an
+// expired session apart from a missing note (and from an unrelated API 401) and
+// force a re-auth reload, rather than trying to parse the unlock HTML as note
+// JSON and rendering a misleading "no permission" error. Both responses carry an
+// `x-cpn-auth` header the client keys on.
+//
 // Feeds the SAME `AuthLambdaEdgeArn` seam as the Cognito edge fn (only one
 // viewer-request fn attaches to the default behavior at a time), so read-gating
 // is a single interchangeable axis: cognito | password | byo | none.
@@ -78,15 +86,42 @@ function passwordPage() {
 		'<input id="p" type="password" autocomplete="current-password" autofocus placeholder="Password">' +
 		'<button type="submit">Unlock</button><div id="e">Incorrect password. Try again.</div></form>' +
 		'<script>' + script + '</script></body></html>';
+	return reply('200', 'text/html; charset=UTF-8', 'password', html);
+}
+
+// Build a no-store CloudFront response tagged with the `x-cpn-auth` header the
+// SPA keys on. Shared by the unlock page and the data 401.
+function reply(status, ctype, authVal, body) {
 	return {
-		status: '200',
-		statusDescription: 'OK',
+		status: status,
 		headers: {
-			'content-type': [{ key: 'Content-Type', value: 'text/html; charset=UTF-8' }],
+			'content-type': [{ key: 'Content-Type', value: ctype }],
 			'cache-control': [{ key: 'Cache-Control', value: 'no-store' }],
+			'x-cpn-auth': [{ key: 'X-Cpn-Auth', value: authVal }],
 		},
-		body: html,
+		body: body,
 	};
+}
+
+// The data-request response for a missing/invalid cookie: a tiny JSON 401 the
+// SPA keys on (x-cpn-auth: required) to force a re-auth reload. No
+// WWW-Authenticate header, so no native Basic Auth modal.
+function authRequired() {
+	return reply('401', 'application/json', 'required', '{"error":"cpn_auth_required"}');
+}
+
+// True for a top-level document navigation (gets the HTML unlock page); false
+// for a data/subresource fetch (gets authRequired). Prefers the Fetch Metadata
+// headers, then falls back to Accept vs. the request path for older clients.
+function isNavigation(request) {
+	const h = request.headers || {};
+	const mode = h['sec-fetch-mode'] && h['sec-fetch-mode'][0].value;
+	const dest = h['sec-fetch-dest'] && h['sec-fetch-dest'][0].value;
+	if (mode === 'navigate' || dest === 'document') return true;
+	if (mode || dest) return false;
+	if (/\.json$/.test(request.uri || '')) return false;
+	const accept = h.accept && h.accept[0].value;
+	return !!accept && accept.indexOf('text/html') !== -1;
 }
 
 exports.handler = async (event) => {
@@ -95,5 +130,5 @@ exports.handler = async (event) => {
 	const cookieHeader = headers.cookie ? headers.cookie.map((h) => h.value).join('; ') : '';
 	const m = cookieHeader.match(/(?:^|;\s*)cpn_pw=([a-f0-9]{64})(?:;|$)/);
 	if (m && hexEqual(m[1], CFG.hash)) return request;
-	return passwordPage();
+	return isNavigation(request) ? passwordPage() : authRequired();
 };

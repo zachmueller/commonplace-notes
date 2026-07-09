@@ -1195,6 +1195,44 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		let noteTitleList = [];           // [{ uid, title }] (composer autocomplete)
 		let noteIndexPromise = null;
 
+		// --- Password read-gate re-auth ---------------------------------------
+		// The built-in password read-gate (password-edge.js Lambda@Edge) answers
+		// an unauthenticated request with the branded unlock page. For a top-level
+		// navigation that page is the document and the SPA never runs. But a data
+		// subresource fetch (/notes/*.json, /static/**, config.json) issued after
+		// the session cookie has silently expired ALSO hits the gate — the edge
+		// returns 401 + `x-cpn-auth: required` (and, before that edge fix ships or
+		// from an older edge, a 200 whose body is the unlock HTML). Left unhandled
+		// the client would try to parse that as note JSON, fail, and render the
+		// misleading "you may not have permission to view it" panel.
+		//
+		// This bites iPhone/Safari specifically: the cookie is set client-side via
+		// document.cookie, and Safari ITP caps script-set first-party cookies to
+		// ~7 days regardless of Max-Age, so the session lapses while the cached
+		// index document keeps running — only the subresource fetch reveals it.
+		//
+		// cpnAuthGate detects that gated response and forces a single top-level
+		// reload (which also busts bfcache) so the edge serves the unlock page as
+		// the document and the reader re-enters the password. A sessionStorage
+		// one-shot prevents an infinite reload loop if the document itself is still
+		// served from HTTP cache without a valid cookie. Returns true when the
+		// caller must stop and NOT attempt response.json().
+		function cpnAuthGate(response) {
+			const authHdr = response.headers.get('x-cpn-auth');
+			const ct = response.headers.get('content-type') || '';
+			// text/html on a data path is the pre-Fix-2 signal (unlock page served
+			// as 200); the header / 401 are the clean post-Fix-2 signals. A JSON /
+			// static data resource never legitimately returns HTML, so no false
+			// positive on real data.
+			const gated = authHdr === 'required' || response.status === 401 ||
+				(response.ok && ct.indexOf('text/html') !== -1);
+			if (!gated) return false;
+			if (sessionStorage.getItem('cpn_pw_reload') === '1') return true;
+			sessionStorage.setItem('cpn_pw_reload', '1');
+			location.reload();
+			return true;
+		}
+
 		// Create a new FlexSearch index
 		const searchIndex = new FlexSearch.Document({
 			document: {
@@ -1235,6 +1273,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			if (!noteIndexPromise) {
 				noteIndexPromise = fetch('/static/content/contentIndex.json')
 					.then(res => {
+						if (cpnAuthGate(res)) throw new Error('auth');
 						if (!res.ok) throw new Error('HTTP ' + res.status);
 						return res.json();
 					})
@@ -1438,6 +1477,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		function fetchMapping(path) {
 			if (!mappingCache.has(path)) {
 				mappingCache.set(path, fetch(path).then(r => {
+					if (cpnAuthGate(r)) throw new Error('auth');
 					if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
 					return r.json();
 				}).catch(err => { mappingCache.delete(path); throw err; }));
@@ -1487,8 +1527,10 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 
 				// Load the actual note data
 				const response = await fetch(`/notes/${hash}.json`);
+				if (cpnAuthGate(response)) return null;
 				if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 				const noteData = await response.json();
+				sessionStorage.removeItem('cpn_pw_reload');
 				// Stamp the resolved hash so the comment client has a reliable
 				// revision anchor (it is not otherwise guaranteed on noteData for
 				// u/t loads). Also firms up the permalink UI.
@@ -1535,6 +1577,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		async function loadNote(uid) {
 			try {
 				const response = await fetch(`/notes/${encodeURIComponent(uid)}.json`);
+				if (cpnAuthGate(response)) return null;
 				if (!response.ok) {
 					if (response.status === 403) {
 						throw new Error('Forbidden');
@@ -1545,6 +1588,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 					throw new Error(`HTTP error! status: ${response.status}`);
 				}
 				const noteData = await response.json();
+				sessionStorage.removeItem('cpn_pw_reload');
 				return noteData;
 			} catch (error) {
 				console.error('Error loading note:', error);
@@ -2939,6 +2983,7 @@ ${closeButton}
 			const targetHash = await resolveHash(targetType, targetValue);
 
 			const response = await fetch(`/notes/${targetHash}.json`);
+			if (cpnAuthGate(response)) throw new Error('auth');
 			if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 			const targetNote = await response.json();
 

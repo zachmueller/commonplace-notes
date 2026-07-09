@@ -63,8 +63,28 @@ const appJs = appScriptMatch[1].trim();
 // racing the fetch. The panel/comment init runs on the window `load` event,
 // which usually fires after this fetch resolves — but nothing guarantees it,
 // so awaiting the promise removes the race entirely.
+// config.json is served by the same CloudFront default behavior as the notes
+// data, so a lapsed password read-gate session (see cpnAuthGate in the app
+// script — notably Safari ITP silently expiring the client-set cookie after
+// ~7 days) makes this earliest-on-every-load fetch come back gated: 401 +
+// `x-cpn-auth: required`, or a 200 whose body is the unlock HTML. This inline
+// bootstrap runs before app.js, so it can't call cpnAuthGate; it inlines the
+// same one-shot-reload guard so the edge re-serves the unlock page as the
+// document and the reader re-enters the password instead of loading configless.
 const CONFIG_BOOTSTRAP = `window.__CPN_CONFIG_READY__ = fetch('config.json')
-  .then(r => r.ok ? r.json() : null)
+  .then(r => {
+    var ct = r.headers.get('content-type') || '';
+    if (r.headers.get('x-cpn-auth') === 'required' || r.status === 401 || (r.ok && ct.indexOf('text/html') !== -1)) {
+      if (sessionStorage.getItem('cpn_pw_reload') !== '1') {
+        sessionStorage.setItem('cpn_pw_reload', '1');
+        location.reload();
+      }
+      return null;
+    }
+    if (!r.ok) return null;
+    sessionStorage.removeItem('cpn_pw_reload');
+    return r.json();
+  })
   .then(config => {
     if (!config) return;
     // Expose parsed config for the app (e.g. the comment client reads the

@@ -33,11 +33,17 @@ function check(cond: boolean, msg: string) {
 const PASSWORD = 'correct horse battery staple';
 const HASH = crypto.createHash('sha256').update(PASSWORD, 'utf8').digest('hex');
 
-// Build a CloudFront viewer-request event with an optional Cookie header.
-function event(cookie?: string) {
+// Build a CloudFront viewer-request event. `cookie` sets the Cookie header;
+// `uri` overrides the request path (default '/'); `extraHeaders` seeds arbitrary
+// lowercase-keyed request headers (e.g. sec-fetch-mode, accept) so tests can
+// exercise the navigation-vs-data branch.
+function event(cookie?: string, uri = '/', extraHeaders: Record<string, string> = {}) {
 	const headers: any = {};
 	if (cookie !== undefined) headers.cookie = [{ key: 'Cookie', value: cookie }];
-	return { Records: [{ cf: { request: { uri: '/', querystring: '', headers } } }] };
+	for (const [k, v] of Object.entries(extraHeaders)) {
+		headers[k] = [{ key: k, value: v }];
+	}
+	return { Records: [{ cf: { request: { uri, querystring: '', headers } } }] };
 }
 
 function loadHandler() {
@@ -75,30 +81,64 @@ async function main() {
 		return report();
 	}
 
+	const authHdr = (r: any) => r?.headers?.['x-cpn-auth']?.[0]?.value;
 	const isPage = (r: any) =>
 		r && r.status === '200' && /text\/html/.test(r.headers?.['content-type']?.[0]?.value || '') &&
-		typeof r.body === 'string' && /<form/.test(r.body);
-	const isPassthrough = (r: any) => r && r.uri === '/' && !r.status; // returned the request object
+		typeof r.body === 'string' && /<form/.test(r.body) && authHdr(r) === 'password';
+	const isAuthJson = (r: any) =>
+		r && r.status === '401' && /application\/json/.test(r.headers?.['content-type']?.[0]?.value || '') &&
+		typeof r.body === 'string' && !/<form/.test(r.body) && r.body.includes('cpn_auth_required') &&
+		authHdr(r) === 'required';
+	const isPassthrough = (r: any) => r && r.uri && !r.status; // returned the request object
 
-	// Valid cookie (hash of the password) -> pass through.
-	check(isPassthrough(await handler(event('cpn_pw=' + HASH))), 'valid cpn_pw cookie passes through');
+	// A top-level navigation is signalled by sec-fetch-mode (modern browsers) or,
+	// as a fallback for older iOS, an Accept: text/html on a non-.json path.
+	const NAV = { 'sec-fetch-mode': 'navigate' };
+	// A subresource/data fetch: fetch() with sec-fetch-dest empty (or simply a
+	// .json path when Sec-Fetch is absent).
+	const DATA = { 'sec-fetch-dest': 'empty' };
+
+	// Valid cookie (hash of the password) -> pass through, regardless of kind.
+	check(isPassthrough(await handler(event('cpn_pw=' + HASH, '/', NAV))), 'valid cpn_pw cookie passes through');
 	check(
-		isPassthrough(await handler(event('foo=1; cpn_pw=' + HASH + '; bar=2'))),
+		isPassthrough(await handler(event('foo=1; cpn_pw=' + HASH + '; bar=2', '/', NAV))),
 		'valid cpn_pw cookie among others passes through',
 	);
+	check(
+		isPassthrough(await handler(event('cpn_pw=' + HASH, '/notes/abc.json', DATA))),
+		'valid cpn_pw cookie on a .json data request passes through',
+	);
 
-	// Missing / wrong / malformed cookie -> the unlock page.
-	check(isPage(await handler(event())), 'missing cookie -> unlock page');
-	check(isPage(await handler(event('cpn_pw=' + 'f'.repeat(64)))), 'wrong hash -> unlock page');
-	check(isPage(await handler(event('cpn_pw=notahash'))), 'malformed cookie value -> unlock page');
-	check(isPage(await handler(event('other=1'))), 'unrelated cookie -> unlock page');
+	// Missing / wrong / malformed cookie on a NAVIGATION -> the unlock page.
+	check(isPage(await handler(event(undefined, '/', NAV))), 'missing cookie (navigate) -> unlock page');
+	check(
+		isPage(await handler(event(undefined, '/some/note', { accept: 'text/html,application/xhtml+xml' }))),
+		'missing cookie (Accept: text/html fallback) -> unlock page',
+	);
+	check(isPage(await handler(event('cpn_pw=' + 'f'.repeat(64), '/', NAV))), 'wrong hash (navigate) -> unlock page');
+	check(isPage(await handler(event('cpn_pw=notahash', '/', NAV))), 'malformed cookie (navigate) -> unlock page');
+	check(isPage(await handler(event('other=1', '/', NAV))), 'unrelated cookie (navigate) -> unlock page');
+
+	// Missing / invalid cookie on a DATA request -> a 401 JSON, NOT the unlock HTML.
+	check(isAuthJson(await handler(event(undefined, '/notes/abc.json', DATA))), 'missing cookie (.json data) -> 401 JSON');
+	check(isAuthJson(await handler(event(undefined, '/notes/abc.json'))), 'missing cookie (.json, no Sec-Fetch) -> 401 JSON');
+	check(isAuthJson(await handler(event(undefined, '/config.json', DATA))), 'missing cookie (config.json) -> 401 JSON');
+	check(
+		isAuthJson(await handler(event('cpn_pw=' + 'f'.repeat(64), '/static/mapping/uid-to-hash.json', DATA))),
+		'wrong hash on a /static .json data request -> 401 JSON',
+	);
 
 	// The unlock page must never leak the plaintext and must surface the realm heading.
-	const page = await handler(event());
+	const page = await handler(event(undefined, '/', NAV));
 	check(!page.body.includes(PASSWORD), 'unlock page does not contain the plaintext password');
 	check(page.body.includes('My Notes'), 'unlock page shows the site name (CFG.realm) as heading');
 	check(/no-store/.test(page.headers['cache-control'][0].value), 'unlock page is not cached');
 	check(!/www-authenticate/i.test(JSON.stringify(page.headers)), 'no Basic Auth challenge header');
+
+	// The data 401 must also carry no-store and no Basic Auth challenge.
+	const denied = await handler(event(undefined, '/notes/abc.json', DATA));
+	check(/no-store/.test(denied.headers['cache-control'][0].value), '401 data response is not cached');
+	check(!/www-authenticate/i.test(JSON.stringify(denied.headers)), 'no Basic Auth challenge header on 401');
 
 	report();
 }
