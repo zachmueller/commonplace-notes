@@ -27,6 +27,7 @@
 		"test:site-config-matrix": "npx tsx e2e/scripts/test-site-config-matrix.ts",
 		"test:asset-customizations": "npx tsx e2e/scripts/test-asset-customizations.ts",
 		"test:password-edge": "npx tsx e2e/scripts/test-password-edge.ts",
+		"test:lambda-zip": "npx tsx e2e/scripts/test-lambda-zip.ts",
 		"test:deployment-variants": "npx tsx e2e/scripts/deployment-variants-e2e.ts",
 		"test:parser": "npx tsx e2e/scripts/test-parser-pipeline.ts",
 		"test:parser:capture-golden": "npx tsx e2e/scripts/capture-parser-golden.ts > e2e/fixtures/parser-golden.json",

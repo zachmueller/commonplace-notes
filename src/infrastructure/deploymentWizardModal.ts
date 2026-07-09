@@ -10,7 +10,7 @@ import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Lowercase hex sha256 via Web Crypto (available in Obsidian's Electron renderer). */
-async function sha256Hex(input: string): Promise<string> {
+export async function sha256Hex(input: string): Promise<string> {
 	const data = new TextEncoder().encode(input);
 	const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
 	return Array.from(new Uint8Array(digest))
@@ -979,7 +979,11 @@ export class DeploymentWizardModal extends Modal {
 				if (this.config.passwordValue) {
 					this.config.passwordHash = await sha256Hex(this.config.passwordValue);
 				}
-				const pwStack = await this.cfManager.deployPasswordAuthStack(this.config as DeploymentConfig);
+				const pwStack = await this.cfManager.deployPasswordAuthStack(
+					this.config as DeploymentConfig,
+					this.activeProfile,
+					(e) => this.appendEvent(eventLog, e),
+				);
 				await this.updateInfraState({ status: 'password-deploying' });
 				const pwStatus = await this.cfManager.pollStackUntilComplete(
 					pwStack, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',

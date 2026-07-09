@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { readInlineLambda } from './inline-code';
 
 /**
  * Built-in password read-gate sub-stack (branded HTML unlock page).
@@ -11,30 +10,34 @@ import { readInlineLambda } from './inline-code';
  * full-site stack. The full-site gating mechanism is untouched — this just
  * produces an interchangeable read-gate ARN (cognito | password | byo).
  *
- * The plugin computes sha256(password) and passes only the hash; the plaintext
- * never leaves the plugin. The hash is baked into the inline edge-fn code via
- * Fn::Sub, so (like the Cognito CFG) it is visible to anyone with AWS read
- * access to the account — acceptable for a shared low-sensitivity read password.
+ * Packaging: the edge fn code is an **S3 asset** (`Code: { S3Bucket, S3Key }`),
+ * not inline `ZipFile`. The plugin composes the function source (baking in a
+ * `const CFG = { hash, realm }` line — the plaintext password never leaves the
+ * plugin; only its sha256 hash is baked in), zips it, and uploads it to the
+ * per-account bootstrap bucket at a content-addressed key BEFORE deploying this
+ * stack. This escapes the 4096-byte inline cap that the branded unlock page had
+ * outgrown. Because the key is content-addressed, any code/config change yields
+ * a new key -> the CfnFunction's Code changes on update -> CloudFormation
+ * publishes a fresh Lambda@Edge version (CloudFront rejects $LATEST and only
+ * re-points when the version ARN changes).
  *
- * All L1 (Cfn*) constructs + inline Lambda code so synth produces a
- * self-contained JSON TemplateBody with no asset staging.
+ * Config could not stay a CloudFormation parameter here: an S3 asset cannot be
+ * templated into, and Lambda@Edge forbids environment variables — hence the
+ * bake-into-the-zip approach. The stack now takes the artifact location
+ * (AssetsBucket/AssetsKey) instead of PasswordHash/Realm.
  */
 export class PasswordAuthStack extends cdk.Stack {
 	constructor(scope: Construct, id: string, props?: cdk.StackProps) {
 		super(scope, id, props);
 
-		const passwordHash = new cdk.CfnParameter(this, 'PasswordHash', {
+		const assetsBucket = new cdk.CfnParameter(this, 'AssetsBucket', {
 			type: 'String',
-			noEcho: true,
-			description: 'Lowercase hex sha256 of the shared read password (computed plugin-side)',
+			description: 'Name of the us-east-1 bootstrap bucket holding the edge-fn code zip',
 		});
 
-		// Kept the param name `Realm` (avoids a template migration); it now feeds
-		// the heading/title of the branded unlock page rather than a Basic Auth realm.
-		const realm = new cdk.CfnParameter(this, 'Realm', {
+		const assetsKey = new cdk.CfnParameter(this, 'AssetsKey', {
 			type: 'String',
-			default: 'Protected',
-			description: 'Site name shown as the heading on the password unlock page',
+			description: 'S3 key of the content-addressed edge-fn code zip (config baked in)',
 		});
 
 		const edgeRole = new cdk.aws_iam.CfnRole(this, 'EdgeFnRole', {
@@ -51,23 +54,19 @@ export class PasswordAuthStack extends cdk.Stack {
 			managedPolicyArns: ['arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'],
 		});
 
-		// Inject CFG ahead of the verbatim (comment-stripped) body. The body
-		// contains no `${...}` or backticks, so Fn::Join carries it safely.
-		const body = readInlineLambda('password-edge.js');
-		const cfgLine = cdk.Fn.sub(
-			'const CFG = { hash: "${Hash}", realm: "${Realm}" };\n',
-			{ Hash: passwordHash.valueAsString, Realm: realm.valueAsString },
-		);
-		const zipFile = cdk.Fn.join('', [cfgLine, body]);
-
 		const edgeFn = new cdk.aws_lambda.CfnFunction(this, 'PasswordEdgeFn', {
 			runtime: 'nodejs20.x',
 			handler: 'index.handler',
 			role: edgeRole.attrArn,
-			code: { zipFile },
+			code: {
+				s3Bucket: assetsBucket.valueAsString,
+				s3Key: assetsKey.valueAsString,
+			},
 		});
 
-		// Lambda@Edge requires a *versioned* ARN; CloudFront rejects $LATEST.
+		// Lambda@Edge requires a *versioned* ARN; CloudFront rejects $LATEST. The
+		// content-addressed AssetsKey means a code/config change alters the
+		// function's Code, so CloudFormation publishes a new version on update.
 		const edgeVersion = new cdk.aws_lambda.CfnVersion(this, 'PasswordEdgeFnVersion', {
 			functionName: edgeFn.ref,
 		});

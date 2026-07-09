@@ -2,8 +2,8 @@
 /**
  * Password Edge Function Test
  *
- * Loads the shipped PASSWORD_AUTH_TEMPLATE's inline edge-fn body (the exact code
- * that deploys to Lambda@Edge) into a Node vm with a stub CFG, and exercises the
+ * Loads the shipped PASSWORD_EDGE_BODY (the exact code the plugin bakes a CFG
+ * line onto, zips, and deploys to Lambda@Edge) into a Node vm, and exercises the
  * viewer-request handler against CloudFront-style events:
  *   - valid `cpn_pw` cookie (= sha256 of the password) -> request passes through
  *   - missing / wrong / malformed cookie -> 200 with the branded unlock page
@@ -20,10 +20,14 @@ import * as crypto from 'crypto';
 import * as templatesModule from '../../src/infrastructure/templates';
 
 const templates: any =
-	(templatesModule as any).PASSWORD_AUTH_TEMPLATE !== undefined
+	(templatesModule as any).PASSWORD_EDGE_BODY !== undefined
 		? templatesModule
 		: (templatesModule as any).default;
-const PASSWORD_AUTH_TEMPLATE: string = templates.PASSWORD_AUTH_TEMPLATE;
+// The edge fn is now packaged as an S3 asset: the plugin bakes a `const CFG =
+// {...}` line ahead of this shipped body and zips it. The template no longer
+// carries the code, so load the handler directly from the exported body + a stub
+// CFG (mirroring how the plugin composes the deployable source).
+const PASSWORD_EDGE_BODY: string = templates.PASSWORD_EDGE_BODY;
 
 const failures: string[] = [];
 function check(cond: boolean, msg: string) {
@@ -47,14 +51,12 @@ function event(cookie?: string, uri = '/', extraHeaders: Record<string, string> 
 }
 
 function loadHandler() {
-	const tmpl = JSON.parse(PASSWORD_AUTH_TEMPLATE);
-	const join = tmpl.Resources.PasswordEdgeFn.Properties.Code.ZipFile['Fn::Join'][1];
-	const body: string = join[1]; // verbatim function body (CFG line is join[0])
+	// Compose exactly as the plugin does: a baked CFG line + the shipped body.
+	const cfgLine = `const CFG = { hash: ${JSON.stringify(HASH)}, realm: ${JSON.stringify('My Notes')} };\n`;
+	const source = cfgLine + PASSWORD_EDGE_BODY;
 
-	// Provide the CFG the stack would inject via Fn::Sub, plus a CommonJS-style
-	// module/exports + require('crypto') so the inline body runs unmodified.
+	// CommonJS-style module/exports + require('crypto') so the body runs unmodified.
 	const sandbox: any = {
-		CFG: { hash: HASH, realm: 'My Notes' },
 		module: { exports: {} },
 		exports: {},
 		require: (m: string) => {
@@ -64,14 +66,14 @@ function loadHandler() {
 		Buffer,
 	};
 	sandbox.module.exports = sandbox.exports;
-	vm.runInNewContext(body, sandbox, { filename: 'password-edge.inlined.js' });
+	vm.runInNewContext(source, sandbox, { filename: 'password-edge.baked.js' });
 	return sandbox.exports.handler as (e: any) => Promise<any>;
 }
 
 async function main() {
 	check(HASH !== PASSWORD, 'sanity: hash differs from plaintext');
 	check(/^[0-9a-f]{64}$/.test(HASH), 'sanity: hash is 64 hex chars');
-	check(!PASSWORD_AUTH_TEMPLATE.includes(PASSWORD), 'template must not contain the plaintext password');
+	check(!PASSWORD_EDGE_BODY.includes(PASSWORD), 'edge body must not contain the plaintext password');
 
 	let handler: (e: any) => Promise<any>;
 	try {

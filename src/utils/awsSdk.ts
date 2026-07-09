@@ -37,6 +37,26 @@ export class AwsSdkManager {
 		return client;
 	}
 
+	/**
+	 * S3 client scoped to an explicit region, keyed by `${profile.id}:${region}`.
+	 * The default getS3Client is pinned to the SITE region; uploading Lambda@Edge
+	 * code artifacts targets the us-east-1 bootstrap bucket, which differs. Mirrors
+	 * getLambdaClient's region-keyed caching so it never collides with the
+	 * site-region client.
+	 */
+	getS3ClientForRegion(profile: PublishingProfile, region: string): S3Client {
+		const key = `${profile.id}:${region}`;
+		const existing = this.s3Clients.get(key);
+		if (existing) return existing;
+
+		const client = new S3Client({
+			region,
+			credentials: this.buildCredentialProvider(profile),
+		});
+		this.s3Clients.set(key, client);
+		return client;
+	}
+
 	getSTSClient(profile: PublishingProfile): STSClient {
 		const existing = this.stsClients.get(profile.id);
 		if (existing) return existing;
@@ -116,8 +136,11 @@ export class AwsSdkManager {
 	}
 
 	invalidateClients(profileId: string): void {
-		const s3 = this.s3Clients.get(profileId);
-		if (s3) { s3.destroy(); this.s3Clients.delete(profileId); }
+		// S3 map holds both the site-region client (keyed by profileId) and any
+		// region-keyed clients (`${profileId}:${region}`) — drop them all.
+		for (const [key, client] of this.s3Clients) {
+			if (key === profileId || key.startsWith(`${profileId}:`)) { client.destroy(); this.s3Clients.delete(key); }
+		}
 
 		const sts = this.stsClients.get(profileId);
 		if (sts) { sts.destroy(); this.stsClients.delete(profileId); }

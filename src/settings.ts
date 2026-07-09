@@ -2,7 +2,8 @@ import { App, DropdownComponent, Modal, Notice, PluginSettingTab, Setting, Sugge
 import CommonplaceNotesPlugin from './main';
 import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from './types';
 import { Logger } from './utils/logging';
-import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
+import { DeploymentWizardModal, sha256Hex } from './infrastructure/deploymentWizardModal';
+import type { DeploymentConfig } from './infrastructure/types';
 import { DnsAssistantModal } from './infrastructure/dnsAssistantModal';
 import { ImportStackModal } from './infrastructure/importStackModal';
 import { googleOAuthUrls } from './infrastructure/cognitoUrls';
@@ -717,6 +718,20 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						this.openAuthLambdaModal(profile);
 					}));
 
+			// Password read-gate: offer an in-place upgrade to the S3-asset edge
+			// packaging (escapes the 4096-byte inline cap and Safari ITP cookie
+			// limits). Shown only for password-gated sites.
+			if (state.readGateMode === 'password' && state.passwordAuth?.stackName) {
+				new Setting(containerEl)
+					.setName('Password gate')
+					.setDesc('Rebuild the password gate on the latest edge function (S3-asset packaging).')
+					.addButton(btn => btn
+						.setButtonText('Upgrade')
+						.onClick(() => {
+							this.openUpgradePasswordGateModal(profile);
+						}));
+			}
+
 			// Google sign-in: the Cognito Hosted UI URLs the user must register
 			// in their Google OAuth client. Persisted from the deploy, shown here
 			// (with copy buttons) so they're always retrievable — otherwise the
@@ -1301,6 +1316,136 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 							new Notice(`Update failed: ${err.message}`);
 							btn.setDisabled(false);
 							btn.setButtonText('Update Stack');
+						}
+					}));
+		};
+
+		modal.open();
+	}
+
+	/**
+	 * Rebuild the password read-gate on the current (S3-asset) edge packaging.
+	 * Delete-and-recreate the cpn-password-<variant> stack (it owns only the edge
+	 * fn + role + version — no stateful data), then re-point the site's
+	 * AuthLambdaEdgeArn at the new version. Migrates sites deployed on the old
+	 * inline template shape and lets any site pick up new edge code.
+	 *
+	 * The password is re-entered here: it's needed to bake the sha256 hash into
+	 * the uploaded zip, and imported sites don't have the hash persisted.
+	 */
+	private openUpgradePasswordGateModal(profile: PublishingProfile): void {
+		const state = profile.infrastructureState;
+		if (!state || !profile.awsSettings) return;
+
+		const modal = new Modal(this.app);
+		let passwordValue = '';
+
+		modal.onOpen = () => {
+			modal.titleEl.setText('Upgrade password gate');
+
+			modal.contentEl.createEl('p', {
+				text: 'Rebuilds the password gate on the latest edge function. Re-enter the site password so it can be baked into the new function package. The gate stays active throughout; readers already holding a valid session are unaffected.',
+				cls: 'cpn-wizard-description',
+			});
+
+			new Setting(modal.contentEl)
+				.setName('Password')
+				.setDesc('The shared read password for this site')
+				.addText(text => {
+					text.inputEl.type = 'password';
+					text
+						.setPlaceholder('Enter the site password')
+						.onChange(v => { passwordValue = v; });
+				});
+
+			const statusEl = modal.contentEl.createDiv();
+
+			new Setting(modal.contentEl)
+				.addButton(btn => btn
+					.setButtonText('Cancel')
+					.onClick(() => modal.close()))
+				.addButton(btn => btn
+					.setButtonText('Upgrade')
+					.setCta()
+					.onClick(async () => {
+						if (!passwordValue) {
+							new Notice('Enter the site password to continue.');
+							return;
+						}
+						btn.setDisabled(true);
+						btn.setButtonText('Upgrading...');
+						statusEl.empty();
+						const cfm = this.plugin.cloudFormationManager;
+						const onEvent = (event: { logicalResourceId: string; status: string }) => {
+							const line = statusEl.createDiv({ cls: 'cpn-wizard-event-line' });
+							if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+								line.addClass('cpn-event-error');
+							} else if (event.status.includes('COMPLETE')) {
+								line.addClass('cpn-event-success');
+							}
+							line.setText(`${event.logicalResourceId} - ${event.status}`);
+						};
+						try {
+							const variantName = state.variantName || '';
+							const config: DeploymentConfig = {
+								profileId: profile.id,
+								variantName,
+								s3Prefix: profile.awsSettings!.s3Prefix || '',
+								customDomain: state.customDomain || '',
+								useRoute53: state.useRoute53,
+								hostedZoneId: state.hostedZoneId || '',
+								hostedZoneName: state.hostedZoneName || '',
+								region: state.region || profile.awsSettings!.region,
+								awsProfile: profile.awsSettings!.awsProfile,
+								originAccessMethod: state.originAccessMethod,
+								readGateMode: 'password',
+								passwordHash: await sha256Hex(passwordValue),
+							};
+
+							// Delete-and-recreate the password stack so the template-shape
+							// change (PasswordHash/Realm params -> AssetsBucket/AssetsKey)
+							// is unambiguous. The stack owns no stateful data.
+							const pwStackName = cfm.getStackName(variantName, 'password');
+							await cfm.forceDeleteStack(pwStackName, profile, 'us-east-1', onEvent);
+
+							const recreated = await cfm.deployPasswordAuthStack(config, profile, onEvent);
+							const pwStatus = await cfm.pollStackUntilComplete(recreated, profile, onEvent, 'us-east-1');
+							if (pwStatus !== 'CREATE_COMPLETE') {
+								throw new Error(`Password stack recreation ended with status: ${pwStatus}`);
+							}
+							const { edgeFunctionVersionArn } = await cfm.getPasswordAuthOutputs(recreated, profile);
+
+							// Re-point the site distribution at the new edge version.
+							await cfm.updateFullStackAuthLambda(
+								state.fullStackName!,
+								state.originAccessMethod,
+								edgeFunctionVersionArn,
+								profile,
+								state.region,
+							);
+							const fullStatus = await cfm.pollStackUntilComplete(
+								state.fullStackName!, profile, onEvent, state.region,
+							);
+							if (fullStatus !== 'UPDATE_COMPLETE') {
+								throw new Error(`Site update ended with status: ${fullStatus}`);
+							}
+
+							state.authLambdaEdgeArn = edgeFunctionVersionArn;
+							state.passwordAuth = {
+								stackName: recreated,
+								edgeFunctionVersionArn,
+								passwordHash: config.passwordHash,
+							};
+							profile.readGate = { mode: 'password', passwordHash: config.passwordHash };
+							await this.plugin.saveSettings();
+							modal.close();
+							this.renderActiveProfile();
+							new Notice('Password gate upgraded successfully.');
+						} catch (err: any) {
+							Logger.error('Error upgrading password gate:', err);
+							new Notice(`Upgrade failed: ${err.message}`);
+							btn.setDisabled(false);
+							btn.setButtonText('Upgrade');
 						}
 					}));
 		};

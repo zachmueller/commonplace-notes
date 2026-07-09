@@ -40,6 +40,17 @@ export function readInlineLambda(filename: string): string {
 }
 
 /**
+ * Compact a Lambda source WITHOUT the 4096-byte inline cap. For functions
+ * packaged as an S3 asset (not inline `ZipFile`), the cap does not apply — the
+ * plugin bakes config in and zips the result. Same comment/blank stripping as
+ * the inline path, so a baked S3 artifact is byte-identical to what the inline
+ * path would have produced for the same config.
+ */
+export function compactLambdaSource(filename: string): string {
+	return compactSource(filename);
+}
+
+/**
  * Concatenate several inline Lambda sources into one ZipFile body (in order),
  * compacting each. Used to share a helper (e.g. lib-jwt-verify.js) across
  * single-file inline functions that cannot `require` a sibling module.

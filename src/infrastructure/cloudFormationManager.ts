@@ -13,7 +13,10 @@ import {
 	ListObjectVersionsCommand,
 	DeleteObjectsCommand,
 	DeleteBucketCommand,
+	PutObjectCommand,
+	HeadObjectCommand,
 } from '@aws-sdk/client-s3';
+import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import {
 	ACMClient,
 	DescribeCertificateCommand,
@@ -29,13 +32,16 @@ import type { OrphanedEdgeResource, PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
 import { buildProfileCredentialProvider } from '../utils/awsCredentialChain';
 import {
+	BOOTSTRAP_TEMPLATE,
 	CERTIFICATE_TEMPLATE,
 	COGNITO_AUTH_TEMPLATE,
 	COMMENT_STACK_TEMPLATE,
 	FULL_STACK_OAC_TEMPLATE,
 	FULL_STACK_OAI_TEMPLATE,
 	PASSWORD_AUTH_TEMPLATE,
+	PASSWORD_EDGE_BODY,
 } from './templates';
+import { buildLambdaZip, sha256HexBytes } from './lambdaZip';
 import type {
 	CertificateMatch,
 	CognitoAuthOutputs,
@@ -136,6 +142,11 @@ export function mapCognitoOutputs(o: Record<string, string>): CognitoAuthOutputs
 /** Map a password auth stack's outputs (just the edge fn version ARN). */
 export function mapPasswordOutputs(o: Record<string, string>): { edgeFunctionVersionArn: string } {
 	return { edgeFunctionVersionArn: o['EdgeFunctionVersionArn'] || '' };
+}
+
+/** Map the bootstrap stack's outputs (the Lambda@Edge code assets bucket name). */
+export function mapBootstrapOutputs(o: Record<string, string>): { assetsBucketName: string } {
+	return { assetsBucketName: o['AssetsBucketNameOutput'] || '' };
 }
 
 /** Map a comment stack's outputs into CommentStackOutputs. */
@@ -352,22 +363,176 @@ export class CloudFormationManager {
 		return mapCognitoOutputs(outputsToRecord(stack.Outputs));
 	}
 
+	// ---- Bootstrap (Lambda@Edge code assets bucket) ------------------------
+
 	/**
-	 * Deploy the built-in password (HTTP Basic Auth) read-gate sub-stack. Pinned
-	 * to us-east-1 (Lambda@Edge) with CAPABILITY_IAM. Only the sha256 hash is
-	 * passed; the plaintext password never leaves the plugin.
+	 * Compute the per-account assets bucket name. Globally unique + stable per
+	 * account so every variant shares one bucket. Account id comes from STS
+	 * GetCallerIdentity (cached on the profile after the first deploy).
 	 */
-	async deployPasswordAuthStack(config: DeploymentConfig): Promise<string> {
+	private async resolveAssetsBucketName(profile: PublishingProfile): Promise<string> {
+		let accountId = profile.awsSettings?.awsAccountId;
+		if (!accountId) {
+			const sts = this.plugin.awsSdkManager.getSTSClient(profile);
+			const identity = await sts.send(new GetCallerIdentityCommand({}));
+			accountId = identity.Account;
+		}
+		if (!accountId) throw new Error('Could not resolve AWS account id for the assets bucket name');
+		return `cpn-assets-${accountId}-us-east-1`;
+	}
+
+	/**
+	 * Ensure the per-account bootstrap stack (the us-east-1 Lambda@Edge code
+	 * assets bucket) exists, and return the bucket name. Idempotent: if the stack
+	 * is already live it is left untouched. Deployed before any edge stack that
+	 * references an S3-asset code artifact.
+	 */
+	async ensureBootstrapStack(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
+		const stackName = this.getStackName('', 'bootstrap');
+		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const bucketName = await this.resolveAssetsBucketName(profile);
+
+		// Already live? Nothing to do — return the existing bucket name.
+		try {
+			const existing = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+			const status = existing.Stacks?.[0]?.StackStatus;
+			if (status && (status === 'CREATE_COMPLETE' || status === 'UPDATE_COMPLETE')) {
+				return mapBootstrapOutputs(outputsToRecord(existing.Stacks?.[0]?.Outputs)).assetsBucketName || bucketName;
+			}
+		} catch (err: any) {
+			if (!/does not exist/i.test(String(err?.message || err))) throw err;
+		}
+
+		await this.recoverFailedStackBeforeCreate(client, stackName);
+		await client.send(new CreateStackCommand({
+			StackName: stackName,
+			TemplateBody: BOOTSTRAP_TEMPLATE,
+			Parameters: [
+				{ ParameterKey: 'AssetsBucketName', ParameterValue: bucketName },
+			],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+		const status = await this.pollStackUntilComplete(stackName, profile, onEvent || (() => {}), 'us-east-1');
+		if (status !== 'CREATE_COMPLETE') {
+			throw new Error(`Bootstrap stack deployment failed: ${status}`);
+		}
+		const out = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		return mapBootstrapOutputs(outputsToRecord(out.Stacks?.[0]?.Outputs)).assetsBucketName || bucketName;
+	}
+
+	/**
+	 * Compose the password edge fn source (baking a `const CFG = { hash, realm }`
+	 * line ahead of the shipped body — the same shape the old inline Fn::Sub used),
+	 * zip it, and upload to the bootstrap bucket at a content-addressed key. Returns
+	 * the bucket + key for the stack's AssetsBucket/AssetsKey params. The key embeds
+	 * the zip's sha256 so any code/config change yields a new key -> a new Lambda
+	 * version on the next stack update. Upload is skipped if the object already
+	 * exists (identical content), keeping re-deploys cheap.
+	 */
+	async packagePasswordEdge(
+		profile: PublishingProfile,
+		bucketName: string,
+		passwordHash: string,
+		realm: string,
+	): Promise<{ bucket: string; key: string }> {
+		// JSON.stringify escapes the values safely into the CFG object literal.
+		const cfgLine = `const CFG = { hash: ${JSON.stringify(passwordHash)}, realm: ${JSON.stringify(realm)} };\n`;
+		const source = cfgLine + PASSWORD_EDGE_BODY;
+		const zip = buildLambdaZip(source);
+		const hash = await sha256HexBytes(zip);
+		const key = `lambda/password-edge/${hash}.zip`;
+
+		const s3 = this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
+		// Skip the upload when the identical artifact is already present.
+		let exists = false;
+		try {
+			await s3.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
+			exists = true;
+		} catch {
+			exists = false;
+		}
+		if (!exists) {
+			await s3.send(new PutObjectCommand({
+				Bucket: bucketName,
+				Key: key,
+				Body: zip,
+				ContentType: 'application/zip',
+			}));
+		}
+		return { bucket: bucketName, key };
+	}
+
+	/**
+	 * Deploy the built-in password read-gate sub-stack. Pinned to us-east-1
+	 * (Lambda@Edge) with CAPABILITY_IAM. The edge fn code is an S3 asset: the
+	 * bootstrap bucket is ensured, the config-baked zip is uploaded, and the stack
+	 * is created pointing at that artifact. Only the sha256 hash is ever baked in;
+	 * the plaintext password never leaves the plugin.
+	 */
+	async deployPasswordAuthStack(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'password');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
-		await this.recoverFailedStackBeforeCreate(client, stackName);
 
+		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
+		const { bucket, key } = await this.packagePasswordEdge(
+			profile, bucketName, config.passwordHash || '', config.variantName || 'Protected',
+		);
+
+		await this.recoverFailedStackBeforeCreate(client, stackName);
 		await client.send(new CreateStackCommand({
 			StackName: stackName,
 			TemplateBody: PASSWORD_AUTH_TEMPLATE,
 			Parameters: [
-				{ ParameterKey: 'PasswordHash', ParameterValue: config.passwordHash || '' },
-				{ ParameterKey: 'Realm', ParameterValue: config.variantName || 'Protected' },
+				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
+				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+			],
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	/**
+	 * Update an existing password auth stack to a freshly-packaged edge artifact
+	 * (new password and/or new edge code). Re-packages + uploads the zip, then
+	 * UpdateStack with the new content-addressed AssetsKey, which changes the
+	 * function's Code and makes CloudFormation publish a new Lambda@Edge version.
+	 * The caller then re-points the site via updateFullStackAuthLambda.
+	 */
+	async updatePasswordAuthStack(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'password');
+		const client = this.getCloudFormationClient(config, 'us-east-1');
+
+		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
+		const { bucket, key } = await this.packagePasswordEdge(
+			profile, bucketName, config.passwordHash || '', config.variantName || 'Protected',
+		);
+
+		await client.send(new UpdateStackCommand({
+			StackName: stackName,
+			TemplateBody: PASSWORD_AUTH_TEMPLATE,
+			Parameters: [
+				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
+				{ ParameterKey: 'AssetsKey', ParameterValue: key },
 			],
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
@@ -1164,7 +1329,10 @@ export class CloudFormationManager {
 		};
 	}
 
-	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'password' | 'comment'): string {
+	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'password' | 'comment' | 'bootstrap'): string {
+		// The bootstrap (Lambda@Edge assets) stack is one-per-account, not
+		// per-variant, so it takes no suffix.
+		if (type === 'bootstrap') return 'cpn-bootstrap';
 		const suffix = variantName || 'default';
 		switch (type) {
 			case 'cert': return `cpn-cert-${suffix}`;
