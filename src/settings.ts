@@ -1,6 +1,6 @@
 import { App, DropdownComponent, Modal, Notice, PluginSettingTab, Setting, SuggestModal, TFile } from 'obsidian';
 import CommonplaceNotesPlugin from './main';
-import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink } from './types';
+import { PublishingProfile, IndicatorStyle, SiteCustomization, HeaderLink, NamedStyle, ThemeColors } from './types';
 import { Logger } from './utils/logging';
 import { DeploymentWizardModal, sha256Hex } from './infrastructure/deploymentWizardModal';
 import type { DeploymentConfig } from './infrastructure/types';
@@ -1562,18 +1562,144 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		const lightSection = themeDetails.createDiv();
 		lightSection.createEl('h5', { text: 'Light mode' });
-		this.displayThemeColorInputs(lightSection, 'light', custom, index);
+		this.displayThemeColorInputs(lightSection, 'light', custom.themeOverrides.light ?? {},
+			() => this.ensureSiteCustomization(index).themeOverrides);
 
 		const darkSection = themeDetails.createDiv();
 		darkSection.createEl('h5', { text: 'Dark mode' });
-		this.displayThemeColorInputs(darkSection, 'dark', custom, index);
+		this.displayThemeColorInputs(darkSection, 'dark', custom.themeOverrides.dark ?? {},
+			() => this.ensureSiteCustomization(index).themeOverrides);
+
+		// Named styles (per-note; referenced by the `cpn-style` frontmatter value)
+		this.displayNamedStylesSettings(containerEl, custom, index);
 	}
 
+	/**
+	 * Per-profile "Named styles" editor. Each entry maps a style name (the value
+	 * a note puts in `cpn-style`) to scoped light/dark color overrides + an
+	 * optional font. Overrides layer on top of the global theme on the published
+	 * site; a note naming an undefined style falls back to default styling.
+	 */
+	private displayNamedStylesSettings(containerEl: HTMLElement, custom: SiteCustomization, index: number) {
+		const stylesContainer = containerEl.createDiv({ cls: 'cpn-named-styles-container' });
+		const stylesDetails = stylesContainer.createEl('details');
+		stylesDetails.createEl('summary', { text: 'Named styles (per-note)' });
+		stylesDetails.createEl('p', {
+			text: 'Define styles a note can select via the "cpn-style" frontmatter property. Overrides layer on top of the site theme; unknown names fall back to default styling.',
+			cls: 'setting-item-description',
+		});
+
+		const namedStyles = custom.namedStyles ?? {};
+		const names = Object.keys(namedStyles);
+
+		for (const name of names) {
+			const style = namedStyles[name];
+			const styleSection = stylesDetails.createDiv({ cls: 'cpn-named-style' });
+
+			// Style name (rekeys the record on change). `currentName` tracks the
+			// live key so color/font/remove handlers keep targeting this entry
+			// even after a rename, without a full re-render on every keystroke.
+			let currentName = name;
+			new Setting(styleSection)
+				.setName('Style name')
+				.setDesc('Used as the cpn-style value')
+				.addText(text => text
+					.setPlaceholder('e.g. ai')
+					.setValue(currentName)
+					.onChange(async (value) => {
+						const next = value.trim();
+						const styles = this.ensureNamedStyles(index);
+						// Ignore empty or colliding names (can't be referenced / would clobber).
+						if (!next || (next !== currentName && styles[next] !== undefined)) {
+							return;
+						}
+						const existing = styles[currentName] ?? {};
+						delete styles[currentName];
+						styles[next] = existing;
+						currentName = next;
+						await this.plugin.saveSettings();
+					}))
+				.addButton(button => button
+					.setButtonText('Remove')
+					.setWarning()
+					.onClick(async () => {
+						delete this.ensureNamedStyles(index)[currentName];
+						await this.plugin.saveSettings();
+						this.renderActiveProfile();
+					}));
+
+			new Setting(styleSection)
+				.setName('Font family')
+				.setDesc('Optional CSS font-family for notes using this style')
+				.addText(text => text
+					.setPlaceholder('inherit')
+					.setValue(style.fontFamily ?? '')
+					.onChange(async (value) => {
+						const target = this.ensureNamedStyle(index, currentName);
+						const trimmed = value.trim();
+						if (trimmed) {
+							target.fontFamily = trimmed;
+						} else {
+							delete target.fontFamily;
+						}
+						await this.plugin.saveSettings();
+					}));
+
+			const lightSection = styleSection.createDiv();
+			lightSection.createEl('h5', { text: 'Light mode' });
+			this.displayThemeColorInputs(lightSection, 'light', style.light ?? {},
+				() => this.ensureNamedStyle(index, currentName));
+
+			const darkSection = styleSection.createDiv();
+			darkSection.createEl('h5', { text: 'Dark mode' });
+			this.displayThemeColorInputs(darkSection, 'dark', style.dark ?? {},
+				() => this.ensureNamedStyle(index, currentName));
+		}
+
+		new Setting(stylesDetails)
+			.addButton(button => button
+				.setButtonText('Add style')
+				.onClick(async () => {
+					const styles = this.ensureNamedStyles(index);
+					// Mint a unique placeholder key so the new row is editable immediately.
+					let n = 1;
+					let name = 'style';
+					while (styles[name] !== undefined) {
+						name = `style-${++n}`;
+					}
+					styles[name] = {};
+					await this.plugin.saveSettings();
+					this.renderActiveProfile();
+				}));
+	}
+
+	private ensureNamedStyles(index: number): Record<string, NamedStyle> {
+		const custom = this.ensureSiteCustomization(index);
+		if (!custom.namedStyles) {
+			custom.namedStyles = {};
+		}
+		return custom.namedStyles;
+	}
+
+	private ensureNamedStyle(index: number, name: string): NamedStyle {
+		const styles = this.ensureNamedStyles(index);
+		if (!styles[name]) {
+			styles[name] = {};
+		}
+		return styles[name];
+	}
+
+	/**
+	 * Render the five light/dark color inputs for a theme-colors target. Shared
+	 * by the global site theme (`themeOverrides`) and per-note named styles — both
+	 * expose a `{ light?; dark? }` container, supplied lazily via `ensureTarget`
+	 * so each onChange mutates the current object (which may be created on demand).
+	 */
 	private displayThemeColorInputs(
 		containerEl: HTMLElement,
 		mode: 'light' | 'dark',
-		custom: SiteCustomization,
-		index: number
+		colors: ThemeColors,
+		ensureTarget: () => { light?: ThemeColors; dark?: ThemeColors }
 	) {
 		const defaults: Record<'light' | 'dark', Record<string, string>> = {
 			light: {
@@ -1592,8 +1718,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			},
 		};
 
-		const colors = custom.themeOverrides[mode] ?? {};
-		const fields: { name: string; key: keyof typeof colors }[] = [
+		const fields: { name: string; key: keyof ThemeColors }[] = [
 			{ name: 'Background (primary)', key: 'bgPrimary' },
 			{ name: 'Background (secondary)', key: 'bgSecondary' },
 			{ name: 'Text color', key: 'textPrimary' },
@@ -1610,11 +1735,11 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					text.inputEl.style.width = '50px';
 					text.setValue(colors[field.key] || defaultColor)
 						.onChange(async (value) => {
-							const siteCustom = this.ensureSiteCustomization(index);
-							if (!siteCustom.themeOverrides[mode]) {
-								siteCustom.themeOverrides[mode] = {};
+							const target = ensureTarget();
+							if (!target[mode]) {
+								target[mode] = {};
 							}
-							siteCustom.themeOverrides[mode]![field.key] = value;
+							target[mode]![field.key] = value;
 							await this.plugin.saveSettings();
 						});
 					return text;
@@ -1622,9 +1747,9 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				.addButton(button => button
 					.setButtonText('Reset')
 					.onClick(async () => {
-						const siteCustom = this.ensureSiteCustomization(index);
-						if (siteCustom.themeOverrides[mode]) {
-							delete siteCustom.themeOverrides[mode]![field.key];
+						const target = ensureTarget();
+						if (target[mode]) {
+							delete target[mode]![field.key];
 						}
 						await this.plugin.saveSettings();
 						const colorInput = button.buttonEl.parentElement?.querySelector('input[type="color"]') as HTMLInputElement | null;

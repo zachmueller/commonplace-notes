@@ -1822,6 +1822,16 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			panel.dataset.uid = noteData.uid;
 			panel.dataset.slug = noteData.slug || '';
 
+			// Per-note named style: add the marker class the config bootstrap
+			// injected scoped CSS for (window.__cpnStyleClass keeps the class name
+			// and the injected selector in perfect agreement, and sanitizes so a
+			// frontmatter value can't break out into extra classes). If the class
+			// isn't defined in config.styles it simply has no rule ⇒ default look.
+			// Error/diff panels intentionally stay unstyled.
+			if (!isError && !isDiff && noteData.style && window.__cpnStyleClass) {
+				panel.classList.add(window.__cpnStyleClass(noteData.style));
+			}
+
 			const closeButton = `
 				<button class="close-button" aria-label="Close panel">×</button>
 			`;

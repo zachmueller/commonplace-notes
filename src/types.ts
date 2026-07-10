@@ -182,10 +182,24 @@ export interface ThemeOverrides {
 	dark?: ThemeColors;
 }
 
+/**
+ * A per-note style referenced by the `cpn-style` frontmatter value. Reuses the
+ * global theme's light/dark color shape and adds an optional theme-independent
+ * font override. Overrides layer on top of the profile-wide theme — a style
+ * only declares the variables it wants to change; everything else inherits.
+ */
+export interface NamedStyle {
+	light?: ThemeColors;
+	dark?: ThemeColors;
+	fontFamily?: string;
+}
+
 export interface SiteCustomization {
 	siteTitle: string;
 	headerLinks: HeaderLink[];
 	panelWidth: number;
 	fontFamily: string;
 	themeOverrides: ThemeOverrides;
+	/** Named per-note styles, keyed by the `cpn-style` value. Optional ⇒ no migration. */
+	namedStyles?: Record<string, NamedStyle>;
 }

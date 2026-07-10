@@ -18,6 +18,7 @@ interface NoteState {
 	content: string;  // HTML content
 	raw: string;	  // Raw Markdown
 	lastModified: number;
+	style: string | null;  // `cpn-style` frontmatter value, resolved client-side per profile
 }
 
 interface BacklinkInfo {
@@ -224,8 +225,14 @@ export class NoteManager {
 
 			// Calculate current hash over the scrubbed raw so toggling the setting
 			// or a target gaining/losing a UID correctly re-publishes the note.
+			// The `cpn-style` value is appended only when present, so notes without
+			// a style keep their existing hash (no mass re-publish on rollout) while
+			// changing/setting a style still re-stages that note.
 			const title = this.plugin.frontmatterManager.getNoteTitle(file);
-			const currentHash = await this.getSHA1Hash(`${uid}::${title}::${scrubbedRaw}`);
+			const style = this.plugin.frontmatterManager.getNoteStyle(file);
+			const currentHash = await this.getSHA1Hash(
+				`${uid}::${title}::${scrubbedRaw}${style ? `::style=${style}` : ''}`
+			);
 
 			// Load publish history to determine prior hash
 			const history = await this.loadPublishHistory(profileId);
@@ -242,7 +249,8 @@ export class NoteManager {
 				// resolveInternalLinks can resolve them; see rewriteRawWikilinks.
 				content: await this.markdownToHtml(raw, file, profileId),
 				raw: scrubbedRaw,
-				lastModified: file.stat.mtime
+				lastModified: file.stat.mtime,
+				style
 			};
 
 			const key = `${profileId}:${uid}`;
@@ -330,7 +338,8 @@ export class NoteManager {
 			backlinks,
 			hash: noteState.currentHash,
 			priorHash: noteState.priorHash,
-			lastUpdated: noteState.lastModified
+			lastUpdated: noteState.lastModified,
+			style: noteState.style
 		};
 
 		// Write to staging directory

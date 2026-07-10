@@ -174,6 +174,16 @@ export class FrontmatterManager {
 		}
 	}
 
+	/**
+	 * Named style for this note, from the `cpn-style` frontmatter string. Each
+	 * publish context resolves this name against its own style registry; an
+	 * unknown name falls back to default styling on the published site.
+	 */
+	getNoteStyle(file: TFile): string | null {
+		const v = this.getFrontmatterValue(file, 'cpn-style');
+		return typeof v === 'string' && v.trim() ? v.trim() : null;
+	}
+
     add(file: TFile, updates: Record<string, any>) {
         const path = file.path;
         if (!this.queue.has(path)) {

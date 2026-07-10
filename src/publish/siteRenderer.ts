@@ -1,4 +1,4 @@
-import { PublishingProfile, HeaderLink, SiteCustomization } from '../types';
+import { PublishingProfile, HeaderLink, SiteCustomization, ThemeColors } from '../types';
 import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, FLEXSEARCH_MIN_JS, VENDOR_JS } from './siteAssets';
 import { applyIndexHtmlSlots, applyStylesCssSlots } from './assetCustomizations/parse';
 import type { AssetCustomization } from './assetCustomizations/types';
@@ -76,6 +76,22 @@ export function renderAppJs(): string {
 	return SITE_APP_JS;
 }
 
+/**
+ * Serialize a set of theme colors into a kebab-case CSS-variable map, emitting
+ * only the keys that are actually set (mirrors the per-key guards the global
+ * theme has always used). The `--` prefix is added at runtime, not here.
+ */
+function emitThemeVars(colors: ThemeColors | undefined): Record<string, string> {
+	const vars: Record<string, string> = {};
+	if (!colors) return vars;
+	if (colors.bgPrimary) vars['bg-primary'] = colors.bgPrimary;
+	if (colors.bgSecondary) vars['bg-secondary'] = colors.bgSecondary;
+	if (colors.textPrimary) vars['text-primary'] = colors.textPrimary;
+	if (colors.linkColor) vars['link-color'] = colors.linkColor;
+	if (colors.borderColor) vars['border-color'] = colors.borderColor;
+	return vars;
+}
+
 export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: string): string {
 	const custom = getCustomization(profile);
 
@@ -89,33 +105,32 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 		config.fontFamily = custom.fontFamily;
 	}
 
-	const hasLightOverrides = custom.themeOverrides.light && Object.values(custom.themeOverrides.light).some(v => v);
-	const hasDarkOverrides = custom.themeOverrides.dark && Object.values(custom.themeOverrides.dark).some(v => v);
+	const light = emitThemeVars(custom.themeOverrides.light);
+	const dark = emitThemeVars(custom.themeOverrides.dark);
 
-	if (hasLightOverrides || hasDarkOverrides) {
+	if (Object.keys(light).length || Object.keys(dark).length) {
 		const theme: Record<string, Record<string, string>> = {};
-
-		if (hasLightOverrides && custom.themeOverrides.light) {
-			theme.light = {};
-			const light = custom.themeOverrides.light;
-			if (light.bgPrimary) theme.light['bg-primary'] = light.bgPrimary;
-			if (light.bgSecondary) theme.light['bg-secondary'] = light.bgSecondary;
-			if (light.textPrimary) theme.light['text-primary'] = light.textPrimary;
-			if (light.linkColor) theme.light['link-color'] = light.linkColor;
-			if (light.borderColor) theme.light['border-color'] = light.borderColor;
-		}
-
-		if (hasDarkOverrides && custom.themeOverrides.dark) {
-			theme.dark = {};
-			const dark = custom.themeOverrides.dark;
-			if (dark.bgPrimary) theme.dark['bg-primary'] = dark.bgPrimary;
-			if (dark.bgSecondary) theme.dark['bg-secondary'] = dark.bgSecondary;
-			if (dark.textPrimary) theme.dark['text-primary'] = dark.textPrimary;
-			if (dark.linkColor) theme.dark['link-color'] = dark.linkColor;
-			if (dark.borderColor) theme.dark['border-color'] = dark.borderColor;
-		}
-
+		if (Object.keys(light).length) theme.light = light;
+		if (Object.keys(dark).length) theme.dark = dark;
 		config.theme = theme;
+	}
+
+	// Per-note named styles (referenced by the note's `cpn-style`). Each entry
+	// carries only the light/dark vars + optional font it wants to override;
+	// unset properties inherit the global theme client-side. Absent name ⇒
+	// silent fallback. Emit only styles that actually declare something.
+	if (custom.namedStyles && Object.keys(custom.namedStyles).length) {
+		const styles: Record<string, Record<string, unknown>> = {};
+		for (const [name, style] of Object.entries(custom.namedStyles)) {
+			const styleLight = emitThemeVars(style.light);
+			const styleDark = emitThemeVars(style.dark);
+			const entry: Record<string, unknown> = {};
+			if (Object.keys(styleLight).length) entry.light = styleLight;
+			if (Object.keys(styleDark).length) entry.dark = styleDark;
+			if (style.fontFamily) entry.font = style.fontFamily;
+			if (Object.keys(entry).length) styles[name] = entry;
+		}
+		if (Object.keys(styles).length) config.styles = styles;
 	}
 
 	// Commenting + built-in auth (consumed by the comment client via

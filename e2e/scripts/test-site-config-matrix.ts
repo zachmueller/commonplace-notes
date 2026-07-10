@@ -160,6 +160,72 @@ function testConfigMatrix() {
 }
 
 // ---------------------------------------------------------------------------
+// Theme overrides + per-note named styles (config.theme / config.styles)
+// ---------------------------------------------------------------------------
+
+/** Render config.json from a profile carrying only a siteCustomization block. */
+function customConfig(siteCustomization: any): Record<string, any> {
+	const profile = {
+		name: 'T', id: 't', lastFullPublishTimestamp: 0, excludedDirectories: [],
+		baseUrl: '', homeNotePath: '', isPublic: true, publishContentIndex: false,
+		publishMechanism: 'AWS', indicator: { style: 'color', color: '#000' },
+		siteCustomization,
+	} as unknown as PublishingProfile;
+	return JSON.parse(renderConfigJson(profile));
+}
+
+function testStylesAndTheme() {
+	// --- emitThemeVars refactor: config.theme regression ---
+	// Only set keys are emitted, camelCase → kebab-case, and a side with no set
+	// keys is omitted entirely (guards preserved by the refactor).
+	const themed = customConfig({
+		siteTitle: 'N', headerLinks: [], panelWidth: 600, fontFamily: '',
+		themeOverrides: {
+			light: { bgPrimary: '#fff', linkColor: '#0366d6' },
+			dark: {},
+		},
+	});
+	check('theme: light emitted with kebab keys',
+		JSON.stringify(themed.theme?.light) === JSON.stringify({ 'bg-primary': '#fff', 'link-color': '#0366d6' }),
+		JSON.stringify(themed.theme?.light));
+	check('theme: empty dark side omitted', themed.theme?.dark === undefined, JSON.stringify(themed.theme?.dark));
+
+	// No overrides ⇒ no theme key at all.
+	const noTheme = customConfig({ siteTitle: 'N', headerLinks: [], panelWidth: 600, fontFamily: '', themeOverrides: {} });
+	check('theme: absent when nothing set', noTheme.theme === undefined, JSON.stringify(noTheme.theme));
+
+	// --- config.styles emission ---
+	const styled = customConfig({
+		siteTitle: 'N', headerLinks: [], panelWidth: 600, fontFamily: '',
+		themeOverrides: {},
+		namedStyles: {
+			ai: {
+				light: { bgPrimary: '#f0f0f5' },
+				dark: { bgPrimary: '#01030a' },
+				fontFamily: 'monospace',
+			},
+			// Only a font, no colors — still emitted.
+			serif: { fontFamily: 'Georgia, serif' },
+			// Fully empty — must be dropped entirely.
+			empty: {},
+		},
+	});
+	check('styles: present', styled.styles !== undefined, JSON.stringify(styled.styles));
+	check('styles: ai.light kebab var', styled.styles?.ai?.light?.['bg-primary'] === '#f0f0f5', JSON.stringify(styled.styles?.ai));
+	check('styles: ai.dark kebab var', styled.styles?.ai?.dark?.['bg-primary'] === '#01030a');
+	check('styles: ai.font emitted as font', styled.styles?.ai?.font === 'monospace', JSON.stringify(styled.styles?.ai?.font));
+	check('styles: font-only style kept', styled.styles?.serif?.font === 'Georgia, serif' && styled.styles?.serif?.light === undefined, JSON.stringify(styled.styles?.serif));
+	check('styles: empty style dropped', styled.styles?.empty === undefined, JSON.stringify(styled.styles?.empty));
+
+	// No namedStyles ⇒ no styles key.
+	check('styles: absent when no namedStyles', noTheme.styles === undefined, JSON.stringify(noTheme.styles));
+
+	// A namedStyles record whose only entry is empty ⇒ no styles key.
+	const allEmpty = customConfig({ siteTitle: 'N', headerLinks: [], panelWidth: 600, fontFamily: '', themeOverrides: {}, namedStyles: { x: {} } });
+	check('styles: absent when all entries empty', allEmpty.styles === undefined, JSON.stringify(allEmpty.styles));
+}
+
+// ---------------------------------------------------------------------------
 // cognitoUrls helpers
 // ---------------------------------------------------------------------------
 
@@ -188,6 +254,7 @@ function testCognitoUrls() {
 
 function main() {
 	testConfigMatrix();
+	testStylesAndTheme();
 	testCognitoUrls();
 
 	if (failures.length === 0) {

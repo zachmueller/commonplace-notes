@@ -71,7 +71,14 @@ const appJs = appScriptMatch[1].trim();
 // bootstrap runs before app.js, so it can't call cpnAuthGate; it inlines the
 // same one-shot-reload guard so the edge re-serves the unlock page as the
 // document and the reader re-enters the password instead of loading configless.
-const CONFIG_BOOTSTRAP = `window.__CPN_CONFIG_READY__ = fetch('config.json')
+const CONFIG_BOOTSTRAP = `// Per-note style class helper. Defined synchronously (before app.js / any
+// panel mounts) so createPanel can always derive the marker class, and shared
+// with the style-injection below so the class name and its CSS selector always
+// agree. Sanitizes so a frontmatter value can't inject extra classes/selectors.
+window.__cpnStyleClass = function (name) {
+  return 'cpn-style-' + String(name).replace(/[^A-Za-z0-9_-]/g, '');
+};
+window.__CPN_CONFIG_READY__ = fetch('config.json')
   .then(r => {
     var ct = r.headers.get('content-type') || '';
     if (r.headers.get('x-cpn-auth') === 'required' || r.status === 401 || (r.ok && ct.indexOf('text/html') !== -1)) {
@@ -102,6 +109,52 @@ const CONFIG_BOOTSTRAP = `window.__CPN_CONFIG_READY__ = fetch('config.json')
     }
     applyTheme();
     new MutationObserver(applyTheme).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+
+    // Per-note named styles: inject one <style> mapping each style name to
+    // panel-scoped CSS-var overrides. We mirror the base stylesheet's own theme
+    // selectors so a style's light vars apply only in light contexts and its
+    // dark vars only in dark contexts, and toggling data-theme / the OS scheme
+    // is handled by the cascade — no JS re-apply needed. Each side sets only the
+    // vars it declares, so unset properties inherit the global theme ("layer on
+    // top"), and multiple differently-styled panels coexist. The font override
+    // is theme-independent, so it's emitted once. An unknown cpn-style name has
+    // no rule here ⇒ the panel silently falls back to default styling.
+    if (config.styles) {
+      var cssParts = [];
+      var emitVars = function (vars) {
+        var out = '';
+        Object.entries(vars || {}).forEach(function (pair) { out += '--' + pair[0] + ':' + pair[1] + ';'; });
+        return out;
+      };
+      Object.entries(config.styles).forEach(function (pair) {
+        var sel = '.' + window.__cpnStyleClass(pair[0]);
+        var style = pair[1] || {};
+        var lightVars = emitVars(style.light);
+        var darkVars = emitVars(style.dark);
+        // Gate each side to match applyTheme's isDark logic exactly (dark =
+        // data-theme=dark OR (no toggle AND OS dark); light = everything else,
+        // including prefers-color-scheme:no-preference). Gating light behind
+        // "not dark" (rather than "prefers light") covers no-preference AND
+        // stops a style that only declares one side from leaking into the other.
+        if (lightVars) {
+          cssParts.push('[data-theme="light"] ' + sel + '{' + lightVars + '}');
+          cssParts.push('@media not all and (prefers-color-scheme: dark){:root:not([data-theme="dark"]) ' + sel + '{' + lightVars + '}}');
+        }
+        if (darkVars) {
+          cssParts.push('[data-theme="dark"] ' + sel + '{' + darkVars + '}');
+          cssParts.push('@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) ' + sel + '{' + darkVars + '}}');
+        }
+        if (style.font) {
+          cssParts.push(sel + '{font-family:' + style.font + ';}');
+        }
+      });
+      if (cssParts.length) {
+        var styleEl = document.createElement('style');
+        styleEl.id = 'cpn-note-styles';
+        styleEl.textContent = cssParts.join('');
+        document.head.appendChild(styleEl);
+      }
+    }
   })
   .catch(() => {});`;
 
