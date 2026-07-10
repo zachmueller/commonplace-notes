@@ -357,6 +357,18 @@ summary[data-callout-title]::-webkit-details-marker {
 	--callout-color: var(--callout-quote);
 }
 
+/* Blockquotes (plain Markdown `> ...`; callouts are styled via [data-callout-type]) */
+.content blockquote {
+	margin: 1em 0;
+	padding: 0.4em 1em;
+	border-left: 4px solid var(--border-color);
+	color: var(--text-secondary);
+}
+
+.content blockquote p {
+	margin: 0.4em 0;
+}
+
 /* Tables */
 .content table {
 	border-collapse: collapse;
