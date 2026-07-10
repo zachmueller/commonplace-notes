@@ -9,6 +9,22 @@
 	cursor: default;
 }
 
+.cpn-publish-indicator--color {
+	width: 12px;
+	height: 12px;
+	display: inline-block;
+	margin-right: 4px;
+	border-radius: 2px;
+}
+
+.cpn-publish-indicator--emoji {
+	margin-right: 4px;
+}
+
+.cpn-color-input {
+	width: 50px;
+}
+
 .cpn-tooltip {
 	position: relative;
 }
@@ -64,17 +80,6 @@
 
 .cpn-settings-section {
 	margin-bottom: 1.5em;
-}
-
-.cpn-settings-section-heading {
-	font-size: 0.85em;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	color: var(--text-muted);
-	margin-bottom: 0.5em;
-	padding-bottom: 0.25em;
-	border-bottom: 1px solid var(--background-modifier-border);
 }
 
 /* Infrastructure Deployment Wizard */

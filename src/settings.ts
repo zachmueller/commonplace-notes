@@ -50,7 +50,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		// Global (non-profile) settings
-		containerEl.createEl('h2', {text: 'General'});
+		new Setting(containerEl).setName('General').setHeading();
 
 		new Setting(containerEl)
 			.setName('UID length')
@@ -98,7 +98,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 		this.renderParserSettings(containerEl);
 
-		containerEl.createEl('h2', {text: 'Publishing profiles'});
+		new Setting(containerEl).setName('Publishing profiles').setHeading();
 
 		// Profile selector dropdown
 		new Setting(containerEl)
@@ -137,7 +137,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	 * Notor's per-tool settings wiring). Stage edits take effect on next publish.
 	 */
 	private renderParserSettings(containerEl: HTMLElement): void {
-		containerEl.createEl('h2', { text: 'Markdown parser' });
+		new Setting(containerEl).setName('Markdown parser').setHeading();
 
 		new Setting(containerEl)
 			.setName('CPN directory')
@@ -258,7 +258,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 	private createSection(parent: HTMLElement, title: string): HTMLElement {
 		const section = parent.createDiv({ cls: 'cpn-settings-section' });
-		section.createEl('h4', { text: title, cls: 'cpn-settings-section-heading' });
+		new Setting(section).setName(title).setHeading();
 		return section;
 	}
 
@@ -429,7 +429,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 							button.setClass('mod-error');
 							isConfirmState = true;
 
-							setTimeout(() => {
+							window.setTimeout(() => {
 								if (isConfirmState) {
 									button.setButtonText('Delete profile');
 									button.setClass('mod-warning');
@@ -439,7 +439,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						} else {
 							profileContainer.addClass('removing');
 
-							setTimeout(async () => {
+							window.setTimeout(async () => {
 								this.plugin.settings.publishingProfiles.splice(index, 1);
 								await this.plugin.saveSettings();
 								this.plugin.registerProfileCommands();
@@ -943,7 +943,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 								button.setClass('mod-error');
 								isConfirmState = true;
 
-								setTimeout(() => {
+								window.setTimeout(() => {
 									if (isConfirmState) {
 										button.setButtonText('Unlink');
 										button.setClass('mod-warning');
@@ -1561,12 +1561,12 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		themeDetails.createEl('summary', { text: 'Theme color overrides' });
 
 		const lightSection = themeDetails.createDiv();
-		lightSection.createEl('h5', { text: 'Light mode' });
+		new Setting(lightSection).setName('Light mode').setHeading();
 		this.displayThemeColorInputs(lightSection, 'light', custom.themeOverrides.light ?? {},
 			() => this.ensureSiteCustomization(index).themeOverrides);
 
 		const darkSection = themeDetails.createDiv();
-		darkSection.createEl('h5', { text: 'Dark mode' });
+		new Setting(darkSection).setName('Dark mode').setHeading();
 		this.displayThemeColorInputs(darkSection, 'dark', custom.themeOverrides.dark ?? {},
 			() => this.ensureSiteCustomization(index).themeOverrides);
 
@@ -1646,12 +1646,12 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 					}));
 
 			const lightSection = styleSection.createDiv();
-			lightSection.createEl('h5', { text: 'Light mode' });
+			new Setting(lightSection).setName('Light mode').setHeading();
 			this.displayThemeColorInputs(lightSection, 'light', style.light ?? {},
 				() => this.ensureNamedStyle(index, currentName));
 
 			const darkSection = styleSection.createDiv();
-			darkSection.createEl('h5', { text: 'Dark mode' });
+			new Setting(darkSection).setName('Dark mode').setHeading();
 			this.displayThemeColorInputs(darkSection, 'dark', style.dark ?? {},
 				() => this.ensureNamedStyle(index, currentName));
 		}
@@ -1732,7 +1732,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				.setName(field.name)
 				.addText(text => {
 					text.inputEl.type = 'color';
-					text.inputEl.style.width = '50px';
+					text.inputEl.addClass('cpn-color-input');
 					text.setValue(colors[field.key] || defaultColor)
 						.onChange(async (value) => {
 							const target = ensureTarget();

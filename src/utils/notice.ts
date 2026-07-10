@@ -25,7 +25,7 @@ export class NoticeManager {
 	private static stopLoadingAnimation(notice: Notice) {
 		const interval = this.animationIntervals.get(notice);
 		if (interval) {
-			clearInterval(interval);
+			window.clearInterval(interval);
 			this.animationIntervals.delete(notice);
 		}
 	}
@@ -46,7 +46,7 @@ export class NoticeManager {
 			this.stopLoadingAnimation(notice);
 			if (successMessage) {
 				notice.setMessage(`✓ ${successMessage}`);
-				setTimeout(() => notice.hide(), 4000);
+				window.setTimeout(() => notice.hide(), 4000);
 			} else {
 				notice.hide();
 			}
@@ -58,10 +58,10 @@ export class NoticeManager {
 			Logger.error(error.message);
 			if (errorMessage) {
 				notice.setMessage(`❌ ${errorMessage}`);
-				setTimeout(() => notice.hide(), 8000);
+				window.setTimeout(() => notice.hide(), 8000);
 			} else {
 				notice.setMessage(`❌ Error: ${error.message}`);
-				setTimeout(() => notice.hide(), 8000);
+				window.setTimeout(() => notice.hide(), 8000);
 			}
 			
 			Logger.error('Operation failed:', error);
@@ -91,7 +91,7 @@ export class NoticeManager {
 			this.stopLoadingAnimation(notice);
 			if (successMessage) {
 				notice.setMessage(`✓ ${successMessage}`);
-				setTimeout(() => notice.hide(), 4000);
+				window.setTimeout(() => notice.hide(), 4000);
 			} else {
 				notice.hide();
 			}
@@ -102,10 +102,10 @@ export class NoticeManager {
 			Logger.error(error.message);
 			if (errorMessage) {
 				notice.setMessage(`❌ ${errorMessage}`);
-				setTimeout(() => notice.hide(), 8000);
+				window.setTimeout(() => notice.hide(), 8000);
 			} else {
 				notice.setMessage(`❌ Error: ${error.message}`);
-				setTimeout(() => notice.hide(), 8000);
+				window.setTimeout(() => notice.hide(), 8000);
 			}
 
 			Logger.error('Operation failed:', error);
@@ -115,7 +115,7 @@ export class NoticeManager {
 
 	static cleanup() {
 		for (const [notice, interval] of this.animationIntervals) {
-			clearInterval(interval);
+			window.clearInterval(interval);
 			notice.hide();
 		}
 		this.animationIntervals.clear();

@@ -80,15 +80,13 @@ export class IndicatorManager {
 		indicator.addClass('cpn-publish-indicator');
 		
 		if (profile.indicator.style === 'color') {
-			indicator.style.backgroundColor = profile.indicator.color || '#000000';
-			indicator.style.width = '12px';
-			indicator.style.height = '12px';
-			indicator.style.display = 'inline-block';
-			indicator.style.marginRight = '4px';
-			indicator.style.borderRadius = '2px';
+			indicator.addClass('cpn-publish-indicator--color');
+			// Dynamic (user-chosen) color goes through setCssStyles rather than a
+			// static class; the swatch's size/shape/margin live in the CSS class.
+			indicator.setCssStyles({ backgroundColor: profile.indicator.color || '#000000' });
 		} else {
 			indicator.setText(profile.indicator.emoji || '📝');
-			indicator.style.marginRight = '4px';
+			indicator.addClass('cpn-publish-indicator--emoji');
 		}
 
 		// Add tooltip
