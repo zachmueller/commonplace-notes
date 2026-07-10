@@ -644,6 +644,27 @@ body.panel-resizing {
 	margin-right: 40px; /* adjust heading to accommodate close button */
 }
 
+/* Pin the note title at the top of the panel's own scroll container so the reader
+   always sees which note the panel holds while the body scrolls under it. Excludes
+   error/diff panels (their markup differs and has no long body). */
+.panel:not(.error):not(.diff-panel) > h1 {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	/* Negate the panel's 10px/20px padding so the opaque header spans the panel
+	   edge-to-edge and covers the top padding band — no scrolled content peeks above
+	   the title. Right padding keeps the close-button clearance. */
+	margin: -10px -20px 0;
+	padding: 10px 40px 8px 20px;
+	background: var(--bg-primary); /* opaque so body doesn't bleed through */
+	/* Soft edge as content slides under; box-shadow is drawn outside the box so it
+	   survives the overflow:hidden height cap below. */
+	box-shadow: 0 6px 8px -6px var(--shadow-color);
+	/* Cap height so a very long title can't dominate the panel (~3-4 lines). */
+	max-height: 4.5em;
+	overflow: hidden;
+}
+
 .panel.error {
 	background-color: var(--error-bg);
 }
@@ -914,6 +935,7 @@ div.comment-input:empty:before {
 	position: absolute;
 	top: 20px;
 	right: 20px;
+	z-index: 3; /* stay clickable above the sticky title header (z-index: 2) */
 	width: 24px;
 	height: 24px;
 	border: none;
