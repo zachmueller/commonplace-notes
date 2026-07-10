@@ -619,6 +619,9 @@ a:not([href^="#"]):hover {
 	transition: all 0.3s ease;
 	width: 600px;
 	color: var(--text-primary);
+	/* Deep-linked / backlink headings scroll via scrollIntoView({block:'start'});
+	   this keeps them below the sticky panel header instead of hidden under it. */
+	scroll-padding-top: 3em;
 }
 
 .panel.collapsing {
@@ -656,23 +659,31 @@ body.panel-resizing {
 	margin-right: 40px; /* adjust heading to accommodate close button */
 }
 
-/* Pin the note title at the top of the panel's own scroll container so the reader
-   always sees which note the panel holds while the body scrolls under it. Excludes
-   error/diff panels (their markup differs and has no long body). */
-.panel:not(.error):not(.diff-panel) > h1 {
+/* Pin a header holding the close button + note title at the top of the panel's own
+   scroll container so the reader always sees which note the panel holds — and can
+   still close it — while the body scrolls under it. The metadata row is a sibling
+   below this header, so it stays fully visible just beneath the sticky block.
+   Excludes error panels (short markup, no long body — keep a plain non-sticky h1). */
+.panel:not(.error):not(.diff-panel) > .panel-header,
+.diff-panel > .panel-header {
+	/* sticky also makes this the containing block for the absolutely-positioned
+	   close button, so the × stays pinned to the header's top-right corner. */
 	position: sticky;
 	top: 0;
 	z-index: 2;
-	/* Negate the panel's 10px/20px padding so the opaque header spans the panel
-	   edge-to-edge and covers the top padding band — no scrolled content peeks above
-	   the title. Right padding keeps the close-button clearance. */
-	margin: -10px -20px 0;
-	padding: 10px 40px 8px 20px;
+	/* Span the panel's 10px/20px padding edge-to-edge and cover the top padding band
+	   with an opaque background. The header's OWN top padding (not a negative margin)
+	   covers the band, so the opaque edge meets the scrollport top exactly and no
+	   scrolled content peeks above the title. Right padding keeps ×/title clearance. */
+	margin: 0 -20px;
+	padding: 10px 40px 0 20px;
 	background: var(--bg-primary); /* opaque so body doesn't bleed through */
-	/* Soft edge as content slides under; box-shadow is drawn outside the box so it
-	   survives the overflow:hidden height cap below. */
+	/* Soft edge as content slides under; box-shadow is drawn outside the box. */
 	box-shadow: 0 6px 8px -6px var(--shadow-color);
-	/* Cap height so a very long title can't dominate the panel (~3-4 lines). */
+}
+
+/* Cap the title height so a very long title can't dominate the panel (~3-4 lines). */
+.panel-header > h1 {
 	max-height: 4.5em;
 	overflow: hidden;
 }
@@ -950,12 +961,14 @@ div.comment-input:empty:before {
 	z-index: 3; /* stay clickable above the sticky title header (z-index: 2) */
 	width: 24px;
 	height: 24px;
+	padding: 0; /* zero default button padding so the box stays 24×24 with a larger glyph */
 	border: none;
 	background: none;
 	cursor: pointer;
 	opacity: 0.5;
 	transition: opacity 0.2s;
-	font-size: 20px;
+	font-size: 26px;
+	line-height: 1;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -1889,8 +1902,10 @@ ${closeButton}
 				const meta = noteData.diffMeta || {};
 				const shortHash = (h) => (h ? String(h).slice(0, 8) : '?');
 				panel.innerHTML = `
-					${closeButton}
-					<h1>Diff: ${noteData.title}</h1>
+					<div class="panel-header">
+						${closeButton}
+						<h1>Diff: ${noteData.title}</h1>
+					</div>
 					<div class="diff-header">
 						<span class="diff-side diff-side-old">old <strong>${shortHash(meta.left)}</strong></span>
 						<span class="diff-side diff-side-new">new <strong>${shortHash(meta.right)}</strong></span>
@@ -1959,8 +1974,10 @@ ${closeButton}
 				` : '';
 
 				panel.innerHTML = `
-					${closeButton}
-					<h1>${noteData.title}</h1>
+					<div class="panel-header">
+						${closeButton}
+						<h1>${noteData.title}</h1>
+					</div>
 					${hasMetadata ? `
 						<div class="note-metadata">
 							${lastUpdatedHtml}
