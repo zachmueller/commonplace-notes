@@ -1,18 +1,16 @@
 /**
  * Parser for routing OPTION `.md` files (`cpn-type: routing-option`).
  *
- * Validates the `cpn-*` frontmatter and parses the hybrid `cpn-routing-steps`
- * list into `rawSteps` (wikilink references and/or inline action specs).
- * Resolution of references against the discovered action registry happens later,
- * in the RoutingManager, once every action is known.
+ * Validates the `cpn-*` frontmatter and parses the `cpn-routing-steps` list into
+ * `rawSteps` — one wikilink-plus-params string per step. Resolution of references
+ * against the discovered action registry happens later, in the RoutingManager,
+ * once every action is known.
  */
 
 import { RK } from './frontmatterKeys';
 import type {
-	InlineActionSpec,
 	OnError,
 	RawStep,
-	RoutingActionKind,
 	RoutingError,
 	RoutingOptionDefinition,
 	RoutingSource,
@@ -21,14 +19,9 @@ import type {
 
 const ON_ERROR_VALUES: readonly OnError[] = ['abort', 'continue'];
 const TITLE_PROMPT_VALUES: readonly TitlePromptMode[] = ['always', 'only-if-Untitled', 'off'];
-const ACTION_KINDS: readonly RoutingActionKind[] = [
-	'move',
-	'set-frontmatter',
-	'publish-contexts',
-	'insert-template',
-	'ensure-uid',
-	'code',
-];
+
+/** Leading `[[action]]` wikilink of a step string; non-greedy so it stops at the action's own `]]`. */
+const STEP_REF_RE = /^\s*\[\[(.+?)\]\]/;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,10 +44,6 @@ export function bareWikilinkName(raw: string): string {
 	return s.trim();
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-	return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
 // ---------------------------------------------------------------------------
 // Result discriminator
 // ---------------------------------------------------------------------------
@@ -66,64 +55,49 @@ export type ParseOptionResult = RoutingOptionDefinition | RoutingError;
 // ---------------------------------------------------------------------------
 
 /**
- * Parse one `cpn-routing-steps` entry into a `RawStep`. Accepted authoring shapes:
- *   - a bare wikilink string:      `"[[move]]"`
- *   - a ref with params (map):     `{ action: "[[move]]", params: { dir: "x" } }`
- *   - an inline action (map):      `{ inline: { kind: "set-frontmatter", ... } }`
+ * Parse one `cpn-routing-steps` entry into a `RawStep`. Each entry is a single
+ * string: a leading `[[action]]` wikilink, optionally followed by `key: value`
+ * params. Multiple params are separated by `;`; a value containing `,` becomes a
+ * list, otherwise a scalar string. Examples:
+ *   - `"[[default-frontmatter]]"`
+ *   - `"[[move]] dir: data"`
+ *   - `"[[set-publish-contexts]] contexts: public, amazon"`
+ *   - `"[[insert-template]] template: [[Meeting Note Template]]"`
  *
  * Returns a `RawStep`, or a string describing why the entry is invalid.
  */
 function parseRawStep(entry: unknown): RawStep | string {
-	// Bare wikilink string.
-	if (typeof entry === 'string') {
-		const name = bareWikilinkName(entry);
-		return name ? { ref: name } : `Empty step reference: '${entry}'`;
+	if (typeof entry !== 'string') {
+		const kind = Array.isArray(entry) ? 'a list' : typeof entry;
+		return `Step must be a wikilink string like "[[action]] key: value"; got ${kind} (object/inline step syntax is no longer supported)`;
 	}
 
-	if (!isPlainObject(entry)) {
-		return `Step must be a wikilink string or a mapping; got ${typeof entry}`;
-	}
+	const trimmed = entry.trim();
+	if (!trimmed) return 'Empty step';
 
-	// Inline action.
-	if ('inline' in entry) {
-		const inline = entry['inline'];
-		if (!isPlainObject(inline)) return "Inline step 'inline' must be a mapping";
-		const kind = asString(inline['kind']);
-		if (!kind || !ACTION_KINDS.includes(kind as RoutingActionKind)) {
-			return `Inline step has invalid 'kind': '${String(inline['kind'])}'`;
-		}
-		const spec: InlineActionSpec = {
-			kind: kind as RoutingActionKind,
-			name: asString(inline['name']) ?? undefined,
-			description: asString(inline['description']) ?? undefined,
-			newNoteOnly: typeof inline['newNoteOnly'] === 'boolean' ? inline['newNoteOnly'] : undefined,
-			idempotent: typeof inline['idempotent'] === 'boolean' ? inline['idempotent'] : undefined,
-			targetDir: asString(inline['targetDir']) ?? undefined,
-			publishContexts: Array.isArray(inline['contexts'])
-				? (inline['contexts'] as unknown[]).map(String)
-				: Array.isArray(inline['publishContexts'])
-					? (inline['publishContexts'] as unknown[]).map(String)
-					: undefined,
-			frontmatter: isPlainObject(inline['frontmatter'])
-				? (inline['frontmatter'] as Record<string, unknown>)
-				: undefined,
-			templatePath: asString(inline['template']) ?? undefined,
-			code: asString(inline['code']) ?? undefined,
-		};
-		return { inline: spec };
-	}
+	const m = trimmed.match(STEP_REF_RE);
+	if (!m) return `Step must start with an action wikilink, e.g. "[[move]]": '${entry}'`;
+	const ref = bareWikilinkName(`[[${m[1]}]]`);
+	if (!ref) return `Empty action reference in step: '${entry}'`;
 
-	// Ref with params.
-	const actionRef = asString(entry['action']) ?? asString(entry['ref']);
-	if (!actionRef) {
-		return "Step mapping must have an 'action' (wikilink) or be an 'inline' spec";
+	const rest = trimmed.slice(m[0].length).trim();
+	if (!rest) return { ref };
+
+	const params: Record<string, unknown> = {};
+	for (const seg of rest.split(';')) {
+		const s = seg.trim();
+		if (!s) continue; // tolerate a trailing/extra ';'
+		const colon = s.indexOf(':'); // split on the FIRST colon; values may contain ':'
+		if (colon === -1) return `Step param must be 'key: value': '${s}'`;
+		const key = s.slice(0, colon).trim();
+		if (!key) return `Step param has an empty key: '${s}'`;
+		const rawVal = s.slice(colon + 1).trim();
+		if (!rawVal) return `Step param '${key}' has an empty value`;
+		params[key] = rawVal.includes(',')
+			? rawVal.split(',').map((v) => v.trim()).filter((v) => v !== '')
+			: rawVal;
 	}
-	const name = bareWikilinkName(actionRef);
-	if (!name) return `Empty step reference: '${actionRef}'`;
-	const params = isPlainObject(entry['params'])
-		? (entry['params'] as Record<string, unknown>)
-		: undefined;
-	return { ref: name, params };
+	return { ref, params };
 }
 
 // ---------------------------------------------------------------------------

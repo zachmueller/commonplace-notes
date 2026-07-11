@@ -7,7 +7,7 @@
  *     set frontmatter, set publish contexts, or run embedded TS).
  *   - OPTIONS (`cpn/routes/options/`) — the user-facing routing choices shown in
  *     the suggester; each composes an ordered list of steps that reference shared
- *     actions (by wikilink, optionally with params) and/or define inline actions.
+ *     actions by wikilink, optionally with params.
  *
  * Embedded `code` actions run with a CPN-supplied `libs` toolkit and a per-run
  * `context` in scope (no `import` — vault `.md` never passes through esbuild).
@@ -85,31 +85,22 @@ export interface RoutingActionDefinition {
 // Option definitions + steps
 // ---------------------------------------------------------------------------
 
-/** An inline action spec authored directly in an option's `cpn-routing-steps`. */
-export interface InlineActionSpec {
-	kind: RoutingActionKind;
-	name?: string;
-	description?: string;
-	newNoteOnly?: boolean;
-	idempotent?: boolean;
-	targetDir?: string;
-	publishContexts?: string[];
-	frontmatter?: Record<string, unknown>;
-	templatePath?: string;
-	code?: string;
+/**
+ * A step as authored in `cpn-routing-steps`, before resolution against the action
+ * registry. Each step is a single string: a leading `[[action]]` wikilink plus
+ * optional `key: value` params (e.g. `"[[move]] dir: data"`).
+ */
+export interface RawStep {
+	ref: string;
+	params?: Record<string, unknown>;
 }
-
-/** A step as authored in `cpn-routing-steps`, before resolution against the action registry. */
-export type RawStep =
-	| { ref: string; params?: Record<string, unknown> }
-	| { inline: InlineActionSpec };
 
 /** A resolved step inside an option's pipeline (concrete, post-resolution). */
 export interface RoutingStep {
 	action: RoutingActionDefinition;
 	/** Per-reference overrides, merged over the action's declarative config (params win). */
 	params?: Record<string, unknown>;
-	origin: 'reference' | 'inline';
+	origin: 'reference';
 }
 
 /**

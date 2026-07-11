@@ -63,7 +63,10 @@ Symptom → cause → fix, grouped by area. For AWS infrastructure issues
 - **The settings tab shows "Routing errors."** One or more files failed to load
   on the last run — open the developer console for details. Common causes: an
   invalid `cpn-routing-action-kind`, an option step that references an action name that
-  doesn't exist, or malformed `cpn-routing-steps`.
+  doesn't exist, or a malformed `cpn-routing-steps` entry. Each step must be a
+  string that starts with an action wikilink, optionally followed by `key: value`
+  params — e.g. `"[[move]] dir: log"`. The older object/inline step forms
+  (`{ action: … }` / `{ inline: … }`) are no longer accepted.
 - **An `insert-template` step did nothing.** It requires the
   [Templater](https://github.com/SilentVoid13/Templater) plugin; without it the
   step is skipped with a Notice (it does not abort the option). If Templater is

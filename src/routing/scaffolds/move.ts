@@ -11,10 +11,10 @@ export const MOVE = actionScaffold({
 	name: 'move',
 	kind: 'move',
 	description: 'Move the note into a target directory (backlinks update automatically).',
-	doc: `Moves the active note into a directory. Supply the destination per option via a step \`params.dir\`, e.g.:
+	doc: `Moves the active note into a directory. Supply the destination per option via a step \`dir\` param, e.g.:
 
 \`\`\`
-- { action: "[[move]]", params: { dir: "log" } }
+- "[[move]] dir: log"
 \`\`\`
 
 Uses Obsidian's link-preserving rename. In update mode, moving to a directory the note is already in is a no-op; a conflicting file at the target is skipped (never overwritten).`,

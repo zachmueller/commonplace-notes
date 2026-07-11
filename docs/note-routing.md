@@ -119,21 +119,30 @@ cpn-description: "..."          # optional
 cpn-routing-on-error: abort             # optional — abort | continue (default abort)
 cpn-routing-title-prompt: only-if-Untitled  # optional — always | only-if-Untitled | off
 cpn-routing-steps:                      # required — the ordered pipeline
-  - "[[default-frontmatter]]"                                    # bare reference
-  - { action: "[[move]]", params: { dir: "data" } }             # reference + params
-  - { action: "[[set-publish-contexts]]", params: { contexts: ["amazon"] } }
+  - "[[default-frontmatter]]"                          # no params
+  - "[[move]] dir: data"                               # one param
+  - "[[set-publish-contexts]] contexts: public, amazon"  # a list param
 ---
 ```
 
-Each step is one of:
+Every step is a single **string** — a leading `[[action-name]]` wikilink,
+optionally followed by `key: value` params. That keeps `cpn-routing-steps` a plain
+list of text, so you can add, edit, and reorder steps in Obsidian's Properties
+editor. The param grammar:
 
-- **a bare wikilink** — `"[[action-name]]"` — run the action as-is.
-- **a reference with params** — `{ action: "[[action-name]]", params: { … } }` —
-  run the action, overriding its declarative config for this step. Params win
-  over the action's own frontmatter (e.g. `params.dir` overrides
-  `cpn-routing-target-dir`).
-- **an inline action** — `{ inline: { kind: "…", … } }` — define a one-off action
-  right in the option, without a separate file.
+- **No params** — just the wikilink: `"[[default-frontmatter]]"`.
+- **Params** follow the wikilink as `key: value` pairs, separated by `;`:
+  `"[[move]] dir: data"` or `"[[insert-template]] template: [[My Template]]; foo: bar"`.
+  Params override the action's own declarative frontmatter for this step (e.g. a
+  `dir` param overrides `cpn-routing-target-dir`).
+- **List values** — a value containing a comma becomes a list:
+  `"[[set-publish-contexts]] contexts: public, amazon"`.
+
+A couple of limits: a value can't itself contain `;` (the param separator) and a
+value with a `,` always becomes a list. If you need a per-step `set-frontmatter`
+override (a nested mapping), author a `set-frontmatter` **action file** with a
+`cpn-routing-frontmatter` block and reference it instead — the string syntax can't
+express a nested object.
 
 **Ordering matters** — steps run top to bottom. **`cpn-routing-on-error`** decides what
 happens when a step fails: `abort` stops the option (default); `continue` logs
@@ -181,8 +190,8 @@ cpn-routing-new-note-only: true
   ```yaml
   cpn-routing-steps:
     - "[[default-frontmatter]]"
-    - { action: "[[move]]", params: { dir: "data" } }
-    - { action: "[[set-publish-contexts]]", params: { contexts: ["amazon"] } }
+    - "[[move]] dir: data"
+    - "[[set-publish-contexts]] contexts: amazon"
     - "[[insert-data-template]]"
   ```
 
@@ -214,7 +223,7 @@ lazily at publish time:
 cpn-routing-steps:
   - "[[default-frontmatter]]"
   - "[[ensure-uid]]"
-  - { action: "[[set-publish-contexts]]", params: { contexts: ["public"] } }
+  - "[[set-publish-contexts]] contexts: public"
 ```
 
 Things to know:

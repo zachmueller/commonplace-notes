@@ -90,21 +90,21 @@ export interface OptionScaffoldOptions {
 	steps: RawStep[];
 }
 
-/** Render a `RawStep` into the YAML form authored under `cpn-routing-steps`. */
+/**
+ * Render a `RawStep` into the string form authored under `cpn-routing-steps`:
+ * a `[[ref]]` wikilink plus `key: value` params (`;`-separated; array values
+ * comma-joined). The whole string is double-quoted so YAML doesn't read a leading
+ * `[` as a flow-sequence or trip on a mid-string `: `.
+ */
 function renderStep(step: RawStep): string {
-	if ('ref' in step) {
-		if (!step.params || Object.keys(step.params).length === 0) {
-			return `  - "[[${step.ref}]]"`;
+	const parts: string[] = [];
+	if (step.params) {
+		for (const [k, v] of Object.entries(step.params)) {
+			parts.push(`${k}: ${Array.isArray(v) ? v.map(String).join(', ') : String(v)}`);
 		}
-		const params = JSON.stringify(step.params);
-		return `  - { action: "[[${step.ref}]]", params: ${params} }`;
 	}
-	// Inline step — render the spec object under `inline:`.
-	const inlineYaml = stringifyYaml({ inline: step.inline }).trimEnd();
-	return inlineYaml
-		.split('\n')
-		.map((l, i) => (i === 0 ? `  - ${l}` : `    ${l}`))
-		.join('\n');
+	const body = parts.length ? `[[${step.ref}]] ${parts.join('; ')}` : `[[${step.ref}]]`;
+	return `  - ${quote(body)}`;
 }
 
 /** Build a {@link BuiltinRoutingOptionScaffold} with a fully-rendered `.md` body. */

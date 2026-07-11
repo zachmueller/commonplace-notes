@@ -6,8 +6,7 @@
  * vault (or supplied as in-memory built-in scaffolds):
  *   - ACTIONS (`cpn/routes/actions/`) — reusable building blocks.
  *   - OPTIONS (`cpn/routes/options/`) — user-facing routing choices that compose
- *     an ordered list of steps referencing actions (by wikilink + params) and/or
- *     defining inline actions.
+ *     an ordered list of steps referencing actions by wikilink + params.
  *
  * Lifecycle:
  *   - `loadRoutes(profileId)` — discover + inject scaffold fallbacks + compile
@@ -37,7 +36,6 @@ import {
 } from './scaffolds';
 import { RoutingOptionSuggestModal, TitlePromptModal } from './modals';
 import type {
-	InlineActionSpec,
 	RoutingActionDefinition,
 	RoutingContext,
 	RoutingError,
@@ -266,67 +264,18 @@ export class RoutingManager {
 	private resolveOptionSteps(option: RoutingOptionDefinition): void {
 		const steps: RoutingStep[] = [];
 		for (const raw of option.rawSteps) {
-			if ('ref' in raw) {
-				const action = this.actions?.get(raw.ref);
-				if (!action) {
-					option.degraded = true;
-					this.loadErrors.push({
-						filePath: option.filePath,
-						message: `Option '${option.name}' references unknown action '${raw.ref}'`,
-					});
-					continue;
-				}
-				steps.push({ action, params: raw.params, origin: 'reference' });
-			} else {
-				const action = this.buildInlineAction(option, raw.inline);
-				if (!action) {
-					option.degraded = true;
-					continue;
-				}
-				steps.push({ action, origin: 'inline' });
-			}
-		}
-		option.steps = steps;
-	}
-
-	/** Synthesize an ephemeral action definition from an inline step spec. */
-	private buildInlineAction(
-		option: RoutingOptionDefinition,
-		spec: InlineActionSpec,
-	): RoutingActionDefinition | null {
-		const action: RoutingActionDefinition = {
-			name: spec.name ?? `${option.name}:inline-${spec.kind}`,
-			kind: spec.kind,
-			description: spec.description,
-			newNoteOnly: spec.newNoteOnly ?? false,
-			idempotent: spec.idempotent ?? true,
-			targetDir: spec.targetDir,
-			publishContexts: spec.publishContexts,
-			frontmatter: spec.frontmatter,
-			templatePath: spec.templatePath,
-			rawCode: spec.code,
-			compiledFn: null,
-			filePath: option.filePath,
-			filename: option.filename,
-			source: option.source,
-			isScaffold: false,
-		};
-		if (spec.kind === 'code') {
-			if (!spec.code) {
+			const action = this.actions?.get(raw.ref);
+			if (!action) {
+				option.degraded = true;
 				this.loadErrors.push({
 					filePath: option.filePath,
-					message: `Inline code step in '${option.name}' has no code`,
+					message: `Option '${option.name}' references unknown action '${raw.ref}'`,
 				});
-				return null;
+				continue;
 			}
-			const result = compileRoutingAction(spec.code);
-			if ('error' in result) {
-				this.loadErrors.push({ filePath: option.filePath, message: result.error });
-				return null;
-			}
-			action.compiledFn = result.fn;
+			steps.push({ action, params: raw.params, origin: 'reference' });
 		}
-		return action;
+		option.steps = steps;
 	}
 
 	private recordCompileFailure(def: RoutingActionDefinition, error: string): void {
@@ -558,8 +507,15 @@ export class RoutingManager {
 		action: RoutingActionDefinition,
 		context: RoutingContext,
 	): Promise<void> {
-		const contexts = (context.params['contexts'] as string[]) ?? action.publishContexts;
-		if (!Array.isArray(contexts) || contexts.length === 0) {
+		// The step-string syntax yields a scalar for a single-value `contexts:` (no
+		// comma), so coerce a lone string to a one-element list before validating.
+		const raw = context.params['contexts'] ?? action.publishContexts;
+		const contexts = Array.isArray(raw)
+			? raw.map(String)
+			: typeof raw === 'string' && raw.trim() !== ''
+				? [raw.trim()]
+				: [];
+		if (contexts.length === 0) {
 			throw new Error(`publish-contexts action '${action.name}' has no contexts`);
 		}
 		await this.plugin.frontmatterManager.mergeFrontmatter(context.file, {

@@ -74,7 +74,7 @@ cpn-type: routing-option
 cpn-routing-option-name: "${INSERT_SKIP_OPTION}"
 cpn-routing-on-error: abort
 cpn-routing-steps:
-  - { action: "[[insert-template]]", params: { template: "[[${INSERT_TEMPLATE_FILE.replace(/\.md$/, "")}]]" } }
+  - "[[insert-template]] template: [[${INSERT_TEMPLATE_FILE.replace(/\.md$/, "")}]]"
 ---
 
 Runs insert-template against a real template; skips cleanly when Templater is absent.
@@ -87,7 +87,7 @@ cpn-type: routing-option
 cpn-routing-option-name: "${INSERT_MISSING_OPTION}"
 cpn-routing-on-error: abort
 cpn-routing-steps:
-  - { action: "[[insert-template]]", params: { template: "[[Definitely-Not-A-Template-ZZZ]]" } }
+  - "[[insert-template]] template: [[Definitely-Not-A-Template-ZZZ]]"
 ---
 
 Points insert-template at a missing template; the option aborts (ok:false).
