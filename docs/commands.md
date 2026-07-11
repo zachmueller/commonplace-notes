@@ -9,6 +9,9 @@ Some are context-sensitive and only appear when a Markdown note is active.
 |---------|--------------|---------------|
 | **Refresh credentials** | Refreshes AWS credentials for a chosen profile (runs the profile's custom refresh commands, if configured). | — |
 | **Export all parser stage definitions to vault** | Materializes every built-in parser stage as an editable `.md` file under `<cpnDir>/parsers/`. | — |
+| **Export all routing actions & options to vault** | Materializes every built-in routing action and option as an editable `.md` file under `<cpnDir>/routes/`. See [note routing](note-routing.md). | — |
+| **Route new note** | Files the active note via a routing option you pick (move, seed frontmatter, publish contexts, run a template…). Runs in create mode. See [note routing](note-routing.md). | Active Markdown note. |
+| **Route existing note** | Re-files an already-filed note via a routing option. Runs in update mode (skips new-note-only steps). | Active Markdown note. |
 | **Publish current note** | Publishes just the active note. | Active Markdown note; note must be in a publish context. |
 | **Publish active and connected notes** | Publishes the active note plus the notes it links to and that link to it. | Active Markdown note. |
 | **Publish updates since last full publish** | Publishes notes modified since the profile's last full publish. | — (prompts for profile). |
@@ -19,8 +22,8 @@ Some are context-sensitive and only appear when a Markdown note is active.
 | **Deploy publishing infrastructure** | Opens the deployment wizard to provision AWS infra (S3 + CloudFront, optional domain/auth/comments). See [Infrastructure deployment](infrastructure-deployment.md). | — (prompts for profile). |
 | **Destroy publishing infrastructure** | Tears down the CloudFormation stacks for a profile (the S3 bucket is retained). | Profile with a plugin-deployed stack. |
 
-The two publish/copy commands marked "Active Markdown note" use Obsidian's
-`checkCallback`, so they only appear enabled when a note is focused.
+Commands marked "Active Markdown note" use Obsidian's `checkCallback`, so they
+only appear enabled when a note is focused.
 
 ## Per-profile commands
 

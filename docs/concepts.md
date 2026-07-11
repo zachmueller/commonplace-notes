@@ -70,12 +70,30 @@ serialize HTML). CPN ships eight **built-in** stages, and you can **override** a
 built-in — or add your own — by authoring a stage as a Markdown file in your
 vault. See [parser extensions](parser-extensions.md).
 
+### Routing action & option
+
+The two building blocks of [note routing](note-routing.md). An **action** is a
+reusable step (move the note, set frontmatter, add publish contexts, run a
+template, or run code); an **option** is a named choice in the routing suggester
+that composes an ordered list of steps referencing actions. Both are authored as
+Markdown files under `<cpnDir>/routes/` — override a built-in or add your own. See
+[note routing](note-routing.md).
+
+### Insert-template action
+
+A [routing action](note-routing.md#running-a-template-insert-template) of kind
+`insert-template` that runs one of your [Templater](https://github.com/SilentVoid13/Templater)
+templates against the note (merges its frontmatter, appends its body). As an
+option's only step it "redirects" (the template owns the whole note); after other
+steps it "appends." See [note routing](note-routing.md#running-a-template-insert-template).
+
 ### CPN directory
 
 The vault folder (default `cpn`) that holds CPN's user-editable extension files.
-Parser stages live in `<cpnDir>/parsers/`; per-profile site-asset snippets live
-in `<cpnDir>/profiles/<profileId>/assets/`. Set under Markdown parser in
-[settings](settings.md).
+Parser stages live in `<cpnDir>/parsers/`; routing actions and options live in
+`<cpnDir>/routes/actions/` and `<cpnDir>/routes/options/`; per-profile site-asset
+snippets live in `<cpnDir>/profiles/<profileId>/assets/`. Set under Markdown
+parser in [settings](settings.md).
 
 ### URL scheme & stacked URLs
 

@@ -22,6 +22,7 @@ Documentation for the Commonplace Notes Obsidian plugin. New here? **Start with
 
 ## Extending
 
+- [Note routing](note-routing.md) — file a note in one command (move, frontmatter, publish contexts, templates)
 - [Parser extensions](parser-extensions.md) — customize the Markdown→HTML pipeline
 
 ## Help
