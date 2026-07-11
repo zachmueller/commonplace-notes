@@ -4,7 +4,7 @@ import { actionScaffold } from './_scaffold-helper';
  * `move` — relocate the note into a target directory, preserving backlinks.
  *
  * Parameterized: options supply the destination via step `params.dir` (falling
- * back to `cpn-target-dir` if set here). The move uses `app.fileManager.renameFile`
+ * back to `cpn-routing-target-dir` if set here). The move uses `app.fileManager.renameFile`
  * so inbound wikilinks update automatically.
  */
 export const MOVE = actionScaffold({

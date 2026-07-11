@@ -7,6 +7,7 @@
  */
 
 import { extractCodeFence } from '../utils/vaultScan';
+import { RK } from './frontmatterKeys';
 import type {
 	RoutingActionDefinition,
 	RoutingActionKind,
@@ -80,29 +81,29 @@ export function parseRoutingActionFile(
 	source: RoutingSource,
 ): ParseActionResult {
 	// -- cpn-type --
-	const cpnType = frontmatter['cpn-type'];
+	const cpnType = frontmatter[RK.TYPE];
 	if (!cpnType) {
-		return { filePath, message: "Missing required frontmatter field 'cpn-type'" };
+		return { filePath, message: `Missing required frontmatter field '${RK.TYPE}'` };
 	}
 	if (cpnType !== 'routing-action') {
 		return {
 			filePath,
-			message: `Invalid 'cpn-type': '${String(cpnType)}'. Must be 'routing-action'`,
+			message: `Invalid '${RK.TYPE}': '${String(cpnType)}'. Must be 'routing-action'`,
 		};
 	}
 
-	// -- cpn-action-name --
-	const name = asString(frontmatter['cpn-action-name']);
+	// -- cpn-routing-action-name --
+	const name = asString(frontmatter[RK.ACTION_NAME]);
 	if (!name) {
-		return { filePath, message: "Missing or empty 'cpn-action-name'" };
+		return { filePath, message: `Missing or empty '${RK.ACTION_NAME}'` };
 	}
 
-	// -- cpn-action-kind --
-	const kindRaw = asString(frontmatter['cpn-action-kind']);
+	// -- cpn-routing-action-kind --
+	const kindRaw = asString(frontmatter[RK.ACTION_KIND]);
 	if (!kindRaw || !ACTION_KINDS.includes(kindRaw as RoutingActionKind)) {
 		return {
 			filePath,
-			message: `Invalid 'cpn-action-kind': '${String(frontmatter['cpn-action-kind'])}'. Must be one of ${ACTION_KINDS.join(', ')}`,
+			message: `Invalid '${RK.ACTION_KIND}': '${String(frontmatter[RK.ACTION_KIND])}'. Must be one of ${ACTION_KINDS.join(', ')}`,
 		};
 	}
 	const kind = kindRaw as RoutingActionKind;
@@ -110,9 +111,9 @@ export function parseRoutingActionFile(
 	const def: RoutingActionDefinition = {
 		name,
 		kind,
-		description: asString(frontmatter['cpn-description']) ?? undefined,
-		newNoteOnly: asBool(frontmatter['cpn-new-note-only'], false),
-		idempotent: asBool(frontmatter['cpn-idempotent'], true),
+		description: asString(frontmatter[RK.DESCRIPTION]) ?? undefined,
+		newNoteOnly: asBool(frontmatter[RK.NEW_NOTE_ONLY], false),
+		idempotent: asBool(frontmatter[RK.IDEMPOTENT], true),
 		filePath,
 		filename: filePath.split('/').pop() ?? filePath,
 		source,
@@ -124,17 +125,17 @@ export function parseRoutingActionFile(
 	switch (kind) {
 		case 'move': {
 			// target dir is optional here — an option's step params may supply it.
-			def.targetDir = asString(frontmatter['cpn-target-dir']) ?? undefined;
+			def.targetDir = asString(frontmatter[RK.TARGET_DIR]) ?? undefined;
 			break;
 		}
 		case 'publish-contexts': {
-			def.publishContexts = asStringArray(frontmatter['cpn-publish-contexts']) ?? undefined;
+			def.publishContexts = asStringArray(frontmatter[RK.PUBLISH_CONTEXTS]) ?? undefined;
 			break;
 		}
 		case 'set-frontmatter': {
-			const fm = frontmatter['cpn-frontmatter'];
+			const fm = frontmatter[RK.FRONTMATTER];
 			if (fm !== undefined && (typeof fm !== 'object' || fm === null || Array.isArray(fm))) {
-				return { filePath, message: "'cpn-frontmatter' must be a mapping (object)" };
+				return { filePath, message: `'${RK.FRONTMATTER}' must be a mapping (object)` };
 			}
 			def.frontmatter = (fm as Record<string, unknown>) ?? undefined;
 			break;
@@ -142,7 +143,7 @@ export function parseRoutingActionFile(
 		case 'insert-template': {
 			// Optional here — an option's step params may supply the template.
 			// Stored raw (path or `[[wikilink]]`); resolved at run time.
-			def.templatePath = asString(frontmatter['cpn-template']) ?? undefined;
+			def.templatePath = asString(frontmatter[RK.TEMPLATE]) ?? undefined;
 			break;
 		}
 		case 'code': {

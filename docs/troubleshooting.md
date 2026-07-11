@@ -62,22 +62,22 @@ Symptom → cause → fix, grouped by area. For AWS infrastructure issues
   `routing-option`). See [Note routing](note-routing.md).
 - **The settings tab shows "Routing errors."** One or more files failed to load
   on the last run — open the developer console for details. Common causes: an
-  invalid `cpn-action-kind`, an option step that references an action name that
-  doesn't exist, or malformed `cpn-steps`.
+  invalid `cpn-routing-action-kind`, an option step that references an action name that
+  doesn't exist, or malformed `cpn-routing-steps`.
 - **An `insert-template` step did nothing.** It requires the
   [Templater](https://github.com/SilentVoid13/Templater) plugin; without it the
   step is skipped with a Notice (it does not abort the option). If Templater is
   installed but the template failed, Templater shows its own error Notice and
   leaves the note unchanged — this is not reported through routing. See
   [Note routing → Running a template](note-routing.md#running-a-template-insert-template).
-- **"template not found."** The `cpn-template` reference didn't resolve. Check the
+- **"template not found."** The `cpn-routing-template` reference didn't resolve. Check the
   path or `[[wikilink]]` points at a real template file. Unlike a parse error,
-  this **does** abort the option under `cpn-on-error: abort`.
+  this **does** abort the option under `cpn-routing-on-error: abort`.
 - **A template clobbered frontmatter an earlier step set.** On a key collision,
   list-valued keys are unioned but scalar keys the template sets overwrite the
   note's — reorder so the template runs before the step whose values must win.
 - **Re-routing skipped steps.** In update mode, steps marked
-  `cpn-new-note-only` (or `cpn-idempotent: false`) are skipped by design. Use
+  `cpn-routing-new-note-only` (or `cpn-routing-idempotent: false`) are skipped by design. Use
   **Route new note** for the full pipeline, or clear the flag on the action.
 
 ## Authentication, access, and comments

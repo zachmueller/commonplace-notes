@@ -8,6 +8,7 @@
  */
 
 import { stringifyYaml } from 'obsidian';
+import { RK } from '../frontmatterKeys';
 import type {
 	BuiltinRoutingActionScaffold,
 	BuiltinRoutingOptionScaffold,
@@ -38,7 +39,7 @@ export interface ActionScaffoldOptions {
 	publishContexts?: string[];
 	/** `set-frontmatter` mapping. */
 	frontmatter?: Record<string, unknown>;
-	/** `insert-template` template reference (`cpn-template`) — a path or `[[wikilink]]`. */
+	/** `insert-template` template reference (`cpn-routing-template`) — a path or `[[wikilink]]`. */
 	template?: string;
 	/** `code` body (must be a valid TS/JS statement block). */
 	code?: string;
@@ -50,24 +51,24 @@ export function actionScaffold(opts: ActionScaffoldOptions): BuiltinRoutingActio
 
 	const lines: string[] = [
 		'---',
-		'cpn-type: routing-action',
-		`cpn-action-name: ${name}`,
-		`cpn-action-kind: ${kind}`,
-		`cpn-description: ${quote(description)}`,
+		`${RK.TYPE}: routing-action`,
+		`${RK.ACTION_NAME}: ${name}`,
+		`${RK.ACTION_KIND}: ${kind}`,
+		`${RK.DESCRIPTION}: ${quote(description)}`,
 	];
-	if (opts.newNoteOnly !== undefined) lines.push(`cpn-new-note-only: ${opts.newNoteOnly}`);
-	if (opts.idempotent !== undefined) lines.push(`cpn-idempotent: ${opts.idempotent}`);
-	if (opts.targetDir !== undefined) lines.push(`cpn-target-dir: ${quote(opts.targetDir)}`);
+	if (opts.newNoteOnly !== undefined) lines.push(`${RK.NEW_NOTE_ONLY}: ${opts.newNoteOnly}`);
+	if (opts.idempotent !== undefined) lines.push(`${RK.IDEMPOTENT}: ${opts.idempotent}`);
+	if (opts.targetDir !== undefined) lines.push(`${RK.TARGET_DIR}: ${quote(opts.targetDir)}`);
 	if (opts.publishContexts !== undefined) {
-		lines.push(`cpn-publish-contexts: ${JSON.stringify(opts.publishContexts)}`);
+		lines.push(`${RK.PUBLISH_CONTEXTS}: ${JSON.stringify(opts.publishContexts)}`);
 	}
 	if (opts.frontmatter !== undefined) {
-		lines.push('cpn-frontmatter:');
+		lines.push(`${RK.FRONTMATTER}:`);
 		// Indent the nested YAML mapping by two spaces.
 		const nested = stringifyYaml(opts.frontmatter).trimEnd();
 		for (const l of nested.split('\n')) lines.push(`  ${l}`);
 	}
-	if (opts.template !== undefined) lines.push(`cpn-template: ${quote(opts.template)}`);
+	if (opts.template !== undefined) lines.push(`${RK.TEMPLATE}: ${quote(opts.template)}`);
 	lines.push('---', '', doc.trimEnd(), '');
 
 	if (opts.code !== undefined) {
@@ -89,7 +90,7 @@ export interface OptionScaffoldOptions {
 	steps: RawStep[];
 }
 
-/** Render a `RawStep` into the YAML form authored under `cpn-steps`. */
+/** Render a `RawStep` into the YAML form authored under `cpn-routing-steps`. */
 function renderStep(step: RawStep): string {
 	if ('ref' in step) {
 		if (!step.params || Object.keys(step.params).length === 0) {
@@ -112,13 +113,13 @@ export function optionScaffold(opts: OptionScaffoldOptions): BuiltinRoutingOptio
 
 	const lines: string[] = [
 		'---',
-		'cpn-type: routing-option',
-		`cpn-option-name: ${quote(name)}`,
-		`cpn-description: ${quote(description)}`,
+		`${RK.TYPE}: routing-option`,
+		`${RK.OPTION_NAME}: ${quote(name)}`,
+		`${RK.DESCRIPTION}: ${quote(description)}`,
 	];
-	if (opts.onError !== undefined) lines.push(`cpn-on-error: ${opts.onError}`);
-	if (opts.titlePrompt !== undefined) lines.push(`cpn-title-prompt: ${opts.titlePrompt}`);
-	lines.push('cpn-steps:');
+	if (opts.onError !== undefined) lines.push(`${RK.ON_ERROR}: ${opts.onError}`);
+	if (opts.titlePrompt !== undefined) lines.push(`${RK.TITLE_PROMPT}: ${opts.titlePrompt}`);
+	lines.push(`${RK.STEPS}:`);
 	for (const step of steps) lines.push(renderStep(step));
 	lines.push('---', '', `Routing option: ${description}`, '');
 

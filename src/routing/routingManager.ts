@@ -30,6 +30,7 @@ import { compileRoutingAction } from './compiler';
 import { discoverRoutingFiles, type RoutingSearchDir } from './discovery';
 import { parseRoutingActionFile, isRoutingError } from './actionFile';
 import { parseRoutingOptionFile } from './optionFile';
+import { RK } from './frontmatterKeys';
 import {
 	BUILTIN_ROUTING_ACTION_SCAFFOLDS,
 	BUILTIN_ROUTING_OPTION_SCAFFOLDS,
@@ -527,7 +528,7 @@ export class RoutingManager {
 	): Promise<void> {
 		const dir = (context.params['dir'] as string) ?? action.targetDir;
 		if (dir === undefined || dir === null) {
-			throw new Error(`move action '${action.name}' has no target dir (set cpn-target-dir or params.dir)`);
+			throw new Error(`move action '${action.name}' has no target dir (set ${RK.TARGET_DIR} or params.dir)`);
 		}
 		const { file } = context;
 		const cleanDir = normalizePath(String(dir).replace(/^\/+|\/+$/g, ''));
@@ -559,7 +560,7 @@ export class RoutingManager {
 			throw new Error(`publish-contexts action '${action.name}' has no contexts`);
 		}
 		await this.plugin.frontmatterManager.mergeFrontmatter(context.file, {
-			'cpn-publish-contexts': contexts,
+			[RK.PUBLISH_CONTEXTS]: contexts,
 		});
 	}
 
@@ -575,7 +576,7 @@ export class RoutingManager {
 		await this.plugin.frontmatterManager.mergeFrontmatter(context.file, resolved);
 	}
 
-	/** Resolve a `cpn-template` reference (wikilink or vault path) to a `TFile`. */
+	/** Resolve a `cpn-routing-template` reference (wikilink or vault path) to a `TFile`. */
 	private resolveTemplateFile(raw: string, context: RoutingContext): TFile | null {
 		const linkpath = stripToLinkpath(raw);
 		// Wikilinks, relative names, and subpaths (source path enables relative resolution).
@@ -595,12 +596,12 @@ export class RoutingManager {
 		const raw = (context.params['template'] as string) ?? action.templatePath;
 		if (!raw || typeof raw !== 'string') {
 			throw new Error(
-				`insert-template action '${action.name}' has no template (set cpn-template or params.template)`,
+				`insert-template action '${action.name}' has no template (set ${RK.TEMPLATE} or params.template)`,
 			);
 		}
 		const templateFile = this.resolveTemplateFile(raw, context);
 		if (!templateFile) {
-			// A thrown error DOES honor the option's cpn-on-error policy.
+			// A thrown error DOES honor the option's cpn-routing-on-error policy.
 			throw new Error(`insert-template action '${action.name}': template not found: '${raw}'`);
 		}
 		const ran = await this.libs!.runTemplaterTemplate(templateFile, context.file);

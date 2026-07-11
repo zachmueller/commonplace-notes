@@ -63,9 +63,9 @@ const INSERT_TEMPLATE_BODY = "---\ntemplate-added: true\n---\n\nInserted by the 
 // With Templater absent this skips (run stays ok, note unchanged).
 const SKIP_OPTION_CONTENT = `---
 cpn-type: routing-option
-cpn-option-name: "${INSERT_SKIP_OPTION}"
-cpn-on-error: abort
-cpn-steps:
+cpn-routing-option-name: "${INSERT_SKIP_OPTION}"
+cpn-routing-on-error: abort
+cpn-routing-steps:
   - { action: "[[insert-template]]", params: { template: "[[${INSERT_TEMPLATE_FILE.replace(/\.md$/, "")}]]" } }
 ---
 
@@ -76,9 +76,9 @@ Runs insert-template against a real template; skips cleanly when Templater is ab
 // throws, so the option aborts and returns { ok: false }.
 const MISSING_OPTION_CONTENT = `---
 cpn-type: routing-option
-cpn-option-name: "${INSERT_MISSING_OPTION}"
-cpn-on-error: abort
-cpn-steps:
+cpn-routing-option-name: "${INSERT_MISSING_OPTION}"
+cpn-routing-on-error: abort
+cpn-routing-steps:
   - { action: "[[insert-template]]", params: { template: "[[Definitely-Not-A-Template-ZZZ]]" } }
 ---
 

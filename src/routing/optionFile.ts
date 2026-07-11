@@ -1,12 +1,13 @@
 /**
  * Parser for routing OPTION `.md` files (`cpn-type: routing-option`).
  *
- * Validates the `cpn-*` frontmatter and parses the hybrid `cpn-steps` list into
- * `rawSteps` (wikilink references and/or inline action specs). Resolution of
- * references against the discovered action registry happens later, in the
- * RoutingManager, once every action is known.
+ * Validates the `cpn-*` frontmatter and parses the hybrid `cpn-routing-steps`
+ * list into `rawSteps` (wikilink references and/or inline action specs).
+ * Resolution of references against the discovered action registry happens later,
+ * in the RoutingManager, once every action is known.
  */
 
+import { RK } from './frontmatterKeys';
 import type {
 	InlineActionSpec,
 	OnError,
@@ -64,7 +65,7 @@ export type ParseOptionResult = RoutingOptionDefinition | RoutingError;
 // ---------------------------------------------------------------------------
 
 /**
- * Parse one `cpn-steps` entry into a `RawStep`. Accepted authoring shapes:
+ * Parse one `cpn-routing-steps` entry into a `RawStep`. Accepted authoring shapes:
  *   - a bare wikilink string:      `"[[move]]"`
  *   - a ref with params (map):     `{ action: "[[move]]", params: { dir: "x" } }`
  *   - an inline action (map):      `{ inline: { kind: "set-frontmatter", ... } }`
@@ -138,47 +139,47 @@ export function parseRoutingOptionFile(
 	source: RoutingSource,
 ): ParseOptionResult {
 	// -- cpn-type --
-	const cpnType = frontmatter['cpn-type'];
+	const cpnType = frontmatter[RK.TYPE];
 	if (!cpnType) {
-		return { filePath, message: "Missing required frontmatter field 'cpn-type'" };
+		return { filePath, message: `Missing required frontmatter field '${RK.TYPE}'` };
 	}
 	if (cpnType !== 'routing-option') {
 		return {
 			filePath,
-			message: `Invalid 'cpn-type': '${String(cpnType)}'. Must be 'routing-option'`,
+			message: `Invalid '${RK.TYPE}': '${String(cpnType)}'. Must be 'routing-option'`,
 		};
 	}
 
-	// -- cpn-option-name --
-	const name = asString(frontmatter['cpn-option-name']);
+	// -- cpn-routing-option-name --
+	const name = asString(frontmatter[RK.OPTION_NAME]);
 	if (!name) {
-		return { filePath, message: "Missing or empty 'cpn-option-name'" };
+		return { filePath, message: `Missing or empty '${RK.OPTION_NAME}'` };
 	}
 
-	// -- cpn-on-error --
-	const onErrorRaw = asString(frontmatter['cpn-on-error']);
+	// -- cpn-routing-on-error --
+	const onErrorRaw = asString(frontmatter[RK.ON_ERROR]);
 	if (onErrorRaw && !ON_ERROR_VALUES.includes(onErrorRaw as OnError)) {
 		return {
 			filePath,
-			message: `Invalid 'cpn-on-error': '${onErrorRaw}'. Must be 'abort' or 'continue'`,
+			message: `Invalid '${RK.ON_ERROR}': '${onErrorRaw}'. Must be 'abort' or 'continue'`,
 		};
 	}
 	const onError = (onErrorRaw as OnError) ?? 'abort';
 
-	// -- cpn-title-prompt (optional override) --
-	const titlePromptRaw = asString(frontmatter['cpn-title-prompt']);
+	// -- cpn-routing-title-prompt (optional override) --
+	const titlePromptRaw = asString(frontmatter[RK.TITLE_PROMPT]);
 	if (titlePromptRaw && !TITLE_PROMPT_VALUES.includes(titlePromptRaw as TitlePromptMode)) {
 		return {
 			filePath,
-			message: `Invalid 'cpn-title-prompt': '${titlePromptRaw}'. Must be one of ${TITLE_PROMPT_VALUES.join(', ')}`,
+			message: `Invalid '${RK.TITLE_PROMPT}': '${titlePromptRaw}'. Must be one of ${TITLE_PROMPT_VALUES.join(', ')}`,
 		};
 	}
 	const titlePrompt = (titlePromptRaw as TitlePromptMode) ?? undefined;
 
-	// -- cpn-steps --
-	const stepsRaw = frontmatter['cpn-steps'];
+	// -- cpn-routing-steps --
+	const stepsRaw = frontmatter[RK.STEPS];
 	if (!Array.isArray(stepsRaw)) {
-		return { filePath, message: "Missing or invalid 'cpn-steps' (must be a list)" };
+		return { filePath, message: `Missing or invalid '${RK.STEPS}' (must be a list)` };
 	}
 	const rawSteps: RawStep[] = [];
 	for (let i = 0; i < stepsRaw.length; i++) {
@@ -191,7 +192,7 @@ export function parseRoutingOptionFile(
 
 	return {
 		name,
-		description: asString(frontmatter['cpn-description']) ?? undefined,
+		description: asString(frontmatter[RK.DESCRIPTION]) ?? undefined,
 		onError,
 		titlePrompt,
 		steps: [],

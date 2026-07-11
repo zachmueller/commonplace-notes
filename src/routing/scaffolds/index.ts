@@ -4,7 +4,7 @@
  * Each entry's `scaffoldContent` is BOTH the file written to the vault when a
  * user materializes it AND the in-memory fallback parsed at load time when no
  * vault file exists — so routing works out of the box. A vault file whose
- * `cpn-action-name` / `cpn-option-name` matches an entry here OVERRIDES it.
+ * `cpn-routing-action-name` / `cpn-routing-option-name` matches an entry here OVERRIDES it.
  *
  * Analogue of the parser subsystem's `BUILTIN_PARSER_SCAFFOLDS`.
  */

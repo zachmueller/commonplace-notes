@@ -46,25 +46,25 @@ export type TitlePromptMode = 'always' | 'only-if-Untitled' | 'off';
  * carry their config in frontmatter; `code` carries a compiled TS body.
  */
 export interface RoutingActionDefinition {
-	/** `cpn-action-name` — unique key for wikilink references + override matching. */
+	/** `cpn-routing-action-name` — unique key for wikilink references + override matching. */
 	name: string;
-	/** `cpn-action-kind`. */
+	/** `cpn-routing-action-kind`. */
 	kind: RoutingActionKind;
 	/** `cpn-description`, if any. */
 	description?: string;
-	/** `cpn-new-note-only` — skipped when routing an existing note. Default false. */
+	/** `cpn-routing-new-note-only` — skipped when routing an existing note. Default false. */
 	newNoteOnly: boolean;
-	/** `cpn-idempotent` — if false, skipped in update mode (re-running would clobber). Default true. */
+	/** `cpn-routing-idempotent` — if false, skipped in update mode (re-running would clobber). Default true. */
 	idempotent: boolean;
 
 	// -- kind-specific declarative config (params may override at the step level) --
-	/** `move`: `cpn-target-dir`. */
+	/** `move`: `cpn-routing-target-dir`. */
 	targetDir?: string;
 	/** `publish-contexts`: `cpn-publish-contexts`. */
 	publishContexts?: string[];
-	/** `set-frontmatter`: `cpn-frontmatter` object (values may use `$now`/`$ctime` sentinels). */
+	/** `set-frontmatter`: `cpn-routing-frontmatter` object (values may use `$now`/`$ctime` sentinels). */
 	frontmatter?: Record<string, unknown>;
-	/** `insert-template`: `cpn-template` — raw vault path or `[[wikilink]]` to a Templater template. */
+	/** `insert-template`: `cpn-routing-template` — raw vault path or `[[wikilink]]` to a Templater template. */
 	templatePath?: string;
 
 	// -- code kind only --
@@ -84,7 +84,7 @@ export interface RoutingActionDefinition {
 // Option definitions + steps
 // ---------------------------------------------------------------------------
 
-/** An inline action spec authored directly in an option's `cpn-steps`. */
+/** An inline action spec authored directly in an option's `cpn-routing-steps`. */
 export interface InlineActionSpec {
 	kind: RoutingActionKind;
 	name?: string;
@@ -98,7 +98,7 @@ export interface InlineActionSpec {
 	code?: string;
 }
 
-/** A step as authored in `cpn-steps`, before resolution against the action registry. */
+/** A step as authored in `cpn-routing-steps`, before resolution against the action registry. */
 export type RawStep =
 	| { ref: string; params?: Record<string, unknown> }
 	| { inline: InlineActionSpec };
@@ -116,13 +116,13 @@ export interface RoutingStep {
  * `steps` are resolved from `rawSteps` once every action is known.
  */
 export interface RoutingOptionDefinition {
-	/** `cpn-option-name` — shown in the suggester. */
+	/** `cpn-routing-option-name` — shown in the suggester. */
 	name: string;
 	/** `cpn-description` — shown in the suggester. */
 	description?: string;
-	/** `cpn-on-error`. Default `'abort'`. */
+	/** `cpn-routing-on-error`. Default `'abort'`. */
 	onError: OnError;
-	/** `cpn-title-prompt` — per-option override of the global default. */
+	/** `cpn-routing-title-prompt` — per-option override of the global default. */
 	titlePrompt?: TitlePromptMode;
 
 	/** Resolved, ordered pipeline. */
