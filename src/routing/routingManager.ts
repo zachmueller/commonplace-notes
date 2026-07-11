@@ -515,6 +515,9 @@ export class RoutingManager {
 			case 'insert-template':
 				await this.runInsertTemplate(action, context);
 				break;
+			case 'ensure-uid':
+				await this.runEnsureUid(action, context);
+				break;
 			case 'code':
 				if (!action.compiledFn) throw new Error(`Code action '${action.name}' is not compiled`);
 				await action.compiledFn(this.libs!, context, this.plugin.app, utils);
@@ -610,6 +613,15 @@ export class RoutingManager {
 			new Notice(`Skipped "${action.name}": Templater is not installed/enabled.`);
 			Logger.warn('insert-template skipped: Templater unavailable', { action: action.name });
 		}
+	}
+
+	private async runEnsureUid(
+		action: RoutingActionDefinition,
+		context: RoutingContext,
+	): Promise<void> {
+		// Zero-config: the libs helper owns skip-if-present / generate / immediate
+		// write. Unconditional (regardless of publish contexts) and idempotent.
+		await this.libs!.ensureUid(context.file);
 	}
 
 	/** Replace `$now` / `$ctime` string sentinels with computed values. */

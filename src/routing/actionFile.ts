@@ -20,6 +20,7 @@ const ACTION_KINDS: readonly RoutingActionKind[] = [
 	'set-frontmatter',
 	'publish-contexts',
 	'insert-template',
+	'ensure-uid',
 	'code',
 ];
 
@@ -144,6 +145,10 @@ export function parseRoutingActionFile(
 			// Optional here — an option's step params may supply the template.
 			// Stored raw (path or `[[wikilink]]`); resolved at run time.
 			def.templatePath = asString(frontmatter[RK.TEMPLATE]) ?? undefined;
+			break;
+		}
+		case 'ensure-uid': {
+			// Zero-config — always writes `cpn-uid` at the vault's configured length.
 			break;
 		}
 		case 'code': {

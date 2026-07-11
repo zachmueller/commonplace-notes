@@ -42,11 +42,12 @@ memory even with no files in your vault). Materialize any of them to edit — se
 | `set-publish-contexts` | `publish-contexts` | Adds publish contexts (unioned with any existing). Contexts via `params.contexts`. |
 | `default-frontmatter` | `code` | Seeds `created-at` (from the file's ctime) plus empty `tags`/`aliases`. New notes only. |
 | `insert-template` | `insert-template` | Runs a [Templater](https://github.com/SilentVoid13/Templater) template against the note. See [below](#running-a-template-insert-template). |
+| `ensure-uid` | `ensure-uid` | Assigns the note a stable CPN UID (`cpn-uid`) if it lacks one. See [below](#assigning-a-uid-ensure-uid). |
 | `code-example` | `code` | A starting point for your own `code` action — copy and edit. |
 
 ### Action kinds
 
-Every action has a `cpn-routing-action-kind`. The five kinds:
+Every action has a `cpn-routing-action-kind`. The six kinds:
 
 - **`move`** — relocate the note (link-preserving rename).
 - **`set-frontmatter`** — merge a fixed frontmatter mapping (values may use the
@@ -55,6 +56,8 @@ Every action has a `cpn-routing-action-kind`. The five kinds:
   re-run).
 - **`insert-template`** — run a Templater template. See
   [Running a template](#running-a-template-insert-template).
+- **`ensure-uid`** — assign a stable CPN UID (`cpn-uid`) if the note lacks one.
+  See [Assigning a UID](#assigning-a-uid-ensure-uid).
 - **`code`** — run an embedded TypeScript/JavaScript body with a `libs` toolkit
   in scope (the escape hatch for anything the declarative kinds don't cover).
 
@@ -199,6 +202,38 @@ Things to know:
 - **Update mode.** Defaults to `cpn-routing-new-note-only: true`, so re-routing an
   existing note skips it (no duplicate body). Set `cpn-routing-new-note-only: false` to
   also run on update.
+
+## Assigning a UID (`ensure-uid`)
+
+The `ensure-uid` action gives the routed note a **`cpn-uid`** — the stable
+Crockford-Base32 identifier that backs its published URL. Add it as a step to
+mint the id as part of routing, rather than waiting for the id to be created
+lazily at publish time:
+
+```yaml
+cpn-routing-steps:
+  - "[[default-frontmatter]]"
+  - "[[ensure-uid]]"
+  - { action: "[[set-publish-contexts]]", params: { contexts: ["public"] } }
+```
+
+Things to know:
+
+- **Never overwrites.** If the note already has a `cpn-uid`, it's left untouched
+  (the id must stay stable). So re-routing an existing note is a no-op when one is
+  already present.
+- **Unconditional.** The id is minted whenever the step runs, regardless of
+  publish contexts. Place `ensure-uid` **before** `set-publish-contexts` if you
+  want the id to exist by the time the note is opted into publishing.
+- **Written immediately.** The id is flushed to frontmatter right away (not queued),
+  so it's durably on disk before any later step runs.
+- **Length.** The id uses the vault's configured UID length (see
+  [Settings](settings.md)). Zero-config otherwise — no kind-specific frontmatter or
+  step params.
+
+From a `code` action you can do the same thing via the toolkit:
+`const uid = await libs.ensureUid(context.file);` (returns the existing id if
+present, else mints, writes, and returns a new one).
 
 ## Overriding a built-in
 

@@ -52,6 +52,14 @@ const INSERT_SKIP_OPTION = "E2E Insert-Template Skip";
 const INSERT_MISSING_OPTION = "E2E Insert-Template Missing";
 const CPN_OPTIONS_DIR = "cpn/routes/options";
 
+// ensure-uid fixtures — a bare note routed through an option whose only step is
+// the built-in ensure-uid action. Exercises mint-on-create then skip-on-update.
+const ENSURE_UID_NOTE = "Routing-EnsureUid.md";
+const ENSURE_UID_OPTION = "E2E Ensure-UID";
+
+// Crockford Base32 alphabet (excludes I, L, O, U) — validates a generated UID.
+const CROCKFORD_RE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]+$/;
+
 // Bare notes with no frontmatter — routing seeds everything.
 const BARE_BODY = "# Heading\n\nSome body text for the routed note.\n";
 
@@ -83,6 +91,18 @@ cpn-routing-steps:
 ---
 
 Points insert-template at a missing template; the option aborts (ok:false).
+`;
+
+// Option whose only step is the built-in ensure-uid action.
+const ENSURE_UID_OPTION_CONTENT = `---
+cpn-type: routing-option
+cpn-routing-option-name: "${ENSURE_UID_OPTION}"
+cpn-routing-on-error: abort
+cpn-routing-steps:
+  - "[[ensure-uid]]"
+---
+
+Runs ensure-uid against the note; mints a cpn-uid if absent, else leaves it.
 `;
 
 // Substring of the one [CPN Error] the missing-template test intentionally logs
@@ -193,7 +213,7 @@ async function testDiscovery(ctx: TestContext): Promise<void> {
 		return;
 	}
 
-	const expectedActions = ["move", "set-publish-contexts", "default-frontmatter", "insert-template", "code-example"];
+	const expectedActions = ["move", "set-publish-contexts", "default-frontmatter", "insert-template", "ensure-uid", "code-example"];
 	const haveActions = expectedActions.every((a) => probe.actions.includes(a));
 	if (haveActions) {
 		ctx.pass("Built-in actions load", `actions: ${probe.actions.join(", ")}`, shot);
@@ -400,8 +420,74 @@ async function testInsertTemplateMissing(ctx: TestContext): Promise<void> {
 	}
 }
 
+// Carried from the create run so the update run can assert the UID is unchanged.
+let ensureUidValue: unknown;
+
+async function testEnsureUidCreate(ctx: TestContext): Promise<void> {
+	console.log("\nTest 7: ensure-uid mints a cpn-uid on a note that lacks one");
+	const probe = await routeAndRead(ctx, ENSURE_UID_NOTE, ENSURE_UID_OPTION, "create");
+	const shot = await safeShot(ctx, "07-ensure-uid-create");
+
+	if (probe.error) {
+		ctx.fail("ensure-uid mints a UID", probe.error, shot);
+		return;
+	}
+	if (!probe.runOk) {
+		ctx.fail("ensure-uid mints a UID", `run failed: ${probe.runError}`, shot);
+		return;
+	}
+
+	// Read the vault's configured UID length from the live plugin settings.
+	const uidLength = await ctx.page.evaluate(() => {
+		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
+		return plugin?.settings?.uidLength ?? 8;
+	});
+
+	ensureUidValue = probe.uid;
+	const uid = probe.uid;
+	if (
+		typeof uid === "string" &&
+		uid.length === uidLength &&
+		CROCKFORD_RE.test(uid)
+	) {
+		ctx.pass("ensure-uid mints a UID", `cpn-uid = ${uid} (length ${uidLength}, Crockford)`, shot);
+	} else {
+		ctx.fail(
+			"ensure-uid mints a UID",
+			`expected a ${uidLength}-char Crockford string, got ${JSON.stringify(uid)}`,
+			shot,
+		);
+	}
+}
+
+async function testEnsureUidUpdateStable(ctx: TestContext): Promise<void> {
+	console.log("\nTest 8: ensure-uid leaves an existing cpn-uid unchanged (update mode)");
+	// Same note as Test 7 — it already has a cpn-uid, so re-running must not clobber it.
+	const probe = await routeAndRead(ctx, ENSURE_UID_NOTE, ENSURE_UID_OPTION, "update");
+	const shot = await safeShot(ctx, "08-ensure-uid-update");
+
+	if (probe.error) {
+		ctx.fail("ensure-uid is stable on re-run", probe.error, shot);
+		return;
+	}
+	if (!probe.runOk) {
+		ctx.fail("ensure-uid is stable on re-run", `run failed: ${probe.runError}`, shot);
+		return;
+	}
+
+	if (probe.uid === ensureUidValue && typeof probe.uid === "string") {
+		ctx.pass("ensure-uid is stable on re-run", `cpn-uid still ${probe.uid} (not regenerated)`, shot);
+	} else {
+		ctx.fail(
+			"ensure-uid is stable on re-run",
+			`cpn-uid changed: ${JSON.stringify(ensureUidValue)} → ${JSON.stringify(probe.uid)}`,
+			shot,
+		);
+	}
+}
+
 async function testUnknownOption(ctx: TestContext): Promise<void> {
-	console.log("\nTest 7: Unknown option returns a structured error (no throw)");
+	console.log("\nTest 9: Unknown option returns a structured error (no throw)");
 	const probe = await ctx.page.evaluate(async ({ notePath }) => {
 		const app = (window as any).app;
 		const plugin = app?.plugins?.plugins?.["commonplace-notes"];
@@ -428,7 +514,7 @@ async function testUnknownOption(ctx: TestContext): Promise<void> {
 }
 
 async function testNoErrors(ctx: TestContext): Promise<void> {
-	console.log("\nTest 8: no unexpected plugin errors captured");
+	console.log("\nTest 10: no unexpected plugin errors captured");
 	// Test 6 intentionally drives an abort, which logs one [CPN Error] via
 	// executeOption's catch. Exclude that expected entry; everything else is a fail.
 	const errors = ctx.collector
@@ -454,6 +540,8 @@ async function tests(ctx: TestContext): Promise<void> {
 	await testPrivateOption(ctx);
 	await testInsertTemplateSkip(ctx);
 	await testInsertTemplateMissing(ctx);
+	await testEnsureUidCreate(ctx);
+	await testEnsureUidUpdateStable(ctx);
 	await testUnknownOption(ctx);
 	await testNoErrors(ctx);
 }
@@ -469,13 +557,15 @@ runTest(
 			createTestNote(vaultPath, PUBLIC_NOTE, BARE_BODY);
 			createTestNote(vaultPath, PRIVATE_NOTE, BARE_BODY);
 			createTestNote(vaultPath, INSERT_SKIP_NOTE, BARE_BODY);
+			createTestNote(vaultPath, ENSURE_UID_NOTE, BARE_BODY);
 			// A real template file so insert-template resolution succeeds.
 			createTestNote(vaultPath, INSERT_TEMPLATE_FILE, INSERT_TEMPLATE_BODY);
-			// Author the two insert-template options into the discovered options dir.
+			// Author the insert-template + ensure-uid options into the discovered options dir.
 			const optionsDir = path.join(vaultPath, CPN_OPTIONS_DIR);
 			fs.mkdirSync(optionsDir, { recursive: true });
 			fs.writeFileSync(path.join(optionsDir, `${INSERT_SKIP_OPTION}.md`), SKIP_OPTION_CONTENT);
 			fs.writeFileSync(path.join(optionsDir, `${INSERT_MISSING_OPTION}.md`), MISSING_OPTION_CONTENT);
+			fs.writeFileSync(path.join(optionsDir, `${ENSURE_UID_OPTION}.md`), ENSURE_UID_OPTION_CONTENT);
 		},
 		// The run moves notes and writes frontmatter; clean up both original and
 		// moved locations so the next run starts fresh.
@@ -486,8 +576,10 @@ runTest(
 			"private",
 			INSERT_SKIP_NOTE,
 			INSERT_TEMPLATE_FILE,
+			ENSURE_UID_NOTE,
 			`${CPN_OPTIONS_DIR}/${INSERT_SKIP_OPTION}.md`,
 			`${CPN_OPTIONS_DIR}/${INSERT_MISSING_OPTION}.md`,
+			`${CPN_OPTIONS_DIR}/${ENSURE_UID_OPTION}.md`,
 		],
 	},
 	tests,

@@ -28,6 +28,7 @@ export type RoutingActionKind =
 	| 'set-frontmatter'
 	| 'publish-contexts'
 	| 'insert-template'
+	| 'ensure-uid'
 	| 'code';
 
 /** Per-option failure policy. */
@@ -187,6 +188,13 @@ export interface RoutingLibs {
 	renameFile: (file: TFile, newPath: string) => Promise<void>;
 	/** Read frontmatter with a manual-YAML fallback for cold-cache (freshly-created) files. */
 	readFrontmatter: (file: TFile) => Promise<Record<string, unknown> | null>;
+	/**
+	 * Ensure the note has a stable CPN UID (`cpn-uid`). Returns the existing id
+	 * untouched if present (never clobbers a published-URL-backing id); otherwise
+	 * mints one at the configured `uidLength` and writes it immediately (bypassing
+	 * the frontmatter batch queue), then returns it.
+	 */
+	ensureUid: (file: TFile) => Promise<string>;
 	/**
 	 * Run a Templater template against a target file (merges frontmatter + appends
 	 * body). Resolves `false` when Templater is absent — the caller decides how to

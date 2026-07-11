@@ -12,6 +12,8 @@
 import { moment, parseYaml, type TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { extractFrontmatter } from '../utils/vaultScan';
+import { generateUID } from '../utils/uid';
+import { RK } from './frontmatterKeys';
 import type { RoutingLibs } from './types';
 
 const DEFAULT_DATE_FORMAT = 'YYYY-MM-DD HH:mm';
@@ -37,6 +39,24 @@ export function buildRoutingLibs(plugin: CommonplaceNotesPlugin): RoutingLibs {
 	const { app } = plugin;
 	const tp = resolveTemplater(plugin);
 
+	/**
+	 * Read a file's frontmatter, preferring the metadata cache but falling back to
+	 * a manual YAML parse for cold-cache (freshly-created) files. Shared by the
+	 * `readFrontmatter` toolkit method and `ensureUid`.
+	 */
+	async function readFrontmatterInternal(file: TFile): Promise<Record<string, unknown> | null> {
+		const cached = app.metadataCache.getFileCache(file)?.frontmatter as
+			| Record<string, unknown>
+			| undefined;
+		if (cached) return cached;
+		try {
+			const content = await app.vault.read(file);
+			return extractFrontmatter(content, parseYaml);
+		} catch {
+			return null;
+		}
+	}
+
 	return {
 		now(format = DEFAULT_DATE_FORMAT): string {
 			return moment().format(format);
@@ -55,16 +75,20 @@ export function buildRoutingLibs(plugin: CommonplaceNotesPlugin): RoutingLibs {
 		},
 
 		async readFrontmatter(file: TFile): Promise<Record<string, unknown> | null> {
-			const cached = app.metadataCache.getFileCache(file)?.frontmatter as
-				| Record<string, unknown>
-				| undefined;
-			if (cached) return cached;
-			try {
-				const content = await app.vault.read(file);
-				return extractFrontmatter(content, parseYaml);
-			} catch {
-				return null;
-			}
+			return readFrontmatterInternal(file);
+		},
+
+		async ensureUid(file: TFile): Promise<string> {
+			// Never clobber an existing (published-URL-backing) id — return it as-is.
+			const fm = await readFrontmatterInternal(file);
+			const existing = fm?.[RK.UID];
+			if (typeof existing === 'string' && existing.trim() !== '') return existing;
+
+			// Mint + write immediately via mergeFrontmatter (bypasses the batch
+			// queue), so the id is durably on disk before any later routing step.
+			const uid = generateUID(plugin.settings.uidLength ?? 8);
+			await plugin.frontmatterManager.mergeFrontmatter(file, { [RK.UID]: uid });
+			return uid;
 		},
 
 		async runTemplaterTemplate(templateFile: TFile, targetFile: TFile): Promise<boolean> {

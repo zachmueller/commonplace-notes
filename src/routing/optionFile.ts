@@ -26,6 +26,7 @@ const ACTION_KINDS: readonly RoutingActionKind[] = [
 	'set-frontmatter',
 	'publish-contexts',
 	'insert-template',
+	'ensure-uid',
 	'code',
 ];
 

@@ -14,6 +14,7 @@ import { MOVE } from './move';
 import { SET_PUBLISH_CONTEXTS } from './set-publish-contexts';
 import { DEFAULT_FRONTMATTER } from './default-frontmatter';
 import { INSERT_TEMPLATE } from './insert-template';
+import { ENSURE_UID } from './ensure-uid';
 import { CODE_EXAMPLE } from './code-example';
 import { OPTION_PUBLIC_ALL, OPTION_PRIVATE, OPTION_AMAZON_ONLY } from './options';
 
@@ -22,6 +23,7 @@ const ACTION_SCAFFOLDS: BuiltinRoutingActionScaffold[] = [
 	SET_PUBLISH_CONTEXTS,
 	DEFAULT_FRONTMATTER,
 	INSERT_TEMPLATE,
+	ENSURE_UID,
 	CODE_EXAMPLE,
 ];
 

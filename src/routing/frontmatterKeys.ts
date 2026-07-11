@@ -28,7 +28,10 @@ export const RK = {
 	// `cpn-description` is a generic description shared with the parser subsystem.
 	// `cpn-publish-contexts` is the core note-publishing property; the
 	// `publish-contexts` action deliberately reuses it. Do NOT prefix these.
+	// `cpn-uid` is the core stable note identifier (backs published URLs); the
+	// `ensure-uid` action reuses it. Do NOT prefix.
 	TYPE: 'cpn-type',
 	DESCRIPTION: 'cpn-description',
 	PUBLISH_CONTEXTS: 'cpn-publish-contexts',
+	UID: 'cpn-uid',
 } as const;
