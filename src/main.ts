@@ -33,6 +33,7 @@ import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { RecentCommentsView, RECENT_COMMENTS_VIEW } from './views/recentCommentsView';
+import type { CommentThreadCache } from './utils/recentComments';
 
 // defining interfaces to facilitate deregistering commands
 interface Commands {
@@ -48,6 +49,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 	urlScheme: 'current',
 	urlStackWindowSeconds: 10,
 	cpnDirectory: 'cpn',
+	commentsPanelMode: 'recent',
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -91,6 +93,12 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	awsSdkManager: AwsSdkManager;
 	cloudFormationManager: CloudFormationManager;
 	private registeredProfileCommandIds: string[] = [];
+
+	// Session-only per-note comment thread cache, shared by both comments-panel
+	// modes (Recent + Active note) and keyed by `${profileId}::${noteUid}`. Lives
+	// on the plugin so a note fetched in one mode is instantly reusable in the
+	// other; created fresh on load and GC'd on unload/reload (clears on reload).
+	readonly commentThreadCache: CommentThreadCache = new Map();
 
 	// Transient state for append-mode URL stacking. Holds the in-progress
 	// stack, the sliding-window timers, and the live countdown Notice.
@@ -152,7 +160,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		// Recent Comments side panel (author-facing Phase 2).
 		this.registerView(RECENT_COMMENTS_VIEW, (leaf) => new RecentCommentsView(leaf, this));
-		this.addRibbonIcon('message-square', 'Recent comments', () => this.activateRecentCommentsView());
+		this.addRibbonIcon('message-square', 'Comments', () => this.activateRecentCommentsView());
 
 		// Refresh indicators upon fully loading
 		this.app.workspace.onLayoutReady(async () => {
@@ -213,7 +221,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'open-recent-comments',
-			name: 'Open recent comments panel',
+			name: 'Open comments panel',
 			callback: () => this.activateRecentCommentsView(),
 		});
 

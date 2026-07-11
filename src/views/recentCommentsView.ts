@@ -1,25 +1,43 @@
 import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, Keymap, PaneType, TFile, setIcon } from 'obsidian';
 import type CommonplaceNotesPlugin from '../main';
-import type { PublishingProfile } from '../types';
+import type { PublishingProfile, CommentsPanelMode } from '../types';
 import { NoticeManager } from '../utils/notice';
-import { buildRecentFeed, RecentFeed, RecentActivityGroup, CommentItem } from '../utils/recentComments';
+import {
+	buildRecentFeed,
+	getThread,
+	getCachedThread,
+	STALE_MS,
+	RecentFeed,
+	RecentActivityGroup,
+	CommentItem,
+} from '../utils/recentComments';
 import { rewriteCommentWikilinks } from '../utils/commentWikilinks';
 
 export const RECENT_COMMENTS_VIEW = 'cpn-recent-comments';
 
-/** Auto-refresh threshold on panel open: only re-query if the feed is older than this. */
-const STALE_MS = 8 * 60 * 60 * 1000; // 8h
-
 /**
- * Author-facing side panel showing recent reader comments across a published
- * site. Read-only. Refresh is manual (button) plus an opportunistic >=8h-stale
- * refresh on panel activation — never an idle timer (DynamoDB cost governance).
+ * Author-facing comments side panel. Two modes (persisted): "Recent" shows the
+ * site-wide recency feed; "Active note" shows the active editor note's thread.
+ * Read-only. Refresh is manual (button) plus, in Recent mode only, an
+ * opportunistic >=8h-stale refresh on panel activation — never an idle timer
+ * (DynamoDB cost governance). Active-note mode never auto-fetches; it renders
+ * from the plugin-wide shared thread cache and pulls only on manual Refresh.
  */
 export class RecentCommentsView extends ItemView {
 	private plugin: CommonplaceNotesPlugin;
 	private feed: RecentFeed | null = null;
 	private activeProfileId: string | null = null;
 	private isRefreshing = false;
+	// Persisted view mode; seeded from settings in onOpen.
+	private mode: CommentsPanelMode = 'recent';
+	// Active-note mode: which publish context's export to show. Session-only and
+	// independent of activeProfileId (which drives Recent) so note navigation
+	// never clobbers the Recent profile selection.
+	private activeNoteContextId: string | null = null;
+	// Active-note mode: path of the note last rendered, so the active-leaf-change
+	// follower can skip re-renders that aren't an actual note change (e.g. focusing
+	// the panel itself).
+	private activeNotePath: string | null = null;
 	// Owns the lifecycle of event handlers created while rendering comment
 	// Markdown; replaced on each render so handlers don't accumulate.
 	private feedComponent: Component | null = null;
@@ -33,7 +51,7 @@ export class RecentCommentsView extends ItemView {
 	}
 
 	getViewType(): string { return RECENT_COMMENTS_VIEW; }
-	getDisplayText(): string { return 'Recent comments'; }
+	getDisplayText(): string { return 'Comments'; }
 	getIcon(): string { return 'message-square'; }
 
 	/** Profiles that have commenting enabled and a deployed comment table. */
@@ -51,15 +69,32 @@ export class RecentCommentsView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.mode = this.plugin.settings.commentsPanelMode ?? 'recent';
 		const profile = this.currentProfile();
 		if (profile) this.activeProfileId = profile.id;
 		this.render();
 
-		// Opportunistic auto-refresh: only when the active profile's feed is stale.
-		if (profile) {
+		// Opportunistic auto-refresh: Recent mode only, and only when the active
+		// profile's feed is stale. Active-note mode never auto-fetches.
+		if (this.mode === 'recent' && profile) {
 			const stale = Date.now() - (profile.commentsLastRefreshed ?? 0) > STALE_MS;
 			if (stale) await this.refresh();
 		}
+
+		// Follow the editor in active-note mode: re-render (never fetch) when the
+		// user navigates to a different note, so an already-cached note swaps in
+		// instantly and an uncached one falls to the refresh prompt. registerEvent
+		// auto-unregisters on view close.
+		this.registerEvent(
+			this.plugin.app.workspace.on('active-leaf-change', () => {
+				if (this.mode !== 'active-note') return;
+				const path = this.plugin.app.workspace.getActiveFile()?.path ?? null;
+				// Skip focusing the panel itself (same path) and null (no file-backed
+				// leaf) — the latter keeps the last thread visible rather than blanking.
+				if (path === null || path === this.activeNotePath) return;
+				this.render();
+			}),
+		);
 	}
 
 	async onClose(): Promise<void> {
@@ -70,8 +105,11 @@ export class RecentCommentsView extends ItemView {
 	/**
 	 * Public entry point for the layout-ready stale check in main.ts: refresh
 	 * only if the active profile's feed is >=8h stale. Safe to call repeatedly.
+	 * Recent mode only — active-note mode never auto-fetches (a panel restored in
+	 * active-note mode must not spend a DynamoDB query at startup).
 	 */
 	async refreshIfStale(): Promise<void> {
+		if (this.mode !== 'recent') return;
 		const profile = this.currentProfile();
 		if (!profile) return;
 		if (Date.now() - (profile.commentsLastRefreshed ?? 0) > STALE_MS) {
@@ -102,6 +140,47 @@ export class RecentCommentsView extends ItemView {
 		this.render();
 	}
 
+	/**
+	 * Switch panel mode and persist it. Re-renders, then runs the stale check —
+	 * self-gating, so entering Recent behaves like opening it (a >=8h-stale feed
+	 * refreshes) while entering Active-note fetches nothing.
+	 */
+	private async setMode(mode: CommentsPanelMode): Promise<void> {
+		this.mode = mode;
+		this.plugin.settings.commentsPanelMode = mode;
+		await this.plugin.saveSettings();
+		this.render();
+		await this.refreshIfStale();
+	}
+
+	/** Manual refresh for active-note mode: a single CDN GET, no DynamoDB. */
+	async refreshActiveNote(): Promise<void> {
+		if (this.isRefreshing) return;
+		const file = this.plugin.app.workspace.getActiveFile();
+		if (!file) return;
+		const contexts = this.activeNoteContexts(file);
+		if (contexts.length === 0) return;
+		const profile = this.currentNoteContext(contexts);
+		// Pure read — NOT getNoteUID, which mints/queues a cpn-uid as a side effect.
+		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid');
+		if (!noteUid) return;
+
+		this.isRefreshing = true;
+		this.render(); // reflect the refreshing state in the header
+		// getThread writes the plugin-wide shared cache (reused by Recent mode too);
+		// force bypasses the freshness window. On a network error it throws (cache
+		// untouched) and showProgress reports the failure, so the refresh prompt
+		// lets the user retry rather than caching a transient failure as "no comments".
+		await NoticeManager.showProgress(
+			'Loading comments for this note',
+			getThread(this.plugin, profile, noteUid, { force: true }),
+			'Comments updated',
+			'Failed to load comments',
+		);
+		this.isRefreshing = false;
+		this.render();
+	}
+
 	// ---- Rendering --------------------------------------------------------
 
 	private render(): void {
@@ -128,6 +207,11 @@ export class RecentCommentsView extends ItemView {
 
 		this.renderChrome(container, profiles);
 
+		if (this.mode === 'active-note') {
+			this.renderActiveNote(container);
+			return;
+		}
+
 		if (!this.feed || this.feed.groups.length === 0) {
 			const empty = container.createDiv({ cls: 'cpn-recent-comments-empty' });
 			empty.setText(this.feed ? 'No recent comments.' : 'Refresh to load recent comments.');
@@ -136,6 +220,43 @@ export class RecentCommentsView extends ItemView {
 
 		const list = container.createDiv({ cls: 'cpn-recent-comments-list' });
 		for (const group of this.feed.groups) this.renderGroup(list, group);
+	}
+
+	/**
+	 * Active-note render branch: show the active editor note's cached thread, or
+	 * the appropriate empty state. Never fetches — the shared cache is populated
+	 * only by the manual Refresh button (refreshActiveNote) or a Recent refresh.
+	 */
+	private renderActiveNote(container: HTMLElement): void {
+		const file = this.plugin.app.workspace.getActiveFile();
+		this.activeNotePath = file?.path ?? null;
+
+		const empty = (text: string) =>
+			container.createDiv({ cls: 'cpn-recent-comments-empty' }).setText(text);
+
+		if (!file) return empty('Open a note to see its comments.');
+		const contexts = this.activeNoteContexts(file);
+		if (contexts.length === 0) {
+			return empty("This note isn't published to a commenting-enabled site.");
+		}
+		const profile = this.currentNoteContext(contexts);
+		// Pure read — NOT getNoteUID, which mints/queues a cpn-uid as a side effect.
+		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid');
+		if (!noteUid) return empty('Publish this note first to load its comments.');
+
+		const cached = getCachedThread(this.plugin, profile.id, noteUid);
+		if (!cached) return empty('Refresh to load comments for this note.');
+		if (cached.items.length === 0) return empty('No comments yet.');
+
+		const list = container.createDiv({ cls: 'cpn-recent-comments-list' });
+		this.renderGroup(list, {
+			noteUid,
+			noteTitle: this.plugin.frontmatterManager.getNoteTitle(file),
+			localPath: file.path,
+			recent: [],
+			thread: cached.items,
+			recentUids: new Set<string>(), // no "new" highlight in active-note mode
+		});
 	}
 
 	private renderEmptyState(container: HTMLElement): void {
@@ -149,30 +270,65 @@ export class RecentCommentsView extends ItemView {
 	private renderChrome(container: HTMLElement, profiles: PublishingProfile[]): void {
 		const header = container.createDiv({ cls: 'cpn-recent-comments-header' });
 
-		// Profile selector (skipped when there's only one commenting profile).
-		if (profiles.length > 1) {
-			const select = header.createEl('select', { cls: 'cpn-recent-comments-profile' });
-			for (const p of profiles) {
-				const opt = select.createEl('option', { text: p.name, value: p.id });
-				if (p.id === this.activeProfileId) opt.selected = true;
+		// (1) Mode toggle — always shown.
+		const modes = header.createDiv({ cls: 'cpn-recent-comments-modes' });
+		const mkModeBtn = (label: string, m: CommentsPanelMode) => {
+			const btn = modes.createEl('button', { cls: 'cpn-recent-comments-mode-btn', text: label });
+			if (this.mode === m) btn.addClass('is-active');
+			btn.addEventListener('click', () => { if (this.mode !== m) void this.setMode(m); });
+		};
+		mkModeBtn('Recent', 'recent');
+		mkModeBtn('Active note', 'active-note');
+
+		// (2) Mode-specific selector.
+		if (this.mode === 'recent') {
+			// Profile selector (skipped when there's only one commenting profile).
+			if (profiles.length > 1) {
+				const select = header.createEl('select', { cls: 'cpn-recent-comments-profile' });
+				for (const p of profiles) {
+					const opt = select.createEl('option', { text: p.name, value: p.id });
+					if (p.id === this.activeProfileId) opt.selected = true;
+				}
+				select.addEventListener('change', async () => {
+					this.activeProfileId = select.value;
+					this.feed = null; // feed is per-profile; drop the old one
+					this.render();
+					await this.refreshIfStale();
+				});
 			}
-			select.addEventListener('change', async () => {
-				this.activeProfileId = select.value;
-				this.feed = null; // feed is per-profile; drop the old one
-				this.render();
-				await this.refreshIfStale();
-			});
+		} else {
+			// Publish-context selector: only the commenting contexts the active note
+			// is actually published to. Skipped when there's 0 or 1.
+			const file = this.plugin.app.workspace.getActiveFile();
+			const contexts = this.activeNoteContexts(file);
+			if (contexts.length > 1) {
+				const current = this.currentNoteContext(contexts);
+				const select = header.createEl('select', { cls: 'cpn-recent-comments-context' });
+				for (const p of contexts) {
+					const opt = select.createEl('option', { text: p.name, value: p.id });
+					if (p.id === current.id) opt.selected = true; // reflect the resolved context
+				}
+				select.addEventListener('change', () => {
+					// Switching context shows that context's cache/prompt — never fetches.
+					this.activeNoteContextId = select.value;
+					this.render();
+				});
+			}
 		}
 
+		// (3) Refresh button — dispatches on mode.
 		const refreshBtn = header.createEl('button', { cls: 'cpn-recent-comments-refresh' });
 		setIcon(refreshBtn, 'refresh-cw');
 		refreshBtn.createSpan({ text: this.isRefreshing ? ' Refreshing…' : ' Refresh' });
 		refreshBtn.disabled = this.isRefreshing;
-		refreshBtn.addEventListener('click', () => this.refresh());
+		refreshBtn.addEventListener('click', () =>
+			this.mode === 'recent' ? this.refresh() : this.refreshActiveNote());
 
-		const profile = this.currentProfile();
+		// (4) Freshness label — per-source, per-mode.
 		const label = header.createDiv({ cls: 'cpn-recent-comments-lastrefreshed' });
-		label.setText(this.lastRefreshedLabel(profile));
+		label.setText(this.mode === 'recent'
+			? this.lastRefreshedLabel(this.currentProfile())
+			: this.activeNoteLoadedLabel());
 	}
 
 	private lastRefreshedLabel(profile: PublishingProfile | null): string {
@@ -181,6 +337,36 @@ export class RecentCommentsView extends ItemView {
 		// no interval to keep a relative "N ago" label current.
 		if (!ts) return 'Never refreshed';
 		return `Last refreshed ${new Date(ts).toLocaleString()}`;
+	}
+
+	/** Freshness label for active-note mode: when this note's thread was loaded. */
+	private activeNoteLoadedLabel(): string {
+		const file = this.plugin.app.workspace.getActiveFile();
+		if (!file) return '';
+		const contexts = this.activeNoteContexts(file);
+		if (contexts.length === 0) return '';
+		const profile = this.currentNoteContext(contexts);
+		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid');
+		if (!noteUid) return '';
+		const cached = getCachedThread(this.plugin, profile.id, noteUid);
+		if (!cached) return 'Not loaded';
+		return `Loaded ${new Date(cached.fetchedAt).toLocaleString()}`;
+	}
+
+	/**
+	 * Commenting-enabled publish contexts the active note actually belongs to:
+	 * commentingProfiles() ∩ the note's cpn-publish-contexts. Uses the sync,
+	 * side-effect-free normalizePublishContexts (never getNoteUID).
+	 */
+	private activeNoteContexts(file: TFile | null): PublishingProfile[] {
+		if (!file) return [];
+		const ctx = this.plugin.frontmatterManager.normalizePublishContexts(file);
+		return this.commentingProfiles().filter((p) => ctx.includes(p.id));
+	}
+
+	/** The selected active-note context, falling back to the first available. */
+	private currentNoteContext(contexts: PublishingProfile[]): PublishingProfile {
+		return contexts.find((p) => p.id === this.activeNoteContextId) ?? contexts[0];
 	}
 
 	private renderGroup(list: HTMLElement, group: RecentActivityGroup): void {

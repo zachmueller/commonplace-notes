@@ -24,6 +24,15 @@ const ACTIVITY_INDEX = 'GSI1';
 const ACTIVITY_PK = 'ACTIVITY';
 const DEFAULT_FEED_LIMIT = 25;
 
+/**
+ * Shared "auto-refresh waiting period" for both comment sources. An automatic
+ * trigger (panel open, mode switch, note navigation) never re-fetches a source
+ * whose timestamp is within this window; only the manual Refresh button
+ * overrides it. Gates the Tier 1 recency query (via profile.commentsLastRefreshed)
+ * and each Tier 2 per-note thread (via its shared-cache fetchedAt).
+ */
+export const STALE_MS = 8 * 60 * 60 * 1000; // 8h
+
 /** AWS error names that mean "credentials are stale/invalid" — trigger a refresh + retry. */
 const AUTH_ERR = /Expired|UnrecognizedClient|AccessDenied|CredentialsProviderError|InvalidSignature/i;
 
@@ -68,6 +77,28 @@ interface CommentExport {
 }
 
 /**
+ * One note's cached exported thread plus when it was fetched. Stores the raw
+ * CDN thread (not a merged view) so `fetchedAt` is unambiguous; Recent mode
+ * layers its recency-GSI items on top via `mergeThread` at render time.
+ */
+export interface CachedThread {
+	items: CommentItem[];
+	fetchedAt: number; // epoch ms
+}
+
+/**
+ * Session-only per-note thread cache shared by both comments-panel modes,
+ * keyed by `${profileId}::${noteUid}`. Lives on the plugin instance so a note
+ * loaded in one mode is instantly available in the other; cleared on reload.
+ */
+export type CommentThreadCache = Map<string, CachedThread>;
+
+/** Cache key for a note's thread under a given publish context. */
+export function threadCacheKey(profileId: string, noteUid: string): string {
+	return `${profileId}::${noteUid}`;
+}
+
+/**
  * Tier 1: query the recency GSI for the newest-N comments site-wide. On an
  * auth error, refresh the profile's credentials once (which invalidates the
  * cached DynamoDB client) and retry.
@@ -109,22 +140,55 @@ async function queryRecent(
  * Tier 2: fetch a note's exported thread from the CDN. Uses Obsidian's
  * `requestUrl` (not `fetch`) to avoid a CORS preflight against the CloudFront
  * origin. 403/404 both mean "no export yet" (S3 OAC returns 403 for a missing
- * object) — treated as "no thread available", not an error. Exported comments
- * are already chronologically sorted and carry `parentCommentUid`.
+ * object) — returned as `null` = "no thread available", a definitive answer.
+ * A genuine network failure (DNS/connectivity) is deliberately NOT caught here:
+ * it propagates so `getThread` can tell "transient failure" (don't cache) apart
+ * from "no export" (cache as empty). Exported comments are already
+ * chronologically sorted and carry `parentCommentUid`.
  */
 async function fetchThread(profile: PublishingProfile, noteUid: string): Promise<CommentItem[] | null> {
 	const base = profile.baseUrl.replace(/\/?$/, '/');
 	const url = `${base}comments/${encodeURIComponent(noteUid)}.json`;
-	try {
-		const r = await requestUrl({ url, throw: false });
-		if (r.status >= 400) return null; // 403/404 = no export yet; other errors = no thread
-		const json = r.json as CommentExport | CommentItem[] | undefined;
-		if (!json) return null;
-		return Array.isArray(json) ? json : (json.comments ?? null);
-	} catch (e) {
-		Logger.debug(`Failed to fetch thread for ${noteUid}:`, e);
-		return null;
+	const r = await requestUrl({ url, throw: false });
+	if (r.status >= 400) return null; // 403/404 = no export yet; other errors = no thread
+	const json = r.json as CommentExport | CommentItem[] | undefined;
+	if (!json) return null;
+	return Array.isArray(json) ? json : (json.comments ?? null);
+}
+
+/** Read the cached thread for a note+context without fetching (render paths). */
+export function getCachedThread(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+	noteUid: string,
+): CachedThread | undefined {
+	return plugin.commentThreadCache.get(threadCacheKey(profileId, noteUid));
+}
+
+/**
+ * Cache-aware per-note thread fetch shared by both panel modes. Reuses the
+ * shared-cache entry when it's within `maxAgeMs` (default `STALE_MS`) unless
+ * `force` is set (the manual Refresh override). A definitive result (a thread,
+ * or `null`→`[]` for "no export yet") is cached with a fresh `fetchedAt`. A
+ * genuine network error propagates and is NOT cached, so a transient blip never
+ * masquerades as "no comments" for the whole window; callers decide how to
+ * surface it (Recent mode falls back per-note; active-note mode reports it).
+ */
+export async function getThread(
+	plugin: CommonplaceNotesPlugin,
+	profile: PublishingProfile,
+	noteUid: string,
+	opts: { force?: boolean; maxAgeMs?: number } = {},
+): Promise<CommentItem[]> {
+	const key = threadCacheKey(profile.id, noteUid);
+	const cached = plugin.commentThreadCache.get(key);
+	const maxAge = opts.maxAgeMs ?? STALE_MS;
+	if (!opts.force && cached && Date.now() - cached.fetchedAt < maxAge) {
+		return cached.items; // within the window — reuse, no network
 	}
+	const items = (await fetchThread(profile, noteUid)) ?? []; // throws on network error → not cached
+	plugin.commentThreadCache.set(key, { items, fetchedAt: Date.now() });
+	return items;
 }
 
 /** Read-only reverse lookup: comment noteUid -> local vault file (if published here). */
@@ -172,9 +236,22 @@ export async function buildRecentFeed(
 		byNote.get(item.noteUid)!.push(item);
 	}
 
-	// Tier 2: fetch each distinct note's thread in parallel (bounded by `limit`).
+	// Tier 2: fetch each distinct note's thread in parallel (bounded by `limit`),
+	// via the shared cache — notes already fetched within the window (e.g. by
+	// Active-note mode) are reused with no network. buildRecentFeed is only
+	// reached on a manual/stale Recent refresh, so Tier 1 is always re-queried;
+	// Tier 2 is where the shared-cache reuse happens. One note's network error is
+	// isolated (fall back to null) so it can't abort the whole feed — the recent
+	// items still merge in below.
 	const threads = await Promise.all(
-		order.map(async (noteUid) => ({ noteUid, thread: await fetchThread(profile, noteUid) })),
+		order.map(async (noteUid) => {
+			try {
+				return { noteUid, thread: await getThread(plugin, profile, noteUid) };
+			} catch (e) {
+				Logger.debug(`Failed to fetch thread for ${noteUid}:`, e);
+				return { noteUid, thread: null as CommentItem[] | null };
+			}
+		}),
 	);
 	const threadByNote = new Map(threads.map((t) => [t.noteUid, t.thread]));
 

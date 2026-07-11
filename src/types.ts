@@ -1,6 +1,9 @@
 import { TFile } from 'obsidian';
 import { InfrastructureState, ReadGateMode } from './infrastructure/types';
 
+/** Comments panel view mode: the site-wide recency feed vs. the active note's thread. */
+export type CommentsPanelMode = 'recent' | 'active-note';
+
 export interface CommonplaceNotesSettings {
     publishingProfiles: PublishingProfile[];
 	debugMode?: boolean;
@@ -9,6 +12,8 @@ export interface CommonplaceNotesSettings {
 	urlStackWindowSeconds?: number;
 	/** Vault folder for CPN extension files. Parser stages live in `<dir>/parsers/`. Default `cpn`. */
 	cpnDirectory?: string;
+	/** Comments panel view mode; persisted across restarts. Default 'recent'. */
+	commentsPanelMode?: CommentsPanelMode;
 }
 
 export interface PublishingProfile {

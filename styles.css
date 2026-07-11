@@ -388,3 +388,31 @@
 	font-style: italic;
 	color: var(--text-muted);
 }
+
+/* Recent / Active-note segmented mode toggle. */
+.cpn-recent-comments-modes {
+	display: inline-flex;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+.cpn-recent-comments-mode-btn {
+	border: none;
+	border-radius: 0;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	padding: 2px 8px;
+	cursor: pointer;
+	box-shadow: none;
+}
+
+.cpn-recent-comments-mode-btn.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+/* Publish-context selector in active-note mode (matches the profile select). */
+.cpn-recent-comments-context {
+	max-width: 40%;
+}
