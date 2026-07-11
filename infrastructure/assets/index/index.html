@@ -723,6 +723,41 @@ body.panel-resizing {
 	border-top: 1px solid var(--border-color);
 }
 
+/* Collapsible "Referenced by" summary: styled like the old <h3>, native
+   disclosure marker hidden in favor of a rotating chevron on the left. */
+.backlinks > summary.backlinks-summary {
+	font-family: "Segoe UI", Arial, sans-serif;
+	font-size: 1.17em;
+	line-height: 1.2;
+	font-weight: bold;
+	color: var(--text-primary);
+	margin: 0 0 0.5em;
+	cursor: pointer;
+	list-style: none;
+	display: flex;
+	align-items: center;
+	gap: 0.4em;
+}
+
+.backlinks > summary.backlinks-summary::-webkit-details-marker {
+	display: none;
+}
+
+.backlinks > summary.backlinks-summary::before {
+	content: "\25B8"; /* ▸ */
+	color: var(--text-secondary);
+	font-size: 0.85em;
+	transition: transform 0.2s ease;
+}
+
+details.backlinks[open] > summary.backlinks-summary::before {
+	transform: rotate(90deg);
+}
+
+.backlinks-list {
+	margin-top: 8px;
+}
+
 /* Comments (per-panel) */
 .comments {
 	margin-top: 40px;
@@ -2005,12 +2040,14 @@ ${closeButton}
 					${diffNoticeHtml}
 					<div class="content">${noteData.content}</div>
 					${noteData.backlinks.length ? `
-			<div class="backlinks">
-				<h3>Referenced by:</h3>
-				${noteData.backlinks.map(link =>
-					`<div><a href="#/u${encodeURIComponent(link.uid)}">${link.title}</a></div>`
-				).join('')}
-			</div>
+			<details class="backlinks" open>
+				<summary class="backlinks-summary">Referenced by:</summary>
+				<div class="backlinks-list">
+					${noteData.backlinks.map(link =>
+						`<div><a href="#/u${encodeURIComponent(link.uid)}">${link.title}</a></div>`
+					).join('')}
+				</div>
+			</details>
 					` : ''}
 					<div class="comments" hidden></div>
 				`;
