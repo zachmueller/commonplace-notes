@@ -24,6 +24,7 @@ const ACTION_KINDS: readonly RoutingActionKind[] = [
 	'move',
 	'set-frontmatter',
 	'publish-contexts',
+	'insert-template',
 	'code',
 ];
 
@@ -104,6 +105,7 @@ function parseRawStep(entry: unknown): RawStep | string {
 			frontmatter: isPlainObject(inline['frontmatter'])
 				? (inline['frontmatter'] as Record<string, unknown>)
 				: undefined,
+			templatePath: asString(inline['template']) ?? undefined,
 			code: asString(inline['code']) ?? undefined,
 		};
 		return { inline: spec };

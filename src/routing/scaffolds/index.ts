@@ -13,6 +13,7 @@ import type { BuiltinRoutingActionScaffold, BuiltinRoutingOptionScaffold } from 
 import { MOVE } from './move';
 import { SET_PUBLISH_CONTEXTS } from './set-publish-contexts';
 import { DEFAULT_FRONTMATTER } from './default-frontmatter';
+import { INSERT_TEMPLATE } from './insert-template';
 import { CODE_EXAMPLE } from './code-example';
 import { OPTION_PUBLIC_ALL, OPTION_PRIVATE, OPTION_AMAZON_ONLY } from './options';
 
@@ -20,6 +21,7 @@ const ACTION_SCAFFOLDS: BuiltinRoutingActionScaffold[] = [
 	MOVE,
 	SET_PUBLISH_CONTEXTS,
 	DEFAULT_FRONTMATTER,
+	INSERT_TEMPLATE,
 	CODE_EXAMPLE,
 ];
 

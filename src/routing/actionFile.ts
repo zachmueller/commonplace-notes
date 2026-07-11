@@ -18,6 +18,7 @@ const ACTION_KINDS: readonly RoutingActionKind[] = [
 	'move',
 	'set-frontmatter',
 	'publish-contexts',
+	'insert-template',
 	'code',
 ];
 
@@ -136,6 +137,12 @@ export function parseRoutingActionFile(
 				return { filePath, message: "'cpn-frontmatter' must be a mapping (object)" };
 			}
 			def.frontmatter = (fm as Record<string, unknown>) ?? undefined;
+			break;
+		}
+		case 'insert-template': {
+			// Optional here — an option's step params may supply the template.
+			// Stored raw (path or `[[wikilink]]`); resolved at run time.
+			def.templatePath = asString(frontmatter['cpn-template']) ?? undefined;
 			break;
 		}
 		case 'code': {

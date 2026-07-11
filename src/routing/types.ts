@@ -23,7 +23,12 @@ export type RoutingMode = 'create' | 'update';
 export type RoutingSource = 'built-in' | 'global' | 'profile';
 
 /** The kinds of action the runner knows how to execute. */
-export type RoutingActionKind = 'move' | 'set-frontmatter' | 'publish-contexts' | 'code';
+export type RoutingActionKind =
+	| 'move'
+	| 'set-frontmatter'
+	| 'publish-contexts'
+	| 'insert-template'
+	| 'code';
 
 /** Per-option failure policy. */
 export type OnError = 'abort' | 'continue';
@@ -59,6 +64,8 @@ export interface RoutingActionDefinition {
 	publishContexts?: string[];
 	/** `set-frontmatter`: `cpn-frontmatter` object (values may use `$now`/`$ctime` sentinels). */
 	frontmatter?: Record<string, unknown>;
+	/** `insert-template`: `cpn-template` — raw vault path or `[[wikilink]]` to a Templater template. */
+	templatePath?: string;
 
 	// -- code kind only --
 	/** Raw TS/JS from the code fence. */
@@ -87,6 +94,7 @@ export interface InlineActionSpec {
 	targetDir?: string;
 	publishContexts?: string[];
 	frontmatter?: Record<string, unknown>;
+	templatePath?: string;
 	code?: string;
 }
 
@@ -179,6 +187,14 @@ export interface RoutingLibs {
 	renameFile: (file: TFile, newPath: string) => Promise<void>;
 	/** Read frontmatter with a manual-YAML fallback for cold-cache (freshly-created) files. */
 	readFrontmatter: (file: TFile) => Promise<Record<string, unknown> | null>;
+	/**
+	 * Run a Templater template against a target file (merges frontmatter + appends
+	 * body). Resolves `false` when Templater is absent — the caller decides how to
+	 * surface the skip. Note: Templater swallows template parse errors internally
+	 * (shows its own Notice, leaves the file unchanged), so a `true` result does
+	 * NOT guarantee the template rendered successfully.
+	 */
+	runTemplaterTemplate: (templateFile: TFile, targetFile: TFile) => Promise<boolean>;
 	/** Templater's API if installed (`tp`), else undefined — the V2 trigger-template escape hatch. */
 	tp?: unknown;
 }

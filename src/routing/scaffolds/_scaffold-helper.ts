@@ -38,6 +38,8 @@ export interface ActionScaffoldOptions {
 	publishContexts?: string[];
 	/** `set-frontmatter` mapping. */
 	frontmatter?: Record<string, unknown>;
+	/** `insert-template` template reference (`cpn-template`) — a path or `[[wikilink]]`. */
+	template?: string;
 	/** `code` body (must be a valid TS/JS statement block). */
 	code?: string;
 }
@@ -65,6 +67,7 @@ export function actionScaffold(opts: ActionScaffoldOptions): BuiltinRoutingActio
 		const nested = stringifyYaml(opts.frontmatter).trimEnd();
 		for (const l of nested.split('\n')) lines.push(`  ${l}`);
 	}
+	if (opts.template !== undefined) lines.push(`cpn-template: ${quote(opts.template)}`);
 	lines.push('---', '', doc.trimEnd(), '');
 
 	if (opts.code !== undefined) {

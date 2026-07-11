@@ -50,6 +50,18 @@ import type {
 
 const DEFAULT_CPN_DIR = 'cpn';
 
+/**
+ * Strip `[[ ]]`, a `|alias`, and a `#heading`/`^block` anchor from a wikilink,
+ * but PRESERVE any directory segments (unlike `bareWikilinkName`, which reduces
+ * to the basename) so a template reference like `[[templates/meeting]]` resolves.
+ */
+function stripToLinkpath(raw: string): string {
+	let s = raw.trim();
+	const m = s.match(/^\[\[([^\]]+)\]\]$/);
+	if (m) s = m[1];
+	return s.split('|')[0].split('#')[0].trim();
+}
+
 export class RoutingManager {
 	private plugin: CommonplaceNotesPlugin;
 
@@ -290,6 +302,7 @@ export class RoutingManager {
 			targetDir: spec.targetDir,
 			publishContexts: spec.publishContexts,
 			frontmatter: spec.frontmatter,
+			templatePath: spec.templatePath,
 			rawCode: spec.code,
 			compiledFn: null,
 			filePath: option.filePath,
@@ -475,6 +488,8 @@ export class RoutingManager {
 				return action.publishContexts !== undefined ? { contexts: action.publishContexts } : {};
 			case 'set-frontmatter':
 				return action.frontmatter !== undefined ? { frontmatter: action.frontmatter } : {};
+			case 'insert-template':
+				return action.templatePath !== undefined ? { template: action.templatePath } : {};
 			default:
 				return {};
 		}
@@ -495,6 +510,9 @@ export class RoutingManager {
 				break;
 			case 'set-frontmatter':
 				await this.runSetFrontmatter(action, context);
+				break;
+			case 'insert-template':
+				await this.runInsertTemplate(action, context);
 				break;
 			case 'code':
 				if (!action.compiledFn) throw new Error(`Code action '${action.name}' is not compiled`);
@@ -555,6 +573,42 @@ export class RoutingManager {
 		}
 		const resolved = this.resolveFrontmatterSentinels(raw, context);
 		await this.plugin.frontmatterManager.mergeFrontmatter(context.file, resolved);
+	}
+
+	/** Resolve a `cpn-template` reference (wikilink or vault path) to a `TFile`. */
+	private resolveTemplateFile(raw: string, context: RoutingContext): TFile | null {
+		const linkpath = stripToLinkpath(raw);
+		// Wikilinks, relative names, and subpaths (source path enables relative resolution).
+		const viaLink = context.app.metadataCache.getFirstLinkpathDest(linkpath, context.file.path);
+		if (viaLink) return viaLink;
+		// Explicit vault path fallback (with or without the `.md` extension).
+		const direct =
+			context.app.vault.getAbstractFileByPath(linkpath) ??
+			context.app.vault.getAbstractFileByPath(normalizePath(`${linkpath}.md`));
+		return direct instanceof TFile ? direct : null; // guard against a TFolder match
+	}
+
+	private async runInsertTemplate(
+		action: RoutingActionDefinition,
+		context: RoutingContext,
+	): Promise<void> {
+		const raw = (context.params['template'] as string) ?? action.templatePath;
+		if (!raw || typeof raw !== 'string') {
+			throw new Error(
+				`insert-template action '${action.name}' has no template (set cpn-template or params.template)`,
+			);
+		}
+		const templateFile = this.resolveTemplateFile(raw, context);
+		if (!templateFile) {
+			// A thrown error DOES honor the option's cpn-on-error policy.
+			throw new Error(`insert-template action '${action.name}': template not found: '${raw}'`);
+		}
+		const ran = await this.libs!.runTemplaterTemplate(templateFile, context.file);
+		if (!ran) {
+			// Templater absent — skip with a Notice rather than aborting the option.
+			new Notice(`Skipped "${action.name}": Templater is not installed/enabled.`);
+			Logger.warn('insert-template skipped: Templater unavailable', { action: action.name });
+		}
 	}
 
 	/** Replace `$now` / `$ctime` string sentinels with computed values. */

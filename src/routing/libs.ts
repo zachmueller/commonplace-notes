@@ -16,6 +16,15 @@ import type { RoutingLibs } from './types';
 
 const DEFAULT_DATE_FORMAT = 'YYYY-MM-DD HH:mm';
 
+/**
+ * Minimal shape of Templater's core API (the object at
+ * `app.plugins.plugins['templater-obsidian'].templater`). Templater ships no
+ * type declarations, so we hand-type only the one method we call.
+ */
+interface TemplaterApi {
+	write_template_to_file(templateFile: TFile, targetFile: TFile): Promise<void>;
+}
+
 /** Look up Templater's plugin API (`tp`) if the plugin is installed and enabled. */
 function resolveTemplater(plugin: CommonplaceNotesPlugin): unknown {
 	// Obsidian's plugin registry is untyped; guard defensively.
@@ -26,6 +35,7 @@ function resolveTemplater(plugin: CommonplaceNotesPlugin): unknown {
 /** Build the routing toolkit for a single run. */
 export function buildRoutingLibs(plugin: CommonplaceNotesPlugin): RoutingLibs {
 	const { app } = plugin;
+	const tp = resolveTemplater(plugin);
 
 	return {
 		now(format = DEFAULT_DATE_FORMAT): string {
@@ -57,6 +67,17 @@ export function buildRoutingLibs(plugin: CommonplaceNotesPlugin): RoutingLibs {
 			}
 		},
 
-		tp: resolveTemplater(plugin),
+		async runTemplaterTemplate(templateFile: TFile, targetFile: TFile): Promise<boolean> {
+			const templater = tp as TemplaterApi | undefined;
+			if (!templater || typeof templater.write_template_to_file !== 'function') {
+				return false; // Templater absent/incompatible — caller emits the skip Notice.
+			}
+			// Resolves even when the template fails to parse (Templater swallows that
+			// error and shows its own Notice), so `true` means "ran", not "succeeded".
+			await templater.write_template_to_file(templateFile, targetFile);
+			return true;
+		},
+
+		tp,
 	};
 }

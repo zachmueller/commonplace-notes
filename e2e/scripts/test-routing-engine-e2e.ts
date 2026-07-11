@@ -31,6 +31,8 @@
  * Run: npx tsx e2e/scripts/test-routing-engine-e2e.ts
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { runTest, type TestContext } from "../lib/test-harness";
 import { createTestNote } from "../lib/test-helpers";
 
@@ -41,8 +43,51 @@ import { createTestNote } from "../lib/test-helpers";
 const PUBLIC_NOTE = "Routing-Public.md";
 const PRIVATE_NOTE = "Routing-Private.md";
 
+// insert-template fixtures. Templater is NOT installed in the e2e vault, so the
+// action exercises its resolve-then-skip path (real template found, but Templater
+// absent → skip with a Notice, no abort) and its unresolved-template abort path.
+const INSERT_SKIP_NOTE = "Routing-InsertSkip.md";
+const INSERT_TEMPLATE_FILE = "E2E-Insert-Template.md";
+const INSERT_SKIP_OPTION = "E2E Insert-Template Skip";
+const INSERT_MISSING_OPTION = "E2E Insert-Template Missing";
+const CPN_OPTIONS_DIR = "cpn/routes/options";
+
 // Bare notes with no frontmatter — routing seeds everything.
 const BARE_BODY = "# Heading\n\nSome body text for the routed note.\n";
+
+// A plain note used as a Templater template source (its body would be appended
+// if Templater were installed; here resolution just needs it to exist).
+const INSERT_TEMPLATE_BODY = "---\ntemplate-added: true\n---\n\nInserted by the E2E template.\n";
+
+// Option that runs the built-in insert-template action against a REAL template.
+// With Templater absent this skips (run stays ok, note unchanged).
+const SKIP_OPTION_CONTENT = `---
+cpn-type: routing-option
+cpn-option-name: "${INSERT_SKIP_OPTION}"
+cpn-on-error: abort
+cpn-steps:
+  - { action: "[[insert-template]]", params: { template: "[[${INSERT_TEMPLATE_FILE.replace(/\.md$/, "")}]]" } }
+---
+
+Runs insert-template against a real template; skips cleanly when Templater is absent.
+`;
+
+// Option that points insert-template at a non-existent template — resolution
+// throws, so the option aborts and returns { ok: false }.
+const MISSING_OPTION_CONTENT = `---
+cpn-type: routing-option
+cpn-option-name: "${INSERT_MISSING_OPTION}"
+cpn-on-error: abort
+cpn-steps:
+  - { action: "[[insert-template]]", params: { template: "[[Definitely-Not-A-Template-ZZZ]]" } }
+---
+
+Points insert-template at a missing template; the option aborts (ok:false).
+`;
+
+// Substring of the one [CPN Error] the missing-template test intentionally logs
+// (via executeOption's abort path). testNoErrors excludes it.
+const EXPECTED_ABORT_ERROR = "Routing action 'insert-template' failed";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -148,7 +193,7 @@ async function testDiscovery(ctx: TestContext): Promise<void> {
 		return;
 	}
 
-	const expectedActions = ["move", "set-publish-contexts", "default-frontmatter", "code-example"];
+	const expectedActions = ["move", "set-publish-contexts", "default-frontmatter", "insert-template", "code-example"];
 	const haveActions = expectedActions.every((a) => probe.actions.includes(a));
 	if (haveActions) {
 		ctx.pass("Built-in actions load", `actions: ${probe.actions.join(", ")}`, shot);
@@ -275,8 +320,88 @@ async function testPrivateOption(ctx: TestContext): Promise<void> {
 	}
 }
 
+async function testInsertTemplateSkip(ctx: TestContext): Promise<void> {
+	console.log("\nTest 5: insert-template skips cleanly when Templater is absent");
+	// The template resolves (it exists in the vault), but Templater isn't
+	// installed here, so runInsertTemplate hits the skip-with-Notice branch.
+	const probe = await ctx.page.evaluate(
+		async ({ notePath, optionName }) => {
+			const app = (window as any).app;
+			const plugin = app?.plugins?.plugins?.["commonplace-notes"];
+			if (!plugin?.routingManager) return { error: "routingManager not found" };
+			const file = app.vault.getAbstractFileByPath(notePath);
+			if (!file) return { error: `note not found at ${notePath}` };
+			const before = await app.vault.read(file);
+			let run: { ok: boolean; error?: string; errors: string[] };
+			try {
+				run = await plugin.routingManager.runOptionByName(file, optionName, "create");
+			} catch (e: any) {
+				return { error: `runOptionByName threw: ${e?.message ?? String(e)}` };
+			}
+			await new Promise((r) => setTimeout(r, 300));
+			const after = await app.vault.read(file);
+			return { runOk: run.ok, runError: run.error, errorCount: run.errors.length, unchanged: before === after };
+		},
+		{ notePath: INSERT_SKIP_NOTE, optionName: INSERT_SKIP_OPTION },
+	);
+	const shot = await safeShot(ctx, "05-insert-skip");
+
+	if ((probe as any).error) {
+		ctx.fail("insert-template skip (no Templater)", (probe as any).error, shot);
+		return;
+	}
+	// Skip is not an error: the option completes ok with no collected errors.
+	if ((probe as any).runOk === true && (probe as any).errorCount === 0) {
+		ctx.pass("insert-template skip completes ok", `run ok, 0 errors (Templater absent → skipped)`, shot);
+	} else {
+		ctx.fail("insert-template skip completes ok", `expected ok:true/0 errors, got ${JSON.stringify(probe)}`, shot);
+	}
+	// The note must be untouched — the skip branch writes nothing.
+	if ((probe as any).unchanged === true) {
+		ctx.pass("insert-template skip leaves note unchanged", "note body identical before/after", shot);
+	} else {
+		ctx.fail("insert-template skip leaves note unchanged", "note body changed despite skip", shot);
+	}
+}
+
+async function testInsertTemplateMissing(ctx: TestContext): Promise<void> {
+	console.log("\nTest 6: insert-template with an unresolvable template aborts (ok:false)");
+	const probe = await ctx.page.evaluate(
+		async ({ notePath, optionName }) => {
+			const app = (window as any).app;
+			const plugin = app?.plugins?.plugins?.["commonplace-notes"];
+			if (!plugin?.routingManager) return { error: "routingManager not found" };
+			// Reuse the private note (already routed); the step throws before touching it.
+			const file = app.vault.getAbstractFileByPath(notePath) ?? app.vault.getMarkdownFiles()[0];
+			if (!file) return { error: "no file available" };
+			try {
+				const run = await plugin.routingManager.runOptionByName(file, optionName, "create");
+				return { ok: run.ok, err: run.error };
+			} catch (e: any) {
+				return { threw: e?.message ?? String(e) };
+			}
+		},
+		{ notePath: `private/${PRIVATE_NOTE}`, optionName: INSERT_MISSING_OPTION },
+	);
+	const shot = await safeShot(ctx, "06-insert-missing");
+
+	if ((probe as any).error) {
+		ctx.fail("insert-template missing aborts", (probe as any).error, shot);
+		return;
+	}
+	if ((probe as any).threw) {
+		ctx.fail("insert-template missing aborts", `threw instead of returning: ${(probe as any).threw}`, shot);
+		return;
+	}
+	if ((probe as any).ok === false && typeof (probe as any).err === "string" && (probe as any).err.includes("template not found")) {
+		ctx.pass("insert-template missing aborts", `returned { ok: false, error: "${(probe as any).err}" }`, shot);
+	} else {
+		ctx.fail("insert-template missing aborts", `expected ok:false with "template not found", got ${JSON.stringify(probe)}`, shot);
+	}
+}
+
 async function testUnknownOption(ctx: TestContext): Promise<void> {
-	console.log("\nTest 5: Unknown option returns a structured error (no throw)");
+	console.log("\nTest 7: Unknown option returns a structured error (no throw)");
 	const probe = await ctx.page.evaluate(async ({ notePath }) => {
 		const app = (window as any).app;
 		const plugin = app?.plugins?.plugins?.["commonplace-notes"];
@@ -303,13 +428,17 @@ async function testUnknownOption(ctx: TestContext): Promise<void> {
 }
 
 async function testNoErrors(ctx: TestContext): Promise<void> {
-	console.log("\nTest 6: no plugin errors captured");
-	const errors = ctx.collector.getLogsByLevel("error");
+	console.log("\nTest 8: no unexpected plugin errors captured");
+	// Test 6 intentionally drives an abort, which logs one [CPN Error] via
+	// executeOption's catch. Exclude that expected entry; everything else is a fail.
+	const errors = ctx.collector
+		.getLogsByLevel("error")
+		.filter((e) => !e.message.includes(EXPECTED_ABORT_ERROR));
 	if (errors.length === 0) {
-		ctx.pass("No plugin errors", "0 error-level log entries");
+		ctx.pass("No unexpected plugin errors", "0 unexpected error-level log entries");
 	} else {
 		const sample = errors.slice(-5).map((e) => e.message).join(" | ");
-		ctx.fail("No plugin errors", `${errors.length} error(s): ${sample}`);
+		ctx.fail("No unexpected plugin errors", `${errors.length} error(s): ${sample}`);
 	}
 }
 
@@ -323,6 +452,8 @@ async function tests(ctx: TestContext): Promise<void> {
 	await testRouteNewNote(ctx);
 	await testReRouteUpdateMode(ctx);
 	await testPrivateOption(ctx);
+	await testInsertTemplateSkip(ctx);
+	await testInsertTemplateMissing(ctx);
 	await testUnknownOption(ctx);
 	await testNoErrors(ctx);
 }
@@ -337,10 +468,27 @@ runTest(
 		setupVault: (vaultPath) => {
 			createTestNote(vaultPath, PUBLIC_NOTE, BARE_BODY);
 			createTestNote(vaultPath, PRIVATE_NOTE, BARE_BODY);
+			createTestNote(vaultPath, INSERT_SKIP_NOTE, BARE_BODY);
+			// A real template file so insert-template resolution succeeds.
+			createTestNote(vaultPath, INSERT_TEMPLATE_FILE, INSERT_TEMPLATE_BODY);
+			// Author the two insert-template options into the discovered options dir.
+			const optionsDir = path.join(vaultPath, CPN_OPTIONS_DIR);
+			fs.mkdirSync(optionsDir, { recursive: true });
+			fs.writeFileSync(path.join(optionsDir, `${INSERT_SKIP_OPTION}.md`), SKIP_OPTION_CONTENT);
+			fs.writeFileSync(path.join(optionsDir, `${INSERT_MISSING_OPTION}.md`), MISSING_OPTION_CONTENT);
 		},
 		// The run moves notes and writes frontmatter; clean up both original and
 		// moved locations so the next run starts fresh.
-		cleanupFiles: [PUBLIC_NOTE, PRIVATE_NOTE, `private/${PRIVATE_NOTE}`, "private"],
+		cleanupFiles: [
+			PUBLIC_NOTE,
+			PRIVATE_NOTE,
+			`private/${PRIVATE_NOTE}`,
+			"private",
+			INSERT_SKIP_NOTE,
+			INSERT_TEMPLATE_FILE,
+			`${CPN_OPTIONS_DIR}/${INSERT_SKIP_OPTION}.md`,
+			`${CPN_OPTIONS_DIR}/${INSERT_MISSING_OPTION}.md`,
+		],
 	},
 	tests,
 );
