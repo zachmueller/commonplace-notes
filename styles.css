@@ -78,8 +78,85 @@
 	font-style: italic;
 }
 
+/* Settings tab bar */
+.cpn-settings-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 1.5em;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cpn-settings-tab {
+	padding: 6px 14px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	border: none;
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	box-shadow: none;
+}
+
+.cpn-settings-tab:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.cpn-settings-tab.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.cpn-settings-tab.is-active:hover {
+	background: var(--interactive-accent-hover);
+	color: var(--text-on-accent);
+}
+
+/* Collapsible subsections (createSection) + the Site-Customization disclosures */
 .cpn-settings-section {
 	margin-bottom: 1.5em;
+}
+
+.cpn-settings-section-summary {
+	cursor: pointer;
+	list-style: none;
+	font-weight: var(--font-semibold);
+	font-size: var(--font-ui-medium);
+	color: var(--text-normal);
+	padding: 6px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: 0.75em;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* Replace the native marker with a rotating caret. */
+.cpn-settings-section-summary::-webkit-details-marker {
+	display: none;
+}
+
+.cpn-settings-section-summary::before {
+	content: '\203A';  /* › */
+	display: inline-block;
+	transition: transform 0.15s ease;
+	color: var(--text-muted);
+	font-size: 1.1em;
+}
+
+.cpn-settings-section[open] > .cpn-settings-section-summary::before {
+	transform: rotate(90deg);
+}
+
+/* Give the two Site-Customization <details> (theme overrides, named styles) a
+   matching clickable summary without the section border treatment. */
+.cpn-theme-overrides-container > details > summary,
+.cpn-named-styles-container > details > summary {
+	cursor: pointer;
+	font-weight: var(--font-semibold);
+	padding: 6px 0;
 }
 
 /* Infrastructure Deployment Wizard */

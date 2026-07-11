@@ -1,6 +1,6 @@
 import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
-import { PublishingProfile } from '../types';
+import { PublishingProfile, SettingsTab, SettingsUiState } from '../types';
 import { Logger } from '../utils/logging';
 import { SettingsContext, ProfileContext } from './context';
 import { renderGeneralTab } from './tabs/generalTab';
@@ -16,6 +16,15 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	private activeProfileIndex: number = 0;
 	private profileDropdown: DropdownComponent | null = null;
 	private profileContainerEl: HTMLElement | null = null;
+	/** Content container below the tab bar; only the active tab renders into it. */
+	private tabContentEl: HTMLElement | null = null;
+
+	private static readonly TABS: { id: SettingsTab; label: string }[] = [
+		{ id: 'general', label: 'General' },
+		{ id: 'parser', label: 'Markdown parser' },
+		{ id: 'routing', label: 'Note routing' },
+		{ id: 'profiles', label: 'Publishing profiles' },
+	];
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin) {
 		super(app, plugin);
@@ -26,23 +35,50 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		const activeTab = this.ensureUiState().activeTab ?? 'general';
+
+		// Tab bar
+		const tabBar = containerEl.createDiv({ cls: 'cpn-settings-tabs' });
+		for (const tab of CommonplaceNotesSettingTab.TABS) {
+			const btn = tabBar.createEl('button', {
+				cls: 'cpn-settings-tab',
+				text: tab.label,
+			});
+			if (tab.id === activeTab) btn.addClass('is-active');
+			btn.addEventListener('click', async () => {
+				this.ensureUiState().activeTab = tab.id;
+				await this.plugin.saveSettings();
+				this.display();
+			});
+		}
+
+		// Active-tab content
+		this.tabContentEl = containerEl.createDiv({ cls: 'cpn-settings-tab-content' });
+		this.renderActiveTab();
+	}
+
+	private renderActiveTab(): void {
+		if (!this.tabContentEl) return;
+		this.tabContentEl.empty();
+
 		const ctx = this.buildContext();
+		const activeTab = this.ensureUiState().activeTab ?? 'general';
 
-		// General
-		new Setting(containerEl).setName('General').setHeading();
-		renderGeneralTab(ctx, containerEl);
-
-		// Markdown parser
-		new Setting(containerEl).setName('Markdown parser').setHeading();
-		renderParserTab(ctx, containerEl);
-
-		// Note routing
-		new Setting(containerEl).setName('Note routing').setHeading();
-		renderRoutingTab(ctx, containerEl);
-
-		// Publishing profiles
-		new Setting(containerEl).setName('Publishing profiles').setHeading();
-		this.renderProfilesTab(ctx, containerEl);
+		switch (activeTab) {
+			case 'parser':
+				renderParserTab(ctx, this.tabContentEl);
+				break;
+			case 'routing':
+				renderRoutingTab(ctx, this.tabContentEl);
+				break;
+			case 'profiles':
+				this.renderProfilesTab(ctx, this.tabContentEl);
+				break;
+			case 'general':
+			default:
+				renderGeneralTab(ctx, this.tabContentEl);
+				break;
+		}
 	}
 
 	/** Base context shared by every renderer. */
@@ -124,10 +160,32 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		return Math.max(0, Math.min(index, length - 1));
 	}
 
-	private createSection(parent: HTMLElement, title: string, _opts?: { defaultCollapsed?: boolean }): HTMLElement {
-		const section = parent.createDiv({ cls: 'cpn-settings-section' });
-		new Setting(section).setName(title).setHeading();
-		return section;
+	/**
+	 * Build a collapsible subsection as a native <details>. Open state is keyed
+	 * by title and persisted, so it survives the full-`display()`/profile
+	 * rebuilds that many handlers trigger. Content goes directly into the
+	 * returned <details> (after the <summary>), matching the old div contract.
+	 */
+	private createSection(parent: HTMLElement, title: string, opts?: { defaultCollapsed?: boolean }): HTMLElement {
+		const collapsed = this.ensureUiState().collapsedSections?.[title]
+			?? (opts?.defaultCollapsed ?? false);
+		const details = parent.createEl('details', { cls: 'cpn-settings-section' });
+		details.open = !collapsed;
+		details.createEl('summary', { cls: 'cpn-settings-section-summary', text: title });
+		details.addEventListener('toggle', async () => {
+			const ui = this.ensureUiState();
+			(ui.collapsedSections ??= {})[title] = !details.open;
+			await this.plugin.saveSettings();
+		});
+		return details;
+	}
+
+	/** Lazily create and return the persisted Settings-tab UI state. */
+	private ensureUiState(): SettingsUiState {
+		if (!this.plugin.settings.settingsUiState) {
+			this.plugin.settings.settingsUiState = {};
+		}
+		return this.plugin.settings.settingsUiState;
 	}
 
 	private displayProfileSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
@@ -153,8 +211,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const destSection = this.createSection(profileContainer, 'Destination');
 		renderDestinationSection(ctx, destSection, profileContainer);
 
-		// --- Danger Zone ---
-		const dangerSection = this.createSection(profileContainer, 'Danger Zone');
+		// --- Danger Zone (starts collapsed so destructive actions are tucked away) ---
+		const dangerSection = this.createSection(profileContainer, 'Danger Zone', { defaultCollapsed: true });
 		renderDangerZone(ctx, dangerSection, profileContainer);
 	}
 

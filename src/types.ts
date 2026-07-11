@@ -16,6 +16,17 @@ export interface CommonplaceNotesSettings {
 	commentsPanelMode?: CommentsPanelMode;
 	/** Global title-prompt behavior for note routing; overridable per option. Default 'only-if-Untitled'. */
 	routingTitlePrompt?: 'always' | 'only-if-Untitled' | 'off';
+	/** Persisted Settings-tab UI state (active tab, collapsed subsections). Optional ⇒ no migration. */
+	settingsUiState?: SettingsUiState;
+}
+
+export type SettingsTab = 'general' | 'parser' | 'routing' | 'profiles';
+
+export interface SettingsUiState {
+	/** Which top-level Settings tab is shown. Default 'general'. */
+	activeTab?: SettingsTab;
+	/** Keyed by section title; true = collapsed. Absent key = default (open, except Danger Zone). */
+	collapsedSections?: Record<string, boolean>;
 }
 
 export interface PublishingProfile {
