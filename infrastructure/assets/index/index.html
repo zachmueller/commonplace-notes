@@ -608,7 +608,12 @@ a:not([href^="#"]):hover {
 
 .panel {
 	flex: 0 0 600px;
-	padding: 10px 20px;
+	/* No top padding: the panel is its own scroll container and a sticky child sticks at
+	   the container's content-box top. Any top padding here would leave a band above the
+	   stuck header that the header's opaque background can't cover, letting scrolled body
+	   text peek through. Top spacing lives in the sticky .panel-header itself (and in
+	   .panel.error below, whose bare non-sticky h1 has no header to carry it). */
+	padding: 0 20px 10px;
 	background: var(--bg-primary);
 	border-right: 1px solid var(--border-color);
 	height: 100%;
@@ -671,25 +676,33 @@ body.panel-resizing {
 	position: sticky;
 	top: 0;
 	z-index: 2;
-	/* Span the panel's 10px/20px padding edge-to-edge and cover the top padding band
-	   with an opaque background. The header's OWN top padding (not a negative margin)
-	   covers the band, so the opaque edge meets the scrollport top exactly and no
-	   scrolled content peeks above the title. Right padding keeps ×/title clearance. */
+	/* The panel has NO top padding, so the header's border-box top coincides exactly with
+	   the scrollport top: pinned at top:0 it sits perfectly flush, with no band above it
+	   for scrolled content to peek through. Negative side margins bleed the opaque
+	   background across the panel's 20px side padding edge-to-edge; the header's own top
+	   and bottom padding give the title breathing room and an opaque band beneath it.
+	   Right padding keeps ×/title clearance. */
 	margin: 0 -20px;
-	padding: 10px 40px 0 20px;
+	padding: 12px 40px 8px 20px;
 	background: var(--bg-primary); /* opaque so body doesn't bleed through */
 	/* Soft edge as content slides under; box-shadow is drawn outside the box. */
 	box-shadow: 0 6px 8px -6px var(--shadow-color);
 }
 
-/* Cap the title height so a very long title can't dominate the panel (~3-4 lines). */
+/* Cap the title height so a very long title can't dominate the panel (~3-4 lines).
+   Zero the inherited global h1 bottom margin so the header's bottom spacing is exactly
+   its own 8px padding — a predictable opaque band rather than a transparent margin. */
 .panel-header > h1 {
+	margin-bottom: 0;
 	max-height: 4.5em;
 	overflow: hidden;
 }
 
 .panel.error {
 	background-color: var(--error-bg);
+	/* Error panels render a bare, non-sticky h1 (no .panel-header), so restore the top
+	   breathing room the base .panel no longer provides now that its top padding is gone. */
+	padding-top: 10px;
 }
 
 .error-message {
