@@ -8,26 +8,17 @@
  * profile tier).
  */
 
-import { TAbstractFile } from 'obsidian';
-import type { MetadataCache, TFile, TFolder, Vault } from 'obsidian';
+import type { MetadataCache, TFile, Vault } from 'obsidian';
 import { parseParserExtensionFile, isParserError } from './parserFile';
+import { collectMarkdownFiles, extractFrontmatter } from '../vaultScan';
 import type {
 	ParserExtensionDefinition,
 	ParserExtensionError,
 	ParserSource,
 } from './types';
 
-// ---------------------------------------------------------------------------
-// Type guards
-// ---------------------------------------------------------------------------
-
-function isFolder(file: TAbstractFile): file is TFolder {
-	return 'children' in file;
-}
-
-function isFile(file: TAbstractFile): file is TFile {
-	return 'stat' in file && !('children' in file);
-}
+// Re-export for existing importers (kept stable after the shared extraction).
+export { collectMarkdownFiles, extractFrontmatter };
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -85,49 +76,6 @@ export async function discoverParserExtensions(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Collect all `.md` files directly under a vault directory (non-recursive —
- * parser stages are flat in `<cpnDir>/parsers/`). Empty array if absent.
- */
-export function collectMarkdownFiles(vault: Vault, dirPath: string): TFile[] {
-	const dir = vault.getAbstractFileByPath(dirPath);
-	if (!dir || !isFolder(dir)) return [];
-
-	const files: TFile[] = [];
-	for (const child of dir.children) {
-		if (isFile(child) && child.name.endsWith('.md')) {
-			files.push(child);
-		}
-	}
-	return files;
-}
-
-/**
- * Extract frontmatter from raw content via manual YAML parsing. Used when the
- * metadata cache hasn't indexed a freshly-created file yet.
- *
- * @throws If a YAML body exists but fails to parse.
- */
-export function extractFrontmatter(
-	content: string,
-	parseYAML: (yaml: string) => unknown,
-): Record<string, unknown> | null {
-	if (!content.trimStart().startsWith('---')) return null;
-
-	const afterOpener = content.indexOf('\n', content.indexOf('---'));
-	if (afterOpener === -1) return null;
-
-	const closerIdx = content.indexOf('\n---', afterOpener);
-	if (closerIdx === -1) return null;
-
-	const yamlBody = content.substring(afterOpener + 1, closerIdx);
-	const parsed = parseYAML(yamlBody);
-	if (parsed && typeof parsed === 'object') {
-		return parsed as Record<string, unknown>;
-	}
-	return null;
-}
 
 async function parseOneFile(
 	vault: Vault,

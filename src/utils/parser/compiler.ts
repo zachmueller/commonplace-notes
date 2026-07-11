@@ -63,14 +63,18 @@ export function compileParserFunction(strippedCode: string): CompiledParserFn {
 // ---------------------------------------------------------------------------
 
 /**
- * Full pipeline: strip TypeScript types → compile to AsyncFunction.
+ * Generic compile pipeline shared by every note-embedded-code subsystem
+ * (parser stages, routing actions): strip TypeScript types → compile to an
+ * AsyncFunction with the given argument names in scope.
  *
- * @param rawCode - Raw TS/JS from the stage's code fence.
+ * @param rawCode  - Raw TS/JS from a code fence.
+ * @param argNames - Parameter names injected into the function body.
  * @returns `{ fn }` on success, or `{ error }` with a descriptive message.
  */
-export function compileParserExtension(
+export function compileUserFunction<Fn = (...args: any[]) => Promise<unknown>>(
 	rawCode: string,
-): { fn: CompiledParserFn } | { error: string } {
+	argNames: readonly string[],
+): { fn: Fn } | { error: string } {
 	let strippedCode: string;
 	try {
 		strippedCode = stripTypes(rawCode);
@@ -80,9 +84,22 @@ export function compileParserExtension(
 	}
 
 	try {
-		return { fn: compileParserFunction(strippedCode) };
+		const GenericAsyncFunction = AsyncFunction as unknown as new (...args: string[]) => Fn;
+		return { fn: new GenericAsyncFunction(...argNames, strippedCode) };
 	} catch (err: unknown) {
 		const message = err instanceof Error ? err.message : String(err);
 		return { error: `Compilation failed: ${message}` };
 	}
+}
+
+/**
+ * Full pipeline: strip TypeScript types → compile to AsyncFunction.
+ *
+ * @param rawCode - Raw TS/JS from the stage's code fence.
+ * @returns `{ fn }` on success, or `{ error }` with a descriptive message.
+ */
+export function compileParserExtension(
+	rawCode: string,
+): { fn: CompiledParserFn } | { error: string } {
+	return compileUserFunction<CompiledParserFn>(rawCode, PARSER_ARG_NAMES);
 }

@@ -225,6 +225,73 @@ export class FrontmatterManager {
 		});
 	}
 
+	/**
+	 * Merge updates into a note's frontmatter, preserving existing collection
+	 * values instead of overwriting them (unlike {@link updateFrontmatter}):
+	 *   - existing array (or JSON-array string) → union + de-dupe with the value
+	 *   - existing plain object + object value  → shallow merge (value wins)
+	 *   - otherwise                             → scalar overwrite
+	 *   - `undefined` value                     → delete the key
+	 *
+	 * Ports the semantics of Zach's Templater `setFrontmatter()` for the routing
+	 * engine (e.g. so re-routing unions publish contexts rather than clobbering).
+	 * Writes directly via `processFrontMatter` — not through the batch queue,
+	 * since routing is interactive.
+	 */
+	async mergeFrontmatter(file: TFile, updates: Record<string, any>): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			try {
+				this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+					for (const [key, value] of Object.entries(updates)) {
+						if (value === undefined) {
+							delete frontmatter[key];
+							continue;
+						}
+
+						const existing = frontmatter[key];
+						const existingArray = this.asArrayOrNull(existing);
+
+						if (existingArray !== null) {
+							// Array (or JSON-array string) property → union + de-dupe.
+							const incoming = Array.isArray(value) ? value : [value];
+							frontmatter[key] = [...new Set([...existingArray, ...incoming])];
+						} else if (
+							existing &&
+							typeof existing === 'object' &&
+							!Array.isArray(existing) &&
+							value &&
+							typeof value === 'object' &&
+							!Array.isArray(value)
+						) {
+							// Object property → shallow merge.
+							frontmatter[key] = { ...existing, ...value };
+						} else {
+							// Scalar / absent → set (overwrite).
+							frontmatter[key] = value;
+						}
+					}
+					resolve();
+				});
+			} catch (error) {
+				reject(error);
+			}
+		});
+	}
+
+	/** Coerce an existing frontmatter value to an array if it is one (or a JSON-array string), else null. */
+	private asArrayOrNull(existing: any): any[] | null {
+		if (Array.isArray(existing)) return existing;
+		if (typeof existing === 'string' && existing.trim().startsWith('[')) {
+			try {
+				const parsed = JSON.parse(existing);
+				if (Array.isArray(parsed)) return parsed;
+			} catch {
+				// Not valid JSON — fall through, treat as scalar.
+			}
+		}
+		return null;
+	}
+
 	async togglePublishContext(file: TFile, profileId: string): Promise<void> {
 		const contexts = this.normalizePublishContexts(file);
 		const wasPresent = contexts.includes(profileId);

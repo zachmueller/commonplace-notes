@@ -7,6 +7,7 @@
  * one code fence is the entire format.
  */
 
+import { extractCodeFence } from '../vaultScan';
 import type {
 	ParserExtensionDefinition,
 	ParserExtensionError,
@@ -14,22 +15,8 @@ import type {
 	ParserStage,
 } from './types';
 
-// ---------------------------------------------------------------------------
-// Fence extraction
-// ---------------------------------------------------------------------------
-
-/**
- * Extract the content of the first ```ts / ```typescript / ```js / ```javascript
- * fenced code block. Returns the inner code, or null if none/empty.
- */
-export function extractCodeFence(content: string): string | null {
-	const regex = /^```(?:ts|typescript|js|javascript)\s*\n([\s\S]*?)^```\s*$/gm;
-	const match = regex.exec(content);
-	if (!match) return null;
-	const code = match[1] ?? '';
-	if (code.trim() === '') return null;
-	return code;
-}
+// Re-export for existing importers (kept stable after the shared extraction).
+export { extractCodeFence };
 
 // ---------------------------------------------------------------------------
 // Frontmatter helpers

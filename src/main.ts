@@ -21,6 +21,7 @@ import { ProfileManager } from './utils/profiles';
 import { IndicatorManager } from './utils/indicators';
 import { NoteManager } from './utils/notes';
 import { ParserExtensionManager } from './utils/parserExtensions';
+import { RoutingManager } from './routing/routingManager';
 import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
 import { MappingManager } from './utils/mappings';
@@ -50,6 +51,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 	urlStackWindowSeconds: 10,
 	cpnDirectory: 'cpn',
 	commentsPanelMode: 'recent',
+	routingTitlePrompt: 'only-if-Untitled',
     publishingProfiles: [{
         name: 'Default AWS Profile',
         id: 'default',
@@ -85,6 +87,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	indicatorManager: IndicatorManager;
 	noteManager: NoteManager;
 	parserExtensionManager: ParserExtensionManager;
+	routingManager: RoutingManager;
 	frontmatterManager: FrontmatterManager;
 	contentIndexManager: ContentIndexManager;
 	mappingManager: MappingManager;
@@ -123,6 +126,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.indicatorManager = new IndicatorManager(this);
 		this.noteManager = new NoteManager(this);
 		this.parserExtensionManager = new ParserExtensionManager(this);
+		this.routingManager = new RoutingManager(this);
 		this.frontmatterManager = new FrontmatterManager(this);
 		this.contentIndexManager = new ContentIndexManager(this);
 		this.mappingManager = new MappingManager(this);
@@ -152,6 +156,17 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				}
 			})
 		);
+
+		// V2 seam — opt-in auto-routing when a note is created (e.g. from a clicked
+		// wikilink). Disabled for V1; routing is command-driven. When enabled, guard
+		// against competing Templater directory triggers (see docs).
+		// this.registerEvent(
+		// 	this.app.vault.on('create', (file) => {
+		// 		if (file instanceof TFile && file.extension === 'md') {
+		// 			this.routingManager.runRoute(file, 'create');
+		// 		}
+		// 	})
+		// );
 
 		await this.profileManager.initialize();
 
@@ -238,6 +253,48 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					NoticeManager.showNotice(`Failed to export parser stages: ${msg}`);
 					Logger.error('Failed to export parser scaffolds:', error);
 				}
+			}
+		});
+
+		this.addCommand({
+			id: 'export-routing-scaffolds',
+			name: 'Export all routing actions & options to vault',
+			callback: async () => {
+				try {
+					const paths = await this.routingManager.exportAllScaffolds();
+					const dir = this.settings.cpnDirectory ?? 'cpn';
+					NoticeManager.showNotice(`Exported ${paths.length} routing file(s) to ${dir}/routes/`);
+				} catch (error) {
+					const msg = error instanceof Error ? error.message : String(error);
+					NoticeManager.showNotice(`Failed to export routing files: ${msg}`);
+					Logger.error('Failed to export routing scaffolds:', error);
+				}
+			}
+		});
+
+		this.addCommand({
+			id: 'route-new-note',
+			name: 'Route new note',
+			checkCallback: (checking: boolean) => {
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!activeView?.file) return false;
+				if (checking) return true;
+
+				this.routingManager.runRoute(activeView.file, 'create');
+				return true;
+			}
+		});
+
+		this.addCommand({
+			id: 'route-existing-note',
+			name: 'Route existing note',
+			checkCallback: (checking: boolean) => {
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!activeView?.file) return false;
+				if (checking) return true;
+
+				this.routingManager.runRoute(activeView.file, 'update');
+				return true;
 			}
 		});
 

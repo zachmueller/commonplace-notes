@@ -14,6 +14,8 @@ export interface CommonplaceNotesSettings {
 	cpnDirectory?: string;
 	/** Comments panel view mode; persisted across restarts. Default 'recent'. */
 	commentsPanelMode?: CommentsPanelMode;
+	/** Global title-prompt behavior for note routing; overridable per option. Default 'only-if-Untitled'. */
+	routingTitlePrompt?: 'always' | 'only-if-Untitled' | 'off';
 }
 
 export interface PublishingProfile {
