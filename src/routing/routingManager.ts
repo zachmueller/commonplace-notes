@@ -356,6 +356,27 @@ export class RoutingManager {
 		await this.executeOption(file, option, mode);
 	}
 
+	/**
+	 * Run a named option without the interactive suggester or title prompt.
+	 * Loads routes, resolves the option by name, and executes its steps. Returns
+	 * a structured result. Used by callers that already know the option (e.g. a
+	 * per-option command, a future create-event hook) and by tests.
+	 */
+	async runOptionByName(
+		file: TFile,
+		optionName: string,
+		mode: RoutingMode,
+	): Promise<{ ok: boolean; error?: string; errors: string[] }> {
+		const profileId = this.plugin.settings.publishingProfiles[0]?.id ?? 'default';
+		await this.loadRoutes(profileId);
+
+		const option = this.options?.find((o) => o.name === optionName);
+		if (!option) {
+			return { ok: false, error: `Unknown routing option '${optionName}'`, errors: [] };
+		}
+		return this.executeOption(file, option, mode);
+	}
+
 	private pickOption(): Promise<RoutingOptionDefinition | null> {
 		return new Promise((resolve) => {
 			new RoutingOptionSuggestModal(this.plugin.app, this.options!, resolve).open();
@@ -385,12 +406,16 @@ export class RoutingManager {
 		await this.plugin.app.fileManager.renameFile(file, newPath);
 	}
 
-	/** Run an option's resolved steps in order, honoring capability flags + on-error policy. */
+	/**
+	 * Run an option's resolved steps in order, honoring capability flags + on-error
+	 * policy. Surfaces progress via Notices and returns a structured result so
+	 * programmatic callers (and tests) can assert on the outcome.
+	 */
 	private async executeOption(
 		file: TFile,
 		option: RoutingOptionDefinition,
 		mode: RoutingMode,
-	): Promise<void> {
+	): Promise<{ ok: boolean; error?: string; errors: string[] }> {
 		const utils: RoutingUtils = { logger: Logger };
 		const collected: string[] = [];
 
@@ -425,7 +450,7 @@ export class RoutingManager {
 				Logger.error(`Routing action '${action.name}' failed`, { error: message });
 				if (option.onError === 'abort') {
 					new Notice(`Routing aborted at "${action.name}": ${message}`);
-					return;
+					return { ok: false, error: `${action.name}: ${message}`, errors: [`${action.name}: ${message}`] };
 				}
 				collected.push(`${action.name}: ${message}`);
 			}
@@ -438,6 +463,7 @@ export class RoutingManager {
 		} else {
 			new Notice(`Routed "${file.basename}" via ${option.name}.`);
 		}
+		return { ok: true, errors: collected };
 	}
 
 	/** The action's own declarative config, as a params object (step params override these). */
