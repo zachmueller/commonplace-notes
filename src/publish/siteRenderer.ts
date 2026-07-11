@@ -128,6 +128,10 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 			if (Object.keys(styleLight).length) entry.light = styleLight;
 			if (Object.keys(styleDark).length) entry.dark = styleDark;
 			if (style.fontFamily) entry.font = style.fontFamily;
+				// Arbitrary custom CSS (auto-scoped client-side to .cpn-style-<name>).
+				// Gate on non-empty-after-trim so a stray '' (e.g. hand-edited data.json)
+				// is dropped; a css-only style is still kept by the length guard below.
+				if (typeof style.css === 'string' && style.css.trim()) entry.css = style.css;
 			if (Object.keys(entry).length) styles[name] = entry;
 		}
 		if (Object.keys(styles).length) config.styles = styles;

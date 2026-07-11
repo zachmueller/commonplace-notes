@@ -30,6 +30,14 @@ export interface ParserContext {
 	frontmatterManager: FrontmatterManager;
 	resolveInternalLinks: (notePath: string) => Promise<ResolvedNoteInfo | null>;
 	urlScheme: UrlScheme;
+	/**
+	 * Resolved `cpn-style` for this note (`null` if unset) — the same value that
+	 * becomes the panel's `cpn-style-<name>` class on the published site. A custom
+	 * stage can branch on it (e.g. to emit custom classes styled by that named
+	 * style's Custom CSS). Convenience mirror of
+	 * `frontmatterManager.getNoteStyle(file)`.
+	 */
+	noteStyle: string | null;
 }
 
 /** Small read-only helper bag injected as the `utils` argument. */

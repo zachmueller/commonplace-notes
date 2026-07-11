@@ -88,8 +88,46 @@ deployed) view outputs. See [Infrastructure deployment](infrastructure-deploymen
   snippets).
 - **Site title**, **Font family**, **Panel width** (default **600** px),
   **Header links**, and collapsible **Theme color overrides** (light/dark).
+- **Named styles (per-note)** — see below.
 - For raw HTML/CSS/JS injection beyond these, see
   [Site asset customizations](site-asset-customizations.md).
+
+#### Named styles (per-note)
+
+A **named style** lets an individual note opt into a different look. Set
+`cpn-style: <name>` in the note's frontmatter, and the site applies that style's
+overrides to only that note's panel — everything else keeps the site theme.
+
+Define styles under **Named styles (per-note)** in a profile's Site Customization.
+Each style has:
+
+- **Style name** — the value a note puts in `cpn-style` (e.g. `cpn-style: ai`).
+- **Font family** — optional; overrides the site font for these notes.
+- **Light / Dark** — the same five color overrides as the global theme
+  (background, text, link, border), layered on top of it. A style only declares
+  what it changes; everything unset inherits the site theme.
+- **Custom CSS** — arbitrary CSS applied to notes using this style. It is
+  **auto-scoped** to the style group: whatever you write is wrapped in
+  `.cpn-style-<name> { … }` on the site (via native CSS nesting), so it can't
+  affect other notes.
+  - **Use theme tokens for colors** — reference `var(--text-primary)`,
+    `var(--bg-primary)`, `var(--link-color)`, `var(--border-color)`,
+    `var(--bg-secondary)` so light/dark follow the theme automatically.
+    Hard-coded colors won't adapt.
+  - **Prefer class or `&`-nested selectors** (`.my-class { … }`, `& p { … }`)
+    over bare element selectors (`p { … }`); the latter need a newer browser for
+    CSS nesting. On browsers without nesting support the block is simply ignored
+    (the note falls back to the base look).
+  - Injected **verbatim** — you're the trusted author of your own site (same
+    boundary as the [`extra-css` slot](site-asset-customizations.md)). Top-level
+    at-rules like `@keyframes` / `@font-face` can't be nested; put those in the
+    global `extra-css` slot instead.
+
+This pairs with [custom parser stages](parser-extensions.md): a stage can read
+`context.noteStyle` and emit custom classes, which you then style here per group.
+
+A note referencing an undefined style name falls back to default styling. Editing
+a style ships on the next publish (or **Push site assets**).
 
 ### Danger Zone
 - **Destroy infrastructure** — tear down the profile's stacks (bucket retained).

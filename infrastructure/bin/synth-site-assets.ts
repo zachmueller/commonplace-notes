@@ -147,6 +147,14 @@ window.__CPN_CONFIG_READY__ = fetch('config.json')
         if (style.font) {
           cssParts.push(sel + '{font-family:' + style.font + ';}');
         }
+        // Arbitrary custom CSS, auto-scoped to this style group via native CSS
+        // nesting (the browser resolves the nested selectors against sel). Emitted
+        // last so an author's explicit declarations win direct-property ties over
+        // the font convenience field above. Injected verbatim (same trust model as
+        // the extra-css slot) — a stray '}' can break out of the wrapper.
+        if (style.css) {
+          cssParts.push(sel + '{' + style.css + '}');
+        }
       });
       if (cssParts.length) {
         var styleEl = document.createElement('style');

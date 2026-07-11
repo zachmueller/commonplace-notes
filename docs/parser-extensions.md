@@ -86,7 +86,8 @@ cpn-description: "..."        # optional — shown in settings
 
 - `libs` — the bundled toolkit (below).
 - `context` — per-note runtime info: `file`, `profileId`, `frontmatterManager`,
-  `resolveInternalLinks(notePath)`, and `urlScheme`.
+  `resolveInternalLinks(notePath)`, `urlScheme`, and `noteStyle` (the resolved
+  `cpn-style` for this note, or `null`).
 - `app` — the Obsidian `App`.
 - `utils` — `{ logger, slug }` (a scoped logger and a `github-slugger` function).
 
@@ -147,6 +148,15 @@ return libs.defineTransform((tree) => {
 ````
 
 Run any publish command to apply it.
+
+### Styling what a stage emits
+
+A stage can emit its own HTML classes and style them **per style group**. Read
+`context.noteStyle` to branch on the note's `cpn-style`, emit whatever classes you
+like, then define the CSS for those classes under **Custom CSS** in that named
+style (**Settings → profile → Site Customization → Named styles**). The Custom CSS
+is auto-scoped to `.cpn-style-<name>`, so it only affects notes using that style.
+See [Named styles (per-note)](settings.md#named-styles-per-note).
 
 **Disabling a built-in** is just as easy — override it with a no-op plugin. To
 turn off GitHub Flavored Markdown, create a stage named `remark-gfm` whose body is:

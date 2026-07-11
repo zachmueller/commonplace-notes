@@ -203,9 +203,14 @@ function testStylesAndTheme() {
 				light: { bgPrimary: '#f0f0f5' },
 				dark: { bgPrimary: '#01030a' },
 				fontFamily: 'monospace',
+				css: '.cpn-callout { color: var(--text-primary); }',
 			},
 			// Only a font, no colors — still emitted.
 			serif: { fontFamily: 'Georgia, serif' },
+			// Only custom CSS, no colors/font — still emitted.
+			cssOnly: { css: '.x { border: 1px solid var(--border-color); }' },
+			// CSS is whitespace-only ⇒ dropped; style has nothing else ⇒ style dropped.
+			blankCss: { css: '   ' },
 			// Fully empty — must be dropped entirely.
 			empty: {},
 		},
@@ -214,7 +219,10 @@ function testStylesAndTheme() {
 	check('styles: ai.light kebab var', styled.styles?.ai?.light?.['bg-primary'] === '#f0f0f5', JSON.stringify(styled.styles?.ai));
 	check('styles: ai.dark kebab var', styled.styles?.ai?.dark?.['bg-primary'] === '#01030a');
 	check('styles: ai.font emitted as font', styled.styles?.ai?.font === 'monospace', JSON.stringify(styled.styles?.ai?.font));
+	check('styles: ai.css emitted verbatim', styled.styles?.ai?.css === '.cpn-callout { color: var(--text-primary); }', JSON.stringify(styled.styles?.ai?.css));
 	check('styles: font-only style kept', styled.styles?.serif?.font === 'Georgia, serif' && styled.styles?.serif?.light === undefined, JSON.stringify(styled.styles?.serif));
+	check('styles: css-only style kept', styled.styles?.cssOnly?.css === '.x { border: 1px solid var(--border-color); }' && styled.styles?.cssOnly?.light === undefined && styled.styles?.cssOnly?.font === undefined, JSON.stringify(styled.styles?.cssOnly));
+	check('styles: whitespace-only css dropped ⇒ style dropped', styled.styles?.blankCss === undefined, JSON.stringify(styled.styles?.blankCss));
 	check('styles: empty style dropped', styled.styles?.empty === undefined, JSON.stringify(styled.styles?.empty));
 
 	// No namedStyles ⇒ no styles key.

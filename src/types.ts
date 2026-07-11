@@ -199,6 +199,17 @@ export interface NamedStyle {
 	light?: ThemeColors;
 	dark?: ThemeColors;
 	fontFamily?: string;
+	/**
+	 * Arbitrary custom CSS for notes using this style. Emitted verbatim and
+	 * auto-wrapped client-side in `.cpn-style-<name> { … }` via native CSS
+	 * nesting, so it only affects notes with this `cpn-style` (convenience
+	 * scoping, not a sandbox — a stray `}` can still break out). Reference the
+	 * theme tokens (`var(--text-primary)`, etc.) so colors follow light/dark
+	 * automatically; hard-coded colors won't adapt. Top-level at-rules
+	 * (`@keyframes`/`@font-face`) can't be nested — use the global `extra-css`
+	 * asset slot for those.
+	 */
+	css?: string;
 }
 
 export interface SiteCustomization {

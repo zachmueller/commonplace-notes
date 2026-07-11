@@ -131,6 +131,7 @@ export class NoteManager {
 			profileId,
 			frontmatterManager: this.plugin.frontmatterManager,
 			urlScheme,
+			noteStyle: this.plugin.frontmatterManager.getNoteStyle(currentFile),
 			resolveInternalLinks: async (notePath: string): Promise<ResolvedNoteInfo | null> => {
 				const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(notePath, currentFile.path);
 

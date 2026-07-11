@@ -1791,6 +1791,27 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			new Setting(darkSection).setName('Dark mode').setHeading();
 			this.displayThemeColorInputs(darkSection, 'dark', style.dark ?? {},
 				() => this.ensureNamedStyle(index, currentName));
+
+			// Arbitrary custom CSS, auto-scoped to this style group on the site
+			// (wrapped in `.cpn-style-<name> { … }` via native CSS nesting). Stored
+			// raw to preserve author formatting; whitespace-only clears it (matching
+			// the font-family delete-on-empty pattern, so an otherwise-empty style
+			// still drops from config.json).
+			new Setting(styleSection)
+				.setName('Custom CSS')
+				.setDesc('Applies only to notes with this cpn-style. Reference theme tokens (e.g. var(--text-primary)) so colors follow light/dark. Put top-level @keyframes/@font-face in the global extra-css slot instead.')
+				.addTextArea(text => text
+					.setPlaceholder('.my-class { color: var(--link-color); }')
+					.setValue(style.css ?? '')
+					.onChange(async (value) => {
+						const target = this.ensureNamedStyle(index, currentName);
+						if (value.trim()) {
+							target.css = value;
+						} else {
+							delete target.css;
+						}
+						await this.plugin.saveSettings();
+					}));
 		}
 
 		new Setting(stylesDetails)

@@ -53,6 +53,7 @@ const context: ParserContext = {
 	profileId: 'default',
 	frontmatterManager: {} as any,
 	urlScheme: 'current',
+	noteStyle: 'ai',
 	resolveInternalLinks: async (notePath: string) =>
 		PUBLISHED.has(notePath)
 			? { uid: `UID-${notePath}`, title: notePath, published: true }
@@ -277,6 +278,32 @@ return function () {};
 		if (!/<table[ >]/.test(baseline.html)) errs.push('baseline GFM table did not render');
 		if (/<table[ >]/.test(overridden.html)) errs.push('no-op override did not disable GFM tables');
 		check('override-by-name (remark-gfm no-op)', errs);
+	}
+
+	// 6. context.noteStyle: a stage reads the resolved cpn-style and stamps it
+	//    onto the root element, proving custom stages can branch on the style group.
+	{
+		const stage = `---
+cpn-type: parser
+cpn-parser-name: stamp-note-style
+cpn-parser-stage: rehype
+cpn-parser-order: 58
+---
+\`\`\`ts
+return libs.defineTransform((tree) => {
+  libs.visit(tree, 'element', (node) => {
+    if (!node.properties || !node.properties['dataNoteStyle']) {
+      node.properties = node.properties || {};
+      node.properties['dataNoteStyle'] = context.noteStyle || 'none';
+    }
+  });
+});
+\`\`\``;
+		const { html, errors } = await assembleAndRender('hello', [stage]);
+		const errs = [...errors];
+		// context.noteStyle is 'ai' in the stub → serialized as data-note-style="ai".
+		if (!/data-note-style="ai"/.test(html)) errs.push(`stage did not read context.noteStyle (html: ${html})`);
+		check('context-noteStyle-readable', errs);
 	}
 
 	console.log('');
