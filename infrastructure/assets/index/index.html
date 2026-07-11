@@ -697,7 +697,12 @@ body.panel-resizing {
    its own 8px padding — a predictable opaque band rather than a transparent margin. */
 .panel-header > h1 {
 	margin-bottom: 0;
-	max-height: 4.5em;
+	/* Clamp to a few lines with an auto ellipsis so a long title stays compact in the
+	   sticky header; the full title is available via the title="" hover tooltip. Clamps
+	   at a line boundary (no mid-glyph cut). Mirrors .search-result-preview below. */
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
 
@@ -1955,7 +1960,7 @@ ${closeButton}
 				panel.innerHTML = `
 					<div class="panel-header">
 						${closeButton}
-						<h1>Diff: ${noteData.title}</h1>
+						<h1 title="Diff: ${escapeHtml(noteData.title)}">Diff: ${noteData.title}</h1>
 					</div>
 					<div class="diff-header">
 						<span class="diff-side diff-side-old">old <strong>${shortHash(meta.left)}</strong></span>
@@ -2027,7 +2032,7 @@ ${closeButton}
 				panel.innerHTML = `
 					<div class="panel-header">
 						${closeButton}
-						<h1>${noteData.title}</h1>
+						<h1 title="${escapeHtml(noteData.title)}">${noteData.title}</h1>
 					</div>
 					${hasMetadata ? `
 						<div class="note-metadata">
