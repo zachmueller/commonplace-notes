@@ -495,6 +495,9 @@ a:not([href^="#"]):hover {
 	flex-wrap: nowrap;
 	align-items: center;
 	gap: 12px;
+	/* Breathing room below the flush sticky title so the metadata row has a natural
+	   break from the header when the note is scrolled to the very top. */
+	margin-top: 10px;
 	margin-bottom: 20px;
 	color: var(--text-secondary);
 	font-size: 0.9em;
