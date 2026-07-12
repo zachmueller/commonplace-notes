@@ -76,10 +76,10 @@ export function renderRoutingTab(ctx: SettingsContext, containerEl: HTMLElement)
 		}
 	}
 
-	// --- Built-in options ---
-	const optionSection = ctx.createSection(containerEl, 'Built-in options');
+	// --- Options ---
+	const optionSection = ctx.createSection(containerEl, 'Routing options');
 	optionSection.createEl('p', {
-		text: 'The choices shown in the routing suggester. Materialize to your vault to edit or add your own.',
+		text: 'The choices shown in the routing suggester. CPN ships none by default — author your own under <cpn-dir>/routes/options/, composing the built-in actions above.',
 		cls: 'cpn-settings-hint'
 	});
 	for (const name of manager.getBuiltinOptionNames()) {
@@ -122,7 +122,7 @@ export function renderRoutingTab(ctx: SettingsContext, containerEl: HTMLElement)
 
 	new Setting(optionSection)
 		.setName('Export all routing files')
-		.setDesc('Materialize every built-in action and option to the vault at once.')
+		.setDesc('Materialize every built-in action to the vault at once.')
 		.addButton(button => button
 			.setButtonText('Export all')
 			.onClick(async () => {

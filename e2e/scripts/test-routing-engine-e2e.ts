@@ -3,10 +3,14 @@
  * Note Routing Engine E2E Test
  *
  * Verifies, inside the REAL Obsidian runtime, that the note-routing engine
- * discovers its built-in actions/options, and that running an option applies the
- * composed actions (move + set-frontmatter + publish-contexts + code) correctly —
- * including the create-vs-update capability semantics and the merge behavior of
- * `FrontmatterManager.mergeFrontmatter`.
+ * discovers its built-in actions, and that running a user-authored option applies
+ * the composed actions (set-frontmatter + move + publish-contexts + insert-template
+ * + ensure-uid) correctly — including the create-vs-update capability semantics and
+ * the merge behavior of `FrontmatterManager.mergeFrontmatter`.
+ *
+ * CPN ships no built-in OPTIONS (adopters author their own), so this test writes
+ * its own option + action fixtures into `<cpnDir>/routes/` in `setupVault` and
+ * drives them by name — the same shape a real user's vault has.
  *
  * It drives `RoutingManager.runOptionByName(file, optionName, mode)` (the
  * non-interactive entry point the two commands share), so it exercises the real
@@ -14,19 +18,22 @@
  * metadataCache, without depending on the suggester modal.
  *
  * Scenarios:
- *   1. Plugin loaded; RoutingManager present; built-in actions + options load
- *      (move, set-publish-contexts, default-frontmatter, code-example; options
- *      Public (all), Private, Amazon-only) with no load errors.
- *   2. Route a NEW note via "Public (all)": the note moves to the vault root,
- *      gets cpn-publish-contexts [public, amazon], and a created-at seeded from
- *      the file ctime (default-frontmatter runs in create mode).
- *   3. Re-route the SAME note via "Amazon-only" in UPDATE mode: default-frontmatter
- *      is SKIPPED (created-at unchanged, not clobbered) and publish-contexts is
+ *   1. Plugin loaded; RoutingManager present; the built-in ACTIONS load
+ *      (move, set-publish-contexts, insert-template, ensure-uid) and NO built-in
+ *      options ship, with no load errors.
+ *   2. Route a NEW note via the "E2E Publish" option: the note moves to the vault
+ *      root, gets cpn-publish-contexts [public, amazon], and a created-at seeded
+ *      from the file ctime (the new-note-only seed action runs in create mode).
+ *   3. Re-route the SAME note via "E2E Amazon" in UPDATE mode: the seed action is
+ *      SKIPPED (created-at unchanged, not clobbered) and publish-contexts is
  *      UNIONED (public, amazon preserved; no duplicates).
- *   4. Route a note via "Private": moved into private/, and NO cpn-publish-contexts
+ *   4. Route a note via "E2E Private": moved into private/, and NO cpn-publish-contexts
  *      is written (so it is never published / no UID minted).
- *   5. Unknown option name returns a structured error (no throw).
- *   6. No plugin errors captured during the run.
+ *   5. insert-template skips cleanly when Templater is absent.
+ *   6. insert-template with an unresolvable template aborts (ok:false).
+ *   7-8. ensure-uid mints on create, then leaves the id unchanged on update.
+ *   9. Unknown option name returns a structured error (no throw).
+ *   10. No plugin errors captured during the run.
  *
  * Run: npx tsx e2e/scripts/test-routing-engine-e2e.ts
  */
@@ -56,6 +63,15 @@ const CPN_OPTIONS_DIR = "cpn/routes/options";
 // the built-in ensure-uid action. Exercises mint-on-create then skip-on-update.
 const ENSURE_UID_NOTE = "Routing-EnsureUid.md";
 const ENSURE_UID_OPTION = "E2E Ensure-UID";
+
+// Compose-the-primitives fixtures. CPN ships no built-in options, so the move +
+// publish-contexts + seed-frontmatter scenarios use test-authored options that
+// reference the built-in actions plus one test-local seed action.
+const CPN_ACTIONS_DIR = "cpn/routes/actions";
+const SEED_ACTION = "e2e-seed-frontmatter";
+const PUBLISH_OPTION = "E2E Publish";
+const AMAZON_OPTION = "E2E Amazon";
+const PRIVATE_OPTION = "E2E Private";
 
 // Crockford Base32 alphabet (excludes I, L, O, U) — validates a generated UID.
 const CROCKFORD_RE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]+$/;
@@ -103,6 +119,63 @@ cpn-routing-steps:
 ---
 
 Runs ensure-uid against the note; mints a cpn-uid if absent, else leaves it.
+`;
+
+// Test-local seed action: stands in for the old built-in default-frontmatter.
+// A set-frontmatter action with a $ctime sentinel, marked new-note-only so
+// re-routing an existing note never clobbers its created-at.
+const SEED_ACTION_CONTENT = `---
+cpn-type: routing-action
+cpn-routing-action-name: ${SEED_ACTION}
+cpn-routing-action-kind: set-frontmatter
+cpn-routing-new-note-only: true
+cpn-routing-frontmatter:
+  created-at: $ctime
+---
+
+Seeds a created-at timestamp from the file's ctime. New notes only.
+`;
+
+// "E2E Publish": seed + keep at root + publish to public, amazon.
+const PUBLISH_OPTION_CONTENT = `---
+cpn-type: routing-option
+cpn-routing-option-name: "${PUBLISH_OPTION}"
+cpn-routing-on-error: abort
+cpn-routing-steps:
+  - "[[${SEED_ACTION}]]"
+  - "[[move]] dir: /"
+  - "[[set-publish-contexts]] contexts: public, amazon"
+---
+
+Seed frontmatter, keep at the vault root, publish to public + amazon.
+`;
+
+// "E2E Amazon": seed + keep at root + publish to amazon only (used in update mode
+// to assert the seed is skipped and publish-contexts unions with the prior run).
+const AMAZON_OPTION_CONTENT = `---
+cpn-type: routing-option
+cpn-routing-option-name: "${AMAZON_OPTION}"
+cpn-routing-on-error: abort
+cpn-routing-steps:
+  - "[[${SEED_ACTION}]]"
+  - "[[move]] dir: /"
+  - "[[set-publish-contexts]] contexts: amazon"
+---
+
+Seed frontmatter, keep at the vault root, publish to amazon only.
+`;
+
+// "E2E Private": seed + move to private/, no publish contexts.
+const PRIVATE_OPTION_CONTENT = `---
+cpn-type: routing-option
+cpn-routing-option-name: "${PRIVATE_OPTION}"
+cpn-routing-on-error: abort
+cpn-routing-steps:
+  - "[[${SEED_ACTION}]]"
+  - "[[move]] dir: private"
+---
+
+Seed frontmatter and move to private/. No publish contexts (never published).
 `;
 
 // Substring of the one [CPN Error] the missing-template test intentionally logs
@@ -213,7 +286,7 @@ async function testDiscovery(ctx: TestContext): Promise<void> {
 		return;
 	}
 
-	const expectedActions = ["move", "set-publish-contexts", "default-frontmatter", "insert-template", "ensure-uid", "code-example"];
+	const expectedActions = ["move", "set-publish-contexts", "insert-template", "ensure-uid"];
 	const haveActions = expectedActions.every((a) => probe.actions.includes(a));
 	if (haveActions) {
 		ctx.pass("Built-in actions load", `actions: ${probe.actions.join(", ")}`, shot);
@@ -221,12 +294,11 @@ async function testDiscovery(ctx: TestContext): Promise<void> {
 		ctx.fail("Built-in actions load", `expected ${expectedActions.join(", ")}, got ${probe.actions.join(", ")}`, shot);
 	}
 
-	const expectedOptions = ["Public (all)", "Private", "Amazon-only"];
-	const haveOptions = expectedOptions.every((o) => probe.options.includes(o));
-	if (haveOptions) {
-		ctx.pass("Built-in options load", `options: ${probe.options.join(", ")}`, shot);
+	// CPN ships NO built-in options — users author their own.
+	if (probe.options.length === 0) {
+		ctx.pass("No built-in options ship", "built-in option list is empty", shot);
 	} else {
-		ctx.fail("Built-in options load", `expected ${expectedOptions.join(", ")}, got ${probe.options.join(", ")}`, shot);
+		ctx.fail("No built-in options ship", `expected none, got ${probe.options.join(", ")}`, shot);
 	}
 
 	if (probe.loadErrors.length === 0) {
@@ -240,16 +312,16 @@ async function testDiscovery(ctx: TestContext): Promise<void> {
 let publicCreatedAt: unknown;
 
 async function testRouteNewNote(ctx: TestContext): Promise<void> {
-	console.log("\nTest 2: Route a new note via 'Public (all)'");
-	const probe = await routeAndRead(ctx, PUBLIC_NOTE, "Public (all)", "create");
+	console.log("\nTest 2: Route a new note via 'E2E Publish'");
+	const probe = await routeAndRead(ctx, PUBLIC_NOTE, PUBLISH_OPTION, "create");
 	const shot = await safeShot(ctx, "02-public-create");
 
 	if (probe.error) {
-		ctx.fail("Public (all) route", probe.error, shot);
+		ctx.fail("E2E Publish route", probe.error, shot);
 		return;
 	}
 	if (!probe.runOk) {
-		ctx.fail("Public (all) route", `run failed: ${probe.runError}`, shot);
+		ctx.fail("E2E Publish route", `run failed: ${probe.runError}`, shot);
 		return;
 	}
 
@@ -268,7 +340,7 @@ async function testRouteNewNote(ctx: TestContext): Promise<void> {
 		ctx.fail("Publish contexts set", `expected [public, amazon], got ${JSON.stringify(probe.contexts)}`, shot);
 	}
 
-	// created-at seeded (default-frontmatter ran in create mode).
+	// created-at seeded (the seed action ran in create mode).
 	publicCreatedAt = probe.createdAt;
 	if (typeof probe.createdAt === "string" && /\d{4}-\d{2}-\d{2}/.test(probe.createdAt)) {
 		ctx.pass("created-at seeded", `created-at = ${probe.createdAt}`, shot);
@@ -278,23 +350,23 @@ async function testRouteNewNote(ctx: TestContext): Promise<void> {
 }
 
 async function testReRouteUpdateMode(ctx: TestContext): Promise<void> {
-	console.log("\nTest 3: Re-route the same note via 'Amazon-only' in update mode");
+	console.log("\nTest 3: Re-route the same note via 'E2E Amazon' in update mode");
 	// Note is at the root after Test 2.
-	const probe = await routeAndRead(ctx, PUBLIC_NOTE, "Amazon-only", "update");
+	const probe = await routeAndRead(ctx, PUBLIC_NOTE, AMAZON_OPTION, "update");
 	const shot = await safeShot(ctx, "03-amazon-update");
 
 	if (probe.error) {
-		ctx.fail("Amazon-only update route", probe.error, shot);
+		ctx.fail("E2E Amazon update route", probe.error, shot);
 		return;
 	}
 	if (!probe.runOk) {
-		ctx.fail("Amazon-only update route", `run failed: ${probe.runError}`, shot);
+		ctx.fail("E2E Amazon update route", `run failed: ${probe.runError}`, shot);
 		return;
 	}
 
-	// created-at must be UNCHANGED — default-frontmatter is new-note-only, skipped on update.
+	// created-at must be UNCHANGED — the seed action is new-note-only, skipped on update.
 	if (probe.createdAt === publicCreatedAt) {
-		ctx.pass("created-at preserved on update", `created-at still ${JSON.stringify(probe.createdAt)} (default-frontmatter skipped)`, shot);
+		ctx.pass("created-at preserved on update", `created-at still ${JSON.stringify(probe.createdAt)} (seed action skipped)`, shot);
 	} else {
 		ctx.fail("created-at preserved on update", `created-at changed: ${JSON.stringify(publicCreatedAt)} → ${JSON.stringify(probe.createdAt)}`, shot);
 	}
@@ -311,16 +383,16 @@ async function testReRouteUpdateMode(ctx: TestContext): Promise<void> {
 }
 
 async function testPrivateOption(ctx: TestContext): Promise<void> {
-	console.log("\nTest 4: Route a note via 'Private' (moved, no publish contexts)");
-	const probe = await routeAndRead(ctx, PRIVATE_NOTE, "Private", "create");
+	console.log("\nTest 4: Route a note via 'E2E Private' (moved, no publish contexts)");
+	const probe = await routeAndRead(ctx, PRIVATE_NOTE, PRIVATE_OPTION, "create");
 	const shot = await safeShot(ctx, "04-private");
 
 	if (probe.error) {
-		ctx.fail("Private route", probe.error, shot);
+		ctx.fail("E2E Private route", probe.error, shot);
 		return;
 	}
 	if (!probe.runOk) {
-		ctx.fail("Private route", `run failed: ${probe.runError}`, shot);
+		ctx.fail("E2E Private route", `run failed: ${probe.runError}`, shot);
 		return;
 	}
 
@@ -560,9 +632,16 @@ runTest(
 			createTestNote(vaultPath, ENSURE_UID_NOTE, BARE_BODY);
 			// A real template file so insert-template resolution succeeds.
 			createTestNote(vaultPath, INSERT_TEMPLATE_FILE, INSERT_TEMPLATE_BODY);
-			// Author the insert-template + ensure-uid options into the discovered options dir.
+			// Author the test-local seed action (CPN ships no default-frontmatter).
+			const actionsDir = path.join(vaultPath, CPN_ACTIONS_DIR);
+			fs.mkdirSync(actionsDir, { recursive: true });
+			fs.writeFileSync(path.join(actionsDir, `${SEED_ACTION}.md`), SEED_ACTION_CONTENT);
+			// Author the option fixtures into the discovered options dir (CPN ships none).
 			const optionsDir = path.join(vaultPath, CPN_OPTIONS_DIR);
 			fs.mkdirSync(optionsDir, { recursive: true });
+			fs.writeFileSync(path.join(optionsDir, `${PUBLISH_OPTION}.md`), PUBLISH_OPTION_CONTENT);
+			fs.writeFileSync(path.join(optionsDir, `${AMAZON_OPTION}.md`), AMAZON_OPTION_CONTENT);
+			fs.writeFileSync(path.join(optionsDir, `${PRIVATE_OPTION}.md`), PRIVATE_OPTION_CONTENT);
 			fs.writeFileSync(path.join(optionsDir, `${INSERT_SKIP_OPTION}.md`), SKIP_OPTION_CONTENT);
 			fs.writeFileSync(path.join(optionsDir, `${INSERT_MISSING_OPTION}.md`), MISSING_OPTION_CONTENT);
 			fs.writeFileSync(path.join(optionsDir, `${ENSURE_UID_OPTION}.md`), ENSURE_UID_OPTION_CONTENT);
@@ -577,6 +656,10 @@ runTest(
 			INSERT_SKIP_NOTE,
 			INSERT_TEMPLATE_FILE,
 			ENSURE_UID_NOTE,
+			`${CPN_ACTIONS_DIR}/${SEED_ACTION}.md`,
+			`${CPN_OPTIONS_DIR}/${PUBLISH_OPTION}.md`,
+			`${CPN_OPTIONS_DIR}/${AMAZON_OPTION}.md`,
+			`${CPN_OPTIONS_DIR}/${PRIVATE_OPTION}.md`,
 			`${CPN_OPTIONS_DIR}/${INSERT_SKIP_OPTION}.md`,
 			`${CPN_OPTIONS_DIR}/${INSERT_MISSING_OPTION}.md`,
 			`${CPN_OPTIONS_DIR}/${ENSURE_UID_OPTION}.md`,

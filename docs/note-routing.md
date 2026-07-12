@@ -30,9 +30,11 @@ Routing files live under `<cpnDir>/routes/` (the CPN directory defaults to `cpn`
 - **Options** — `<cpnDir>/routes/options/` — the choices shown in the suggester.
   An option composes an ordered list of **steps**, each referencing an action.
 
-CPN ships built-in actions and options that work out of the box (they run from
-memory even with no files in your vault). Materialize any of them to edit — see
-[Overriding a built-in](#overriding-a-built-in).
+CPN ships built-in **actions** that work out of the box (they run from memory even
+with no files in your vault). It ships **no built-in options** — you author your
+own from these actions (see [Authoring an option](#authoring-an-option)), so you're
+never locked into a particular vault layout. Materialize any built-in action to
+edit — see [Overriding a built-in](#overriding-a-built-in).
 
 ## Built-in actions
 
@@ -40,10 +42,8 @@ memory even with no files in your vault). Materialize any of them to edit — se
 |------|------|--------------|
 | `move` | `move` | Moves the note into a directory (backlinks update). Destination via `params.dir`. |
 | `set-publish-contexts` | `publish-contexts` | Adds publish contexts (unioned with any existing). Contexts via `params.contexts`. |
-| `default-frontmatter` | `code` | Seeds `created-at` (from the file's ctime) plus empty `tags`/`aliases`. New notes only. |
 | `insert-template` | `insert-template` | Runs a [Templater](https://github.com/SilentVoid13/Templater) template against the note. See [below](#running-a-template-insert-template). |
 | `ensure-uid` | `ensure-uid` | Assigns the note a stable CPN UID (`cpn-uid`) if it lacks one. See [below](#assigning-a-uid-ensure-uid). |
-| `code-example` | `code` | A starting point for your own `code` action — copy and edit. |
 
 ### Action kinds
 
@@ -61,13 +61,23 @@ Every action has a `cpn-routing-action-kind`. The six kinds:
 - **`code`** — run an embedded TypeScript/JavaScript body with a `libs` toolkit
   in scope (the escape hatch for anything the declarative kinds don't cover).
 
-## Built-in options
+## Options
 
-- **Public (all)** — seed default frontmatter, keep at the vault root, publish to
-  `public` + `amazon`.
-- **Private** — seed default frontmatter, move to `private/`, no publish contexts.
-- **Amazon-only** — seed default frontmatter, keep at the root, publish to
-  `amazon` only.
+CPN ships **no built-in options** — the choices shown in the suggester are the ones
+you author, so routing matches your own vault layout rather than someone else's. A
+routing option is just a Markdown file composing the built-in actions above; see
+[Authoring an option](#authoring-an-option) for the full syntax. A minimal example:
+
+```yaml
+---
+cpn-type: routing-option
+cpn-routing-option-name: "Publish"
+cpn-routing-steps:
+  - "[[move]] dir: /"
+  - "[[ensure-uid]]"
+  - "[[set-publish-contexts]] contexts: public"
+---
+```
 
 ## Authoring an action
 
@@ -102,7 +112,7 @@ Two flags control what runs when you **re-route** an existing note
 
 - **`cpn-routing-new-note-only`** (default `false`) — when `true`, the action runs only
   in create mode. Use it for anything that seeds one-time content (e.g.
-  `default-frontmatter`, `insert-template`).
+  `insert-template`).
 - **`cpn-routing-idempotent`** (default `true`) — when `false`, the action is skipped in
   update mode because re-running it would clobber (it's not safe to repeat).
 
@@ -119,7 +129,7 @@ cpn-description: "..."          # optional
 cpn-routing-on-error: abort             # optional — abort | continue (default abort)
 cpn-routing-title-prompt: only-if-Untitled  # optional — always | only-if-Untitled | off
 cpn-routing-steps:                      # required — the ordered pipeline
-  - "[[default-frontmatter]]"                          # no params
+  - "[[ensure-uid]]"                                   # no params
   - "[[move]] dir: data"                               # one param
   - "[[set-publish-contexts]] contexts: public, amazon"  # a list param
 ---
@@ -130,7 +140,7 @@ optionally followed by `key: value` params. That keeps `cpn-routing-steps` a pla
 list of text, so you can add, edit, and reorder steps in Obsidian's Properties
 editor. The param grammar:
 
-- **No params** — just the wikilink: `"[[default-frontmatter]]"`.
+- **No params** — just the wikilink: `"[[ensure-uid]]"`.
 - **Params** follow the wikilink as `key: value` pairs, separated by `;`:
   `"[[move]] dir: data"` or `"[[insert-template]] template: [[My Template]]; foo: bar"`.
   Params override the action's own declarative frontmatter for this step (e.g. a
@@ -189,9 +199,8 @@ cpn-routing-new-note-only: true
 
   ```yaml
   cpn-routing-steps:
-    - "[[default-frontmatter]]"
     - "[[move]] dir: data"
-    - "[[set-publish-contexts]] contexts: amazon"
+    - "[[set-publish-contexts]] contexts: public"
     - "[[insert-data-template]]"
   ```
 
@@ -221,7 +230,7 @@ lazily at publish time:
 
 ```yaml
 cpn-routing-steps:
-  - "[[default-frontmatter]]"
+  - "[[move]] dir: /"
   - "[[ensure-uid]]"
   - "[[set-publish-contexts]] contexts: public"
 ```
@@ -244,16 +253,16 @@ From a `code` action you can do the same thing via the toolkit:
 `const uid = await libs.ensureUid(context.file);` (returns the existing id if
 present, else mints, writes, and returns a new one).
 
-## Overriding a built-in
+## Overriding a built-in action
 
-Give your action or option the **same name** (`cpn-routing-action-name` /
-`cpn-routing-option-name`) as a built-in and your file wins. Delete the file (or use
-**Reset** in settings) to restore the built-in — the built-in always runs as an
-in-memory fallback when no vault file overrides it.
+Give your action the **same name** (`cpn-routing-action-name`) as a built-in and
+your file wins. Delete the file (or use **Reset** in settings) to restore the
+built-in — the built-in always runs as an in-memory fallback when no vault file
+overrides it.
 
-Materialize a built-in to edit it via the per-item **Open** button in
+Materialize a built-in action to edit it via the per-item **Open** button in
 **Settings → Note routing**, or the **Export all routing actions & options to
-vault** command (writes everything to `<cpnDir>/routes/`).
+vault** command (writes every built-in action to `<cpnDir>/routes/`).
 
 ## Troubleshooting
 

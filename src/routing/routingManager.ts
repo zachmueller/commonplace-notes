@@ -306,7 +306,8 @@ export class RoutingManager {
 		await this.loadRoutes(profileId);
 
 		if (!this.options || this.options.length === 0) {
-			new Notice('No routing options found. Export the built-ins from CPN settings.');
+			const dir = this.plugin.settings.cpnDirectory || DEFAULT_CPN_DIR;
+			new Notice(`No routing options found. Author one under ${dir}/routes/options/ (see Settings → Note routing).`);
 			return;
 		}
 

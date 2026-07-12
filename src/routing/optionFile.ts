@@ -59,7 +59,7 @@ export type ParseOptionResult = RoutingOptionDefinition | RoutingError;
  * string: a leading `[[action]]` wikilink, optionally followed by `key: value`
  * params. Multiple params are separated by `;`; a value containing `,` becomes a
  * list, otherwise a scalar string. Examples:
- *   - `"[[default-frontmatter]]"`
+ *   - `"[[ensure-uid]]"`
  *   - `"[[move]] dir: data"`
  *   - `"[[set-publish-contexts]] contexts: public, amazon"`
  *   - `"[[insert-template]] template: [[Meeting Note Template]]"`
