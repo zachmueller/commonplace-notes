@@ -43,11 +43,13 @@ export function renderDangerZone(ctx: ProfileContext, containerEl: HTMLElement, 
 					} else {
 						profileContainer.addClass('removing');
 
-						window.setTimeout(async () => {
-							plugin.settings.publishingProfiles.splice(index, 1);
-							await plugin.saveSettings();
-							plugin.registerProfileCommands();
-							ctx.rerenderAll();
+						window.setTimeout(() => {
+							void (async () => {
+								plugin.settings.publishingProfiles.splice(index, 1);
+								await plugin.saveSettings();
+								plugin.registerProfileCommands();
+								ctx.rerenderAll();
+							})();
 						}, 200);
 					}
 				});

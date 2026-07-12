@@ -289,11 +289,13 @@ export class RecentCommentsView extends ItemView {
 					const opt = select.createEl('option', { text: p.name, value: p.id });
 					if (p.id === this.activeProfileId) opt.selected = true;
 				}
-				select.addEventListener('change', async () => {
-					this.activeProfileId = select.value;
-					this.feed = null; // feed is per-profile; drop the old one
-					this.render();
-					await this.refreshIfStale();
+				select.addEventListener('change', () => {
+					void (async () => {
+						this.activeProfileId = select.value;
+						this.feed = null; // feed is per-profile; drop the old one
+						this.render();
+						await this.refreshIfStale();
+					})();
 				});
 			}
 		} else {
@@ -321,8 +323,9 @@ export class RecentCommentsView extends ItemView {
 		setIcon(refreshBtn, 'refresh-cw');
 		refreshBtn.createSpan({ text: this.isRefreshing ? ' Refreshing…' : ' Refresh' });
 		refreshBtn.disabled = this.isRefreshing;
-		refreshBtn.addEventListener('click', () =>
-			this.mode === 'recent' ? this.refresh() : this.refreshActiveNote());
+		refreshBtn.addEventListener('click', () => {
+			void (this.mode === 'recent' ? this.refresh() : this.refreshActiveNote());
+		});
 
 		// (4) Freshness label — per-source, per-mode.
 		const label = header.createDiv({ cls: 'cpn-recent-comments-lastrefreshed' });
@@ -378,7 +381,9 @@ export class RecentCommentsView extends ItemView {
 			title.addClass('cpn-recent-comments-clickable');
 			// Plain click → active pane; Cmd/Ctrl+click → new tab (Keymap.isModEvent
 			// returns a PaneType|boolean suited for getLeaf); middle-click → new tab.
-			title.addEventListener('click', (evt) => this.openLocalNote(group, Keymap.isModEvent(evt)));
+			title.addEventListener('click', (evt) => {
+				void this.openLocalNote(group, Keymap.isModEvent(evt));
+			});
 			title.addEventListener('auxclick', (evt) => {
 				if (evt.button === 1) {
 					evt.preventDefault();

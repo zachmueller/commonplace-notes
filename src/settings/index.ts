@@ -45,10 +45,12 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				text: tab.label,
 			});
 			if (tab.id === activeTab) btn.addClass('is-active');
-			btn.addEventListener('click', async () => {
-				this.ensureUiState().activeTab = tab.id;
-				await this.plugin.saveSettings();
-				this.display();
+			btn.addEventListener('click', () => {
+				void (async () => {
+					this.ensureUiState().activeTab = tab.id;
+					await this.plugin.saveSettings();
+					this.display();
+				})();
 			});
 		}
 
@@ -172,10 +174,12 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const details = parent.createEl('details', { cls: 'cpn-settings-section' });
 		details.open = !collapsed;
 		details.createEl('summary', { cls: 'cpn-settings-section-summary', text: title });
-		details.addEventListener('toggle', async () => {
-			const ui = this.ensureUiState();
-			(ui.collapsedSections ??= {})[title] = !details.open;
-			await this.plugin.saveSettings();
+		details.addEventListener('toggle', () => {
+			void (async () => {
+				const ui = this.ensureUiState();
+				(ui.collapsedSections ??= {})[title] = !details.open;
+				await this.plugin.saveSettings();
+			})();
 		});
 		return details;
 	}

@@ -26,11 +26,13 @@ export function renderContentSection(ctx: ProfileContext, containerEl: HTMLEleme
 			.setButtonText('Browse')
 			.onClick(async () => {
 				const files = await plugin.publisher.getAllPublishableNotes(profile.id);
-				new HomeNoteSuggestModal(app, files, async (file) => {
-					plugin.settings.publishingProfiles[index].homeNotePath = file.path;
-					await plugin.saveSettings();
-					const input = containerEl.querySelector(`[data-home-input="${profile.id}"]`) as HTMLInputElement | null;
-					if (input) input.value = file.path;
+				new HomeNoteSuggestModal(app, files, (file) => {
+					void (async () => {
+						plugin.settings.publishingProfiles[index].homeNotePath = file.path;
+						await plugin.saveSettings();
+						const input = containerEl.querySelector(`[data-home-input="${profile.id}"]`) as HTMLInputElement | null;
+						if (input) input.value = file.path;
+					})();
 				}).open();
 			}));
 

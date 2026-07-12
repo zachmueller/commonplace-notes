@@ -111,8 +111,9 @@ git push origin {NEW_VERSION}
 
 Pushing the tag triggers the GitHub Actions release workflow (`.github/workflows/release.yml`), which will:
 1. Build the plugin (`npm install && npm run build`)
-2. Create a **draft** GitHub release titled `{NEW_VERSION}`
-3. Attach `main.js`, `manifest.json`, and `styles.css` as release assets
+2. Generate GitHub artifact attestations (build provenance) for `main.js` and `styles.css` via `actions/attest-build-provenance`, letting users cryptographically verify the assets were built from this repo
+3. Create a **draft** GitHub release titled `{NEW_VERSION}`
+4. Attach `main.js`, `manifest.json`, and `styles.css` as release assets
 
 ---
 

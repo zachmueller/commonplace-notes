@@ -31,7 +31,7 @@ export async function publishLocalNotes(
 		const htmlOutputPath = plugin.profileManager.getPublishedHtmlPath(profileId);
 
 		// Verify directories exist
-		if (!plugin.app.vault.adapter.exists(stagedNotesDir)) {
+		if (!(await plugin.app.vault.adapter.exists(stagedNotesDir))) {
 			throw new Error(`Staged notes directory does not exist: ${stagedNotesDir}`);
 		}
 

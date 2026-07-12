@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import tsParser from '@typescript-eslint/parser';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
 import obsidianmd from 'eslint-plugin-obsidianmd';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,7 @@ export default [
 		},
 		plugins: {
 			obsidianmd,
+			'@typescript-eslint': tsPlugin,
 		},
 		rules: {
 			// Error blockers from the review:
@@ -36,6 +38,11 @@ export default [
 			'obsidianmd/no-static-styles-assignment': 'error',
 			// src/ warning sweep folded into this pass:
 			'obsidianmd/prefer-window-timers': 'warn',
+			// Review finding: async callbacks passed where a void return is
+			// expected. Enabled for src/ only — the noisy no-unsafe-* /
+			// no-explicit-any family (e2e/ + infrastructure/) is a separate
+			// tracked follow-up and would bury this signal.
+			'@typescript-eslint/no-misused-promises': 'error',
 		},
 	},
 ];
