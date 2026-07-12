@@ -131,7 +131,7 @@ cpn-routing-title-prompt: only-if-Untitled  # optional — always | only-if-Unti
 cpn-routing-steps:                      # required — the ordered pipeline
   - "[[ensure-uid]]"                                   # no params
   - "[[move]] dir: data"                               # one param
-  - "[[set-publish-contexts]] contexts: public, amazon"  # a list param
+  - "[[set-publish-contexts]] contexts: public, local"  # a list param
 ---
 ```
 
@@ -146,7 +146,7 @@ editor. The param grammar:
   Params override the action's own declarative frontmatter for this step (e.g. a
   `dir` param overrides `cpn-routing-target-dir`).
 - **List values** — a value containing a comma becomes a list:
-  `"[[set-publish-contexts]] contexts: public, amazon"`.
+  `"[[set-publish-contexts]] contexts: public, local"`.
 
 A couple of limits: a value can't itself contain `;` (the param separator) and a
 value with a `,` always becomes a list. If you need a per-step `set-frontmatter`
