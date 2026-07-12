@@ -61,7 +61,7 @@ export type ParseOptionResult = RoutingOptionDefinition | RoutingError;
  * list, otherwise a scalar string. Examples:
  *   - `"[[ensure-uid]]"`
  *   - `"[[move]] dir: data"`
- *   - `"[[set-publish-contexts]] contexts: public, amazon"`
+ *   - `"[[set-publish-contexts]] contexts: public, local"`
  *   - `"[[insert-template]] template: [[Meeting Note Template]]"`
  *
  * Returns a `RawStep`, or a string describing why the entry is invalid.

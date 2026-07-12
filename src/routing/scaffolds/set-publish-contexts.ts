@@ -15,7 +15,7 @@ export const SET_PUBLISH_CONTEXTS = actionScaffold({
 	doc: `Sets the \`cpn-publish-contexts\` frontmatter. Supply the contexts per option via a step \`contexts\` param (comma-separated for multiple), e.g.:
 
 \`\`\`
-- "[[set-publish-contexts]] contexts: public, amazon"
+- "[[set-publish-contexts]] contexts: public, local"
 \`\`\`
 
 Values are unioned with any existing contexts (de-duplicated), so this is safe to re-run when updating an existing note.`,
