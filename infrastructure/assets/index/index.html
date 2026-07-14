@@ -1261,14 +1261,27 @@ div.comment-input:empty:before {
 	border-bottom: 1px solid var(--border-color);
 	background-color: var(--bg-secondary);
 	font-weight: 600;
+	cursor: pointer; /* slim collapsed bar is clickable to expand */
 }
-.cpn-chat-close {
+.cpn-chat-collapse {
 	background: none;
 	border: none;
 	color: var(--text-secondary);
 	font-size: 1.3em;
 	line-height: 1;
 	cursor: pointer;
+}
+/* Collapsed: shrink to just the header bar; hide the log + input but keep them
+   in the DOM so the conversation and any typed text are preserved on expand. */
+.cpn-chat-panel.cpn-chat-collapsed {
+	height: auto;
+}
+.cpn-chat-panel.cpn-chat-collapsed .cpn-chat-log,
+.cpn-chat-panel.cpn-chat-collapsed .cpn-chat-form {
+	display: none;
+}
+.cpn-chat-panel.cpn-chat-collapsed .cpn-chat-header {
+	border-bottom: none;
 }
 .cpn-chat-log {
 	flex: 1;
@@ -1331,9 +1344,9 @@ div.comment-input:empty:before {
 	<!-- LLM chat over the published corpus. Hidden unless config.chatEnabled. -->
 	<button id="cpn-chat-launcher" class="cpn-chat-launcher" hidden>💬 Ask these notes</button>
 	<div id="cpn-chat-panel" class="cpn-chat-panel" hidden>
-		<div class="cpn-chat-header">
+		<div class="cpn-chat-header" id="cpn-chat-header">
 			<span>Ask these notes</span>
-			<button id="cpn-chat-close" class="cpn-chat-close" aria-label="Close chat">×</button>
+			<button id="cpn-chat-collapse" class="cpn-chat-collapse" aria-label="Collapse chat" aria-expanded="true">⌄</button>
 		</div>
 		<div id="cpn-chat-log" class="cpn-chat-log"></div>
 		<form id="cpn-chat-form" class="cpn-chat-form">
@@ -3609,7 +3622,8 @@ ${closeButton}
 
 		const launcher = document.getElementById('cpn-chat-launcher');
 		const panel = document.getElementById('cpn-chat-panel');
-		const closeBtn = document.getElementById('cpn-chat-close');
+		const header = document.getElementById('cpn-chat-header');
+		const collapseBtn = document.getElementById('cpn-chat-collapse');
 		const log = document.getElementById('cpn-chat-log');
 		const form = document.getElementById('cpn-chat-form');
 		const input = document.getElementById('cpn-chat-input');
@@ -3619,10 +3633,32 @@ ${closeButton}
 		launcher.hidden = false;
 		let conversationId;
 
+		// Warm the content index so the first answer's citations can resolve UIDs to
+		// titles without an extra round-trip mid-render (memoized; no-op if disabled).
+		loadNoteIndexOnce();
+
 		const open = () => { panel.hidden = false; launcher.hidden = true; input.focus(); };
-		const close = () => { panel.hidden = true; launcher.hidden = false; };
 		launcher.addEventListener('click', open);
-		closeBtn.addEventListener('click', close);
+
+		// Collapse toggle (replaces the old close). Collapsing shrinks the panel to
+		// its header bar and hides the log + form via a class, so messages,
+		// conversationId, and any in-progress input survive. There is no full close:
+		// the launcher is only the first-run entry point and never returns once open.
+		const setCollapsed = (on) => {
+			panel.classList.toggle('cpn-chat-collapsed', on);
+			collapseBtn.textContent = on ? '⌃' : '⌄';
+			collapseBtn.setAttribute('aria-expanded', String(!on));
+			collapseBtn.setAttribute('aria-label', on ? 'Expand chat' : 'Collapse chat');
+			if (!on) input.focus();
+		};
+		collapseBtn.addEventListener('click', (e) => {
+			e.stopPropagation(); // don't also fire the header's expand handler
+			setCollapsed(!panel.classList.contains('cpn-chat-collapsed'));
+		});
+		// Clicking the slim bar itself expands (no-op when already expanded).
+		header.addEventListener('click', () => {
+			if (panel.classList.contains('cpn-chat-collapsed')) setCollapsed(false);
+		});
 
 		function addMessage(role, text) {
 			const el = document.createElement('div');
@@ -3633,16 +3669,30 @@ ${closeButton}
 			return el;
 		}
 
-		function renderCitations(el, uids) {
+		async function renderCitations(el, uids) {
 			if (!uids.length) return;
+			// Resolve UIDs to human titles via the shared content index (memoized
+			// single fetch of /static/content/contentIndex.json). When the index is
+			// disabled or a uid isn't in it, noteTitleMap.get returns undefined and we
+			// fall back to the raw uid so the citation still renders and links.
+			await loadNoteIndexOnce();
 			const wrap = document.createElement('div');
 			wrap.className = 'cpn-chat-citations';
 			wrap.appendChild(document.createTextNode('Sources: '));
 			uids.forEach((uid) => {
 				const a = document.createElement('a');
-				// Deep link to the note; the global hash-link handler navigates in-app.
+				// Keep a real href so copy-link / middle-click / open-in-new-tab work,
+				// but intercept the click to open the note as a stacked panel in-app —
+				// the same path every other internal note link uses (addPanel dedupes,
+				// scrolls to an already-open panel, and updates the URL). The chat panel
+				// lives outside #panels, so the per-panel link delegation never sees
+				// these anchors; wire the handler directly.
 				a.href = '#/u' + encodeURIComponent(uid);
-				a.textContent = uid;
+				a.textContent = noteTitleMap.get(uid) || uid;
+				a.addEventListener('click', (e) => {
+					e.preventDefault();
+					addPanel('u', uid);
+				});
 				wrap.appendChild(a);
 			});
 			el.appendChild(wrap);
@@ -3705,7 +3755,7 @@ ${closeButton}
 					}
 				}
 				if (!answerText) answerEl.textContent = '(no answer returned)';
-				renderCitations(answerEl, citedUids);
+				await renderCitations(answerEl, citedUids);
 			} catch (e) {
 				answerEl.textContent = 'Sorry, the chat request failed.';
 			} finally {
