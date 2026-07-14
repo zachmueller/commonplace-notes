@@ -1,11 +1,23 @@
 import { PublishingProfile, HeaderLink, SiteCustomization, ThemeColors } from '../types';
-import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, FLEXSEARCH_MIN_JS, VENDOR_JS } from './siteAssets';
+import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, SITE_CHAT_HTML, FLEXSEARCH_MIN_JS, VENDOR_JS } from './siteAssets';
 import { applyIndexHtmlSlots, applyStylesCssSlots } from './assetCustomizations/parse';
 import type { AssetCustomization } from './assetCustomizations/types';
 
 const DEFAULT_SITE_TITLE = 'Notes';
 const DEFAULT_PANEL_WIDTH = 600;
 const DEFAULT_FONT_FAMILY = '"Helvetica Neue", Arial, sans-serif';
+
+/**
+ * Whether the LLM chat feature should render for this profile: the author
+ * enabled it AND the chat stack is deployed (its outputs supply the Knowledge
+ * Base id behind the /api/chat behavior). Shared by renderIndexHtml (to gate the
+ * {{CHAT_HTML}} markup slot) and renderConfigJson (to gate chatEnabled/chatPath)
+ * so the DOM and the client config can never disagree.
+ */
+function isChatEnabled(profile: PublishingProfile): boolean {
+	const chat = profile.infrastructureState?.chat;
+	return !!(profile.chat?.enabled && chat?.enabled && chat.knowledgeBaseId);
+}
 
 function getCustomization(profile: PublishingProfile): SiteCustomization {
 	return profile.siteCustomization ?? {
@@ -50,6 +62,11 @@ export function renderIndexHtml(
 	} else {
 		html = html.replace('{{HOME_NOTE_UID_SCRIPT}}', '');
 	}
+
+	// Chat launcher/panel markup — emitted only for chat-enabled profiles so a
+	// disabled profile ships zero chat DOM (mirrors the {{HOME_NOTE_UID_SCRIPT}}
+	// conditional slot above). The client's chatEnabled() gate is a second guard.
+	html = html.replace('{{CHAT_HTML}}', isChatEnabled(profile) ? SITE_CHAT_HTML : '');
 
 	// Per-profile snippet injection (route 2). Runs after the structured
 	// substitutions above; empty/absent slots no-op (see applyIndexHtmlSlots).
@@ -166,8 +183,7 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 	// only when chat is enabled AND the chat stack has been deployed (its outputs
 	// supply the Function URL host behind the /api/chat behavior). The endpoint is
 	// same-origin, so the client just needs the path; auth is inherited at the edge.
-	const chat = profile.infrastructureState?.chat;
-	if (profile.chat?.enabled && chat?.enabled && chat.knowledgeBaseId) {
+	if (isChatEnabled(profile)) {
 		config.chatEnabled = true;
 		config.chatPath = '/api/chat';
 	}

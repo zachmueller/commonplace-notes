@@ -44,18 +44,37 @@ if (!vendorMatch) {
 }
 const vendorJs = vendorMatch[1].trim();
 
-// Extract app JS: the first <script> block AFTER both the FlexSearch and vendor
-// blocks. Use the later of the two end offsets so the app extractor is order-
-// independent (it doesn't matter whether vendor precedes or follows FlexSearch).
+// Extract the chat launcher/panel markup region (`#cpn-chat-launcher` /
+// `#cpn-chat-panel`) delimited by the `<!-- CPN chat begin/end -->` markers.
+// Kept as its own constant (not baked into the template literal below) so the
+// source HTML stays the single point of truth and siteRenderer can inject it
+// only for chat-enabled profiles. Mirrors the `/*! CPN diff vendor` marker
+// convention used for the vendored-libs block.
+const chatMatch = html.match(/<!-- CPN chat begin[\s\S]*?-->([\s\S]*?)<!-- CPN chat end -->/);
+if (!chatMatch) {
+	console.error('Could not find `<!-- CPN chat begin/end -->` region in source HTML');
+	process.exit(1);
+}
+const chatHtml = chatMatch[1].trim();
+
+// Extract app JS: ALL inline <script> blocks AFTER both the FlexSearch and
+// vendor blocks, concatenated. Use the later of the two end offsets so the app
+// extractor is order-independent (it doesn't matter whether vendor precedes or
+// follows FlexSearch). The `<script>` (no attributes) pattern matches only inline
+// blocks, so external `<script src=…>` tags are skipped, and the config-bootstrap
+// is synthesized below (absent from the source HTML) so it can't be pulled in.
+// Concatenating (rather than taking only the first block) means a future split of
+// the app script into multiple inline blocks — e.g. peeling chat into its own
+// <script> — won't silently truncate app.js at the first </script>.
 const flexSearchEnd = html.indexOf('</script>', html.indexOf(flexSearchMatch[0])) + '</script>'.length;
 const vendorEnd = html.indexOf('</script>', html.indexOf(vendorMatch[0])) + '</script>'.length;
 const remainingHtml = html.slice(Math.max(flexSearchEnd, vendorEnd));
-const appScriptMatch = remainingHtml.match(/<script>([\s\S]*?)<\/script>/);
-if (!appScriptMatch) {
+const appScriptBlocks = [...remainingHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1].trim());
+if (appScriptBlocks.length === 0) {
 	console.error('Could not find application <script> block in source HTML');
 	process.exit(1);
 }
-const appJs = appScriptMatch[1].trim();
+const appJs = appScriptBlocks.join('\n\n');
 
 // Build HTML shell template
 // Expose the config-load as a promise (window.__CPN_CONFIG_READY__) so code
@@ -194,6 +213,7 @@ const indexTemplate = `<!DOCTYPE html>
 \t</header>
 
 \t<div class="panels-container" id="panels"></div>
+\t{{CHAT_HTML}}
 \t{{FOOTER_HTML}}
 
 \t<script>${CONFIG_BOOTSTRAP}</script>
@@ -215,6 +235,8 @@ export const SITE_STYLES_CSS = ${JSON.stringify(cssWithSlot)};
 
 export const SITE_APP_JS = ${JSON.stringify(appJs)};
 
+export const SITE_CHAT_HTML = ${JSON.stringify(chatHtml)};
+
 export const FLEXSEARCH_MIN_JS = ${JSON.stringify(flexSearchJs)};
 
 export const VENDOR_JS = ${JSON.stringify(vendorJs)};
@@ -225,5 +247,6 @@ console.log(`Site assets written to ${OUTPUT_PATH}`);
 console.log(`  Index template: ${(indexTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Styles CSS: ${(css.length / 1024).toFixed(1)} KB`);
 console.log(`  App JS: ${(appJs.length / 1024).toFixed(1)} KB`);
+console.log(`  Chat HTML: ${(chatHtml.length / 1024).toFixed(1)} KB`);
 console.log(`  FlexSearch JS: ${(flexSearchJs.length / 1024).toFixed(1)} KB`);
 console.log(`  Vendor JS (jsdiff + diff2html): ${(vendorJs.length / 1024).toFixed(1)} KB`);

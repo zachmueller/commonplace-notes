@@ -1325,6 +1325,9 @@ div.comment-input:empty:before {
 
 	<div class="panels-container" id="panels"></div>
 
+	<!-- CPN chat begin: extracted verbatim into SITE_CHAT_HTML by npm run synth:site
+	     (see infrastructure/bin/synth-site-assets.ts) and injected into the
+	     {{CHAT_HTML}} template slot only for chat-enabled profiles. -->
 	<!-- LLM chat over the published corpus. Hidden unless config.chatEnabled. -->
 	<button id="cpn-chat-launcher" class="cpn-chat-launcher" hidden>💬 Ask these notes</button>
 	<div id="cpn-chat-panel" class="cpn-chat-panel" hidden>
@@ -1338,6 +1341,7 @@ div.comment-input:empty:before {
 			<button type="submit" id="cpn-chat-send" class="cpn-chat-send">Send</button>
 		</form>
 	</div>
+	<!-- CPN chat end -->
 
 <script>
 /**!
