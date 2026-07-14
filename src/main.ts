@@ -166,7 +166,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		// this.registerEvent(
 		// 	this.app.vault.on('create', (file) => {
 		// 		if (file instanceof TFile && file.extension === 'md') {
-		// 			this.routingManager.runRoute(file, 'create');
+		// 			void this.routingManager.runRoute(file, 'create');
 		// 		}
 		// 	})
 		// );
@@ -283,7 +283,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				if (!activeView?.file) return false;
 				if (checking) return true;
 
-				this.routingManager.runRoute(activeView.file, 'create');
+				void this.routingManager.runRoute(activeView.file, 'create');
 				return true;
 			}
 		});
@@ -296,7 +296,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				if (!activeView?.file) return false;
 				if (checking) return true;
 
-				this.routingManager.runRoute(activeView.file, 'update');
+				void this.routingManager.runRoute(activeView.file, 'update');
 				return true;
 			}
 		});

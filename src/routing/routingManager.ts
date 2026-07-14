@@ -302,22 +302,33 @@ export class RoutingManager {
 	 * optionally prompts for a title, then runs the option's steps in order.
 	 */
 	async runRoute(file: TFile, mode: RoutingMode): Promise<void> {
-		const profileId = this.plugin.settings.publishingProfiles[0]?.id ?? 'default';
-		await this.loadRoutes(profileId);
+		try {
+			const profileId = this.plugin.settings.publishingProfiles[0]?.id ?? 'default';
+			await this.loadRoutes(profileId);
 
-		if (!this.options || this.options.length === 0) {
-			const dir = this.plugin.settings.cpnDirectory || DEFAULT_CPN_DIR;
-			new Notice(`No routing options found. Author one under ${dir}/routes/options/ (see Settings → Note routing).`);
-			return;
+			if (!this.options || this.options.length === 0) {
+				const dir = this.plugin.settings.cpnDirectory || DEFAULT_CPN_DIR;
+				new Notice(`No routing options found. Author one under ${dir}/routes/options/ (see Settings → Note routing).`);
+				return;
+			}
+
+			const option = await this.pickOption();
+			if (!option) return; // dismissed
+
+			// Title prompt (before any move, so the rename + move don't race).
+			await this.maybePromptTitle(file, option);
+
+			await this.executeOption(file, option, mode);
+		} catch (error) {
+			// runRoute is invoked fire-and-forget from the command callbacks (and a
+			// future create-event seam). Catch here so a rejection from loadRoutes,
+			// maybePromptTitle, or executeOption's pre-step setup surfaces as a
+			// visible Notice instead of a swallowed unhandled rejection. Per-step
+			// action errors are already handled inside executeOption.
+			const msg = error instanceof Error ? error.message : String(error);
+			new Notice(`Routing failed: ${msg}`);
+			Logger.error('runRoute failed:', error);
 		}
-
-		const option = await this.pickOption();
-		if (!option) return; // dismissed
-
-		// Title prompt (before any move, so the rename + move don't race).
-		await this.maybePromptTitle(file, option);
-
-		await this.executeOption(file, option, mode);
 	}
 
 	/**
