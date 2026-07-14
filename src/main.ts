@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, App, TFile, Modal, Setting, Notice, WorkspaceLeaf } from 'obsidian';
+import { Plugin, MarkdownView, App, TFile, Modal, Setting, Notice, WorkspaceLeaf, normalizePath } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
 import {
 	CommonplaceNotesSettings,
@@ -278,13 +278,15 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.addCommand({
 			id: 'route-new-note',
 			name: 'Route new note',
-			checkCallback: (checking: boolean) => {
-				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (!activeView?.file) return false;
-				if (checking) return true;
-
-				void this.routingManager.runRoute(activeView.file, 'create');
-				return true;
+			callback: async () => {
+				try {
+					const file = await this.createAndOpenNote();
+					await this.routingManager.runRoute(file, 'create');
+				} catch (error) {
+					const msg = error instanceof Error ? error.message : String(error);
+					NoticeManager.showNotice(`Route new note failed: ${msg}`);
+					Logger.error('Route new note failed:', error);
+				}
 			}
 		});
 
@@ -637,6 +639,25 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		});
 
 		this.registerProfileCommands();
+	}
+
+	/**
+	 * Create an empty "Untitled" note in Obsidian's default new-note folder and
+	 * open it in a new tab. Used by the "Route new note" command, which then runs
+	 * the routing pipeline against the returned file. Honors the user's
+	 * Files & Links → "Default location for new notes" setting.
+	 */
+	private async createAndOpenNote(): Promise<TFile> {
+		const parent = this.app.fileManager.getNewFileParent('');
+		const base = parent.path && parent.path !== '/' ? `${parent.path}/` : '';
+		let path = normalizePath(`${base}Untitled.md`);
+		// Avoid collisions (Untitled.md, Untitled 1.md, …) — vault.create won't overwrite.
+		for (let i = 1; this.app.vault.getAbstractFileByPath(path); i++) {
+			path = normalizePath(`${base}Untitled ${i}.md`);
+		}
+		const file = await this.app.vault.create(path, '');
+		await this.app.workspace.getLeaf('tab').openFile(file);
+		return file;
 	}
 
 	/**
