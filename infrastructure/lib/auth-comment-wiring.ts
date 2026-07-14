@@ -52,10 +52,15 @@ export interface AuthCommentWiring {
  * @param commentOriginAccess access-method-specific properties for the comment
  *   S3 origin (OAC: `{ originAccessControlId, s3OriginConfig:{originAccessIdentity:''} }`;
  *   OAI: `{ s3OriginConfig:{ originAccessIdentity: 'origin-access-identity/...' } }`).
+ * @param chatOriginAccessControlId id of the lambda-type CloudFront OAC that
+ *   SigV4-signs origin requests to the chat Function URL (created in each full
+ *   stack). OAC is per-origin, so this is independent of the site's S3
+ *   OAC/OAI choice — the chat origin uses it in both variants.
  */
 export function addAuthCommentWiring(
 	stack: cdk.Stack,
 	commentOriginAccess: Record<string, unknown>,
+	chatOriginAccessControlId: string,
 ): AuthCommentWiring {
 	const callbackApiDomain = new cdk.CfnParameter(stack, 'CallbackApiDomainName', {
 		type: 'String',
@@ -79,13 +84,6 @@ export function addAuthCommentWiring(
 		type: 'String',
 		default: '',
 		description: 'Chat Lambda Function URL host backing the /api/chat origin (from the chat stack)',
-	});
-
-	const chatOriginSecret = new cdk.CfnParameter(stack, 'ChatOriginSecret', {
-		type: 'String',
-		default: '',
-		noEcho: true,
-		description: 'Shared secret injected as the x-cpn-origin-secret header on the /api/chat origin (validated by the chat Lambda)',
 	});
 
 	new cdk.CfnCondition(stack, 'HasAuthCallback', {
@@ -152,23 +150,22 @@ export function addAuthCommentWiring(
 			},
 			cdk.Aws.NO_VALUE,
 		),
-		// /api/chat -> chat Lambda Function URL, with the shared-secret custom header
-		// CloudFront injects (the chat Lambda rejects requests lacking it — bypass
-		// protection for the AuthType:NONE Function URL).
+		// /api/chat -> chat Lambda Function URL, locked to CloudFront via a lambda-type
+		// OAC that SigV4-signs each origin request (the Function URL is AuthType:
+		// AWS_IAM). No public URL, no shared secret — the endpoint is reachable only
+		// through this auth-gated CloudFront path.
 		cdk.Fn.conditionIf(
 			'HasChat',
 			{
 				Id: 'ChatApiOrigin',
 				DomainName: chatFunctionUrlDomain.valueAsString,
+				OriginAccessControlId: chatOriginAccessControlId,
 				CustomOriginConfig: {
 					OriginProtocolPolicy: apiCustomOriginConfig.originProtocolPolicy,
 					OriginSSLProtocols: apiCustomOriginConfig.originSslProtocols,
 					HTTPPort: apiCustomOriginConfig.httpPort,
 					HTTPSPort: apiCustomOriginConfig.httpsPort,
 				},
-				OriginCustomHeaders: [
-					{ HeaderName: 'x-cpn-origin-secret', HeaderValue: chatOriginSecret.valueAsString },
-				],
 			},
 			cdk.Aws.NO_VALUE,
 		),

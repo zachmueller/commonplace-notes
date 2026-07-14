@@ -582,7 +582,6 @@ export class CloudFormationManager {
 			{ ParameterKey: 'CommentBucketDomainName', ParameterValue: config.commentBucketDomainName || '' },
 			{ ParameterKey: 'CommentApiDomainName', ParameterValue: config.commentApiDomainName || '' },
 			{ ParameterKey: 'ChatFunctionUrlDomainName', ParameterValue: config.chatFunctionUrlDomainName || '' },
-			{ ParameterKey: 'ChatOriginSecret', ParameterValue: config.chatOriginSecret || '' },
 		];
 	}
 
@@ -594,7 +593,7 @@ export class CloudFormationManager {
 		'VariantName', 'S3Prefix', 'CustomDomain', 'CertificateArn', 'UseRoute53',
 		'HostedZoneId', 'HostedZoneName', 'AuthLambdaEdgeArn',
 		'CallbackApiDomainName', 'CommentBucketDomainName', 'CommentApiDomainName',
-		'ChatFunctionUrlDomainName', 'ChatOriginSecret',
+		'ChatFunctionUrlDomainName',
 	] as const;
 
 	/**
@@ -663,14 +662,14 @@ export class CloudFormationManager {
 	 * Compose the chat handler source (baking a `const CFG = {...}` line ahead of
 	 * the shipped body — the same S3-asset pattern as packagePasswordEdge), zip it,
 	 * and upload to the bootstrap bucket at a content-addressed key. CFG carries the
-	 * KB id, the generation model ARN, and the shared origin secret the handler
-	 * checks fail-closed. Returns the bucket + key for the stack's AssetsBucket/
-	 * AssetsKey params. Upload is skipped when the identical artifact already exists.
+	 * KB id and the generation model ARN. Returns the bucket + key for the stack's
+	 * AssetsBucket/AssetsKey params. Upload is skipped when the identical artifact
+	 * already exists.
 	 */
 	async packageChatLambda(
 		profile: PublishingProfile,
 		bucketName: string,
-		cfg: { knowledgeBaseId: string; modelArn: string; originSecret: string },
+		cfg: { knowledgeBaseId: string; modelArn: string },
 	): Promise<{ bucket: string; key: string }> {
 		const cfgLine = `const CFG = ${JSON.stringify(cfg)};\n`;
 		const source = cfgLine + CHAT_HANDLER_BODY;
@@ -714,6 +713,7 @@ export class CloudFormationManager {
 		config: DeploymentConfig,
 		profile: PublishingProfile,
 		bucketName: string,
+		siteDistributionId: string,
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'chat');
 		const client = this.getCloudFormationClient(config, config.region);
@@ -721,7 +721,6 @@ export class CloudFormationManager {
 		const { key } = await this.packageChatLambda(profile, bucketName, {
 			knowledgeBaseId: 'PLACEHOLDER', // KB id isn't known until the stack creates it.
 			modelArn: config.chatModelArn || this.defaultChatModelArn(config.region, profile.awsSettings!.awsAccountId),
-			originSecret: config.chatOriginSecret || '',
 		});
 		// NOTE: the KB id can't be known before the stack exists, so the handler
 		// reads it from the baked CFG only after a follow-up repackage+update once
@@ -739,6 +738,7 @@ export class CloudFormationManager {
 				{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix || '' },
 				{ ParameterKey: 'AssetsBucket', ParameterValue: bucketName },
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+				{ ParameterKey: 'SiteDistributionId', ParameterValue: siteDistributionId },
 			],
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
@@ -769,7 +769,6 @@ export class CloudFormationManager {
 		const { key } = await this.packageChatLambda(profile, bucketName, {
 			knowledgeBaseId,
 			modelArn: config.chatModelArn || this.defaultChatModelArn(config.region, profile.awsSettings!.awsAccountId),
-			originSecret: config.chatOriginSecret || '',
 		});
 
 		await client.send(new UpdateStackCommand({
@@ -781,6 +780,7 @@ export class CloudFormationManager {
 				{ ParameterKey: 'S3Prefix', UsePreviousValue: true },
 				{ ParameterKey: 'AssetsBucket', ParameterValue: bucketName },
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+				{ ParameterKey: 'SiteDistributionId', UsePreviousValue: true },
 			],
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [

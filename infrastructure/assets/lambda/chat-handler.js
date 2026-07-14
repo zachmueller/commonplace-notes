@@ -2,12 +2,13 @@
 //
 // Exposed via a Lambda Function URL with InvokeMode: RESPONSE_STREAM, fronted by
 // the same CloudFront distribution as the site so it inherits any viewer-request
-// auth (Cognito / password / BYO). The Function URL itself is AuthType: NONE —
-// CloudFront OAC cannot sign a forwarded POST body in a way a Function URL's IAM
-// auth accepts (proven in the Phase 0 spike), so bypass protection is instead a
-// CloudFront-injected shared-secret custom origin header, validated FAIL-CLOSED
-// here. A request without the matching secret is rejected outright, so the
-// endpoint is only reachable through the auth-gated CloudFront path.
+// auth (Cognito / password / BYO). The Function URL is AuthType: AWS_IAM and is
+// locked to CloudFront by a lambda-type Origin Access Control (OAC) that SigV4-
+// signs each origin request, scoped to the site distribution ARN. So the endpoint
+// is reachable ONLY through the auth-gated CloudFront path — direct-to-origin
+// calls are rejected by IAM. No shared secret or in-handler auth gate is needed.
+// (For POST bodies the browser must send x-amz-content-sha256 = hex(SHA-256(body))
+// so CloudFront's OAC signature covers the payload; the site client does this.)
 //
 // Retrieval is grounded on a Bedrock Knowledge Base whose S3 data source is
 // scoped to the per-profile `kb/{uid}.md` corpus (latest-only). Citations carry
@@ -27,7 +28,7 @@
 // Config is baked into a `const CFG = {...}` line prepended at package time (the
 // same S3-asset pattern as password-edge.js), because a Function URL cannot be
 // templated into and we want the artifact content-addressed. CFG carries
-// { knowledgeBaseId, modelArn, originSecret }.
+// { knowledgeBaseId, modelArn }.
 
 const { BedrockAgentRuntimeClient, RetrieveAndGenerateStreamCommand } = require('@aws-sdk/client-bedrock-agent-runtime');
 
@@ -68,18 +69,10 @@ function uidFromUri(uri) {
 exports.handler = awslambda.streamifyResponse(async (event, responseStream, _context) => {
 	const write = (obj) => responseStream.write('data: ' + JSON.stringify(obj) + '\n\n');
 
-	// Fail-closed shared-secret check (the sole bypass protection for an
-	// AuthType:NONE Function URL). Header names arrive lowercased in the Function
-	// URL event.
-	const headers = event.headers || {};
-	if (CFG.originSecret) {
-		const provided = headers['x-cpn-origin-secret'];
-		if (provided !== CFG.originSecret) {
-			responseStream.write('data: ' + JSON.stringify({ type: 'error', error: 'forbidden' }) + '\n\n');
-			responseStream.end();
-			return;
-		}
-	}
+	// No in-handler auth gate: the Function URL is AuthType: AWS_IAM and only
+	// CloudFront (via OAC SigV4, scoped to the site distribution) can invoke it, so
+	// every request that reaches here already came through the auth-gated CloudFront
+	// path. Direct-to-origin calls are rejected by IAM before this runs.
 
 	let question = '';
 	let sessionId;

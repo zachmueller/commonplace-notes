@@ -67,6 +67,13 @@ export class ChatStack extends cdk.Stack {
 			description: 'Bedrock embedding model ARN used by the Knowledge Base (1024-dim)',
 		});
 
+		// Site CloudFront distribution id: scopes the Function URL invoke permission
+		// to cloudfront.amazonaws.com for THIS distribution only (OAC lockdown).
+		const siteDistributionId = new cdk.CfnParameter(this, 'SiteDistributionId', {
+			type: 'String',
+			description: 'Site CloudFront distribution id (grants OAC-signed invoke via AWS:SourceArn)',
+		});
+
 		const bucketArn = cdk.Fn.join('', ['arn:aws:s3:::', siteBucketName.valueAsString]);
 		// The kb/ prefix within the (optionally prefixed) site bucket.
 		const inclusionPrefix = cdk.Fn.join('', [s3Prefix.valueAsString, 'kb/']);
@@ -219,20 +226,36 @@ export class ChatStack extends cdk.Stack {
 
 		const chatUrl = new cdk.aws_lambda.CfnUrl(this, 'ChatFnUrl', {
 			targetFunctionArn: chatFn.attrArn,
-			// AuthType NONE: CloudFront OAC cannot sign a forwarded POST body for a
-			// Function URL (Phase 0). Bypass protection is the shared-secret header
-			// validated fail-closed in the handler.
-			authType: 'NONE',
+			// AuthType AWS_IAM: CloudFront OAC (SigV4) signs each origin request, so
+			// the endpoint is only reachable through the auth-gated CloudFront path —
+			// no public URL, no shared secret. (The earlier NONE+secret scheme was
+			// blocked by org SCPs that forbid public Function URLs; IAM URLs are
+			// allowed. The client must send x-amz-content-sha256 for POST bodies, per
+			// the Lambda Function URL signing requirement.)
+			authType: 'AWS_IAM',
 			invokeMode: 'RESPONSE_STREAM',
 		});
 
-		// FunctionURL invoke permission for anonymous callers (AuthType NONE). The
-		// shared-secret header check in the handler is the actual gate.
+		// Grant CloudFront (only, for THIS distribution) permission to invoke the
+		// Function URL. Both InvokeFunctionUrl and InvokeFunction are required per
+		// AWS's OAC-for-Lambda docs. The AWS:SourceArn condition scopes it to the
+		// site distribution so no other principal/distribution can invoke it.
+		const distributionArn = cdk.Fn.sub(
+			'arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistId}',
+			{ DistId: siteDistributionId.valueAsString },
+		);
 		new cdk.aws_lambda.CfnPermission(this, 'ChatUrlInvokePermission', {
 			action: 'lambda:InvokeFunctionUrl',
 			functionName: chatFn.ref,
-			principal: '*',
-			functionUrlAuthType: 'NONE',
+			principal: 'cloudfront.amazonaws.com',
+			functionUrlAuthType: 'AWS_IAM',
+			sourceArn: distributionArn,
+		});
+		new cdk.aws_lambda.CfnPermission(this, 'ChatInvokePermission', {
+			action: 'lambda:InvokeFunction',
+			functionName: chatFn.ref,
+			principal: 'cloudfront.amazonaws.com',
+			sourceArn: distributionArn,
 		});
 
 		// ---- Outputs ----------------------------------------------------------

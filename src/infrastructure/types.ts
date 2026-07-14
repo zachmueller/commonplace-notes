@@ -108,8 +108,6 @@ export interface ChatState {
 	sync: 'auto' | 'manual';
 	/** Bedrock model/inference-profile ARN used for generation. */
 	modelArn: string;
-	/** Shared secret injected as the /api/chat origin header (also baked into the handler). */
-	originSecret: string;
 }
 
 /** Raw outputs read from a deployed chat stack. */
@@ -198,8 +196,6 @@ export interface DeploymentConfig {
 	siteBucketName?: string;
 	/** Chat Lambda Function URL host, threaded into the site distribution's /api/chat origin. */
 	chatFunctionUrlDomainName?: string;
-	/** Shared secret for the /api/chat origin header (generated at deploy time). */
-	chatOriginSecret?: string;
 }
 
 export interface StackOutputs {

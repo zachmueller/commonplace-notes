@@ -3653,11 +3653,18 @@ ${closeButton}
 			sendBtn.disabled = true;
 			input.disabled = true;
 			try {
+				const payload = JSON.stringify(conversationId ? { question, conversationId } : { question });
+				// The chat origin is a Lambda Function URL locked to CloudFront via a
+				// lambda OAC. For POST bodies, Lambda requires the payload hash in
+				// x-amz-content-sha256 so CloudFront's SigV4 signature covers the body
+				// (Lambda rejects unsigned payloads). Compute hex(SHA-256(body)).
+				const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+				const payloadHash = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 				const resp = await fetch(cpnConfig().chatPath || '/api/chat', {
 					method: 'POST',
 					credentials: 'same-origin',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify(conversationId ? { question, conversationId } : { question }),
+					headers: { 'content-type': 'application/json', 'x-amz-content-sha256': payloadHash },
+					body: payload,
 				});
 				if (!resp.ok || !resp.body) {
 					answerEl.textContent = 'Sorry, the chat request failed (' + resp.status + ').';

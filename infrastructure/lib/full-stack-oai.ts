@@ -114,14 +114,29 @@ export class FullStackOai extends cdk.Stack {
 			},
 		});
 
-		// Built-in auth callback + comment read/write CloudFront wiring. The
+		// Lambda-type OAC for the chat Function URL origin. OAC is a per-origin
+		// signing feature and is independent of the site's S3 OAI — the chat origin
+		// uses this OAC to SigV4-sign its origin requests even though the S3 origin
+		// uses OAI. signingBehavior 'always' + the client sending x-amz-content-sha256
+		// lets CloudFront sign streaming POST bodies.
+		const chatOac = new cloudfront.CfnOriginAccessControl(this, 'ChatOAC', {
+			originAccessControlConfig: {
+				name: cdk.Fn.sub('cpn-chat-oac-${AWS::StackName}'),
+				originAccessControlOriginType: 'lambda',
+				signingBehavior: 'always',
+				signingProtocol: 'sigv4',
+			},
+		});
+
+		// Built-in auth callback + comment read/write + chat CloudFront wiring. The
 		// comment S3 origin uses this stack's OAI; the comment bucket's policy
-		// (in the comment stack) must grant this OAI access to its objects.
+		// (in the comment stack) must grant this OAI access to its objects. The chat
+		// origin uses the lambda OAC above.
 		const wiring = addAuthCommentWiring(this, {
 			s3OriginConfig: {
 				originAccessIdentity: cdk.Fn.sub('origin-access-identity/cloudfront/${OAI}'),
 			},
-		});
+		}, chatOac.ref);
 
 		// CloudFront Distribution
 		const originPath = cdk.Fn.conditionIf('HasS3Prefix', `/${s3Prefix.valueAsString}`, '').toString();

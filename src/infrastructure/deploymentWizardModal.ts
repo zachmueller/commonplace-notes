@@ -1260,11 +1260,11 @@ export class DeploymentWizardModal extends Modal {
 
 	/**
 	 * Deploy the LLM chat backend (when enabled), then re-update the full stack to
-	 * attach the /api/chat origin + behavior (carrying the shared secret header and
-	 * the auth-edge association). Runs after the full stack (needs the site bucket
-	 * + distribution) and after any comment deploy (so its full-stack update layers
-	 * on top). The chat handler is packaged with a generated origin secret; the same
-	 * secret is injected by CloudFront and validated fail-closed by the Lambda.
+	 * attach the /api/chat origin + behavior (locked to CloudFront via the chat
+	 * origin's lambda OAC + the auth-edge association). Runs after the full stack
+	 * (needs the site bucket + distribution id) and after any comment deploy (so its
+	 * full-stack update layers on top). The Function URL is AuthType: AWS_IAM; only
+	 * CloudFront (via OAC, scoped to the site distribution) can invoke it.
 	 */
 	private async runChatDeploy(container: HTMLElement, eventLog: HTMLElement): Promise<void> {
 		if (!this.config.chatEnabled || !this.stackOutputs) return;
@@ -1274,12 +1274,9 @@ export class DeploymentWizardModal extends Modal {
 			cls: 'cpn-wizard-description',
 		});
 
-		// Generate the CloudFront↔origin shared secret once, here: baked into the
-		// handler zip AND injected as the /api/chat origin custom header.
-		this.config.chatOriginSecret = this.generateOriginSecret();
 		const bucketName = this.stackOutputs.bucketName;
 
-		const chatStackName = await this.cfManager.deployChatStack(this.config as DeploymentConfig, this.activeProfile, bucketName);
+		const chatStackName = await this.cfManager.deployChatStack(this.config as DeploymentConfig, this.activeProfile, bucketName, this.stackOutputs.distributionId);
 		await this.updateInfraState({ status: 'chat-deploying' });
 
 		const status = await this.cfManager.pollStackUntilComplete(
@@ -1327,13 +1324,6 @@ export class DeploymentWizardModal extends Modal {
 			this.config.region,
 		);
 		await this.updateInfraState({ status: 'chat-deployed' });
-	}
-
-	/** Generate a URL-safe random shared secret for the /api/chat origin header. */
-	private generateOriginSecret(): string {
-		const bytes = new Uint8Array(32);
-		globalThis.crypto.getRandomValues(bytes);
-		return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 	}
 
 	private renderStep6Complete(): void {
@@ -1597,7 +1587,6 @@ export class DeploymentWizardModal extends Modal {
 			sync: this.config.chatSync || 'auto',
 			modelArn: this.config.chatModelArn
 				|| `arn:aws:bedrock:${this.config.region}:${accountId}:inference-profile/us.anthropic.claude-sonnet-5`,
-			originSecret: this.config.chatOriginSecret || '',
 		};
 	}
 
