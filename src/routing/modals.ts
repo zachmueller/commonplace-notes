@@ -47,8 +47,14 @@ export class RoutingOptionSuggestModal extends SuggestModal<RoutingOptionDefinit
 
 	onClose() {
 		super.onClose();
-		// Dismissed without a selection (Esc / click-away).
-		if (!this.resolved) this.onChoose(null);
+		// Obsidian's SuggestModal.selectSuggestion calls close() BEFORE
+		// onChooseSuggestion (verified against obsidian.asar), so on a real pick
+		// `resolved` is still false here. Defer the dismiss-resolve one tick so a
+		// pending onChooseSuggestion sets `resolved` first; only a genuine Esc /
+		// click-away (no onChooseSuggestion) then resolves null.
+		window.setTimeout(() => {
+			if (!this.resolved) this.onChoose(null);
+		}, 0);
 	}
 }
 
