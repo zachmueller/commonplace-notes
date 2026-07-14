@@ -1245,6 +1245,10 @@ div.comment-input:empty:before {
 	z-index: 901;
 	width: min(420px, calc(100vw - 40px));
 	height: min(560px, calc(100vh - 40px));
+	/* Cap any drag-set inline size to the viewport; if the window later shrinks
+	   the box is clamped by the browser without a JS resize listener. */
+	max-width: calc(100vw - 40px);
+	max-height: calc(100vh - 40px);
 	display: flex;
 	flex-direction: column;
 	background-color: var(--bg-primary);
@@ -1253,6 +1257,34 @@ div.comment-input:empty:before {
 	box-shadow: 0 4px 20px rgba(0,0,0,0.25);
 	overflow: hidden;
 }
+/* Drag-to-resize grip. The panel is anchored bottom-right, so the free corner
+   is top-left; dragging it up/left grows the box (see the resize handler). */
+.cpn-chat-resize {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 16px;
+	height: 16px;
+	cursor: nwse-resize;
+	z-index: 1; /* above the header so the corner grip wins the pointer */
+}
+.cpn-chat-resize::before {
+	content: "";
+	position: absolute;
+	top: 4px;
+	left: 4px;
+	width: 7px;
+	height: 7px;
+	border-top: 2px solid var(--text-secondary);
+	border-left: 2px solid var(--text-secondary);
+	opacity: 0.4;
+}
+.cpn-chat-panel:hover .cpn-chat-resize::before { opacity: 0.8; }
+/* No height drag while collapsed — hide the grip so only the header bar shows. */
+.cpn-chat-panel.cpn-chat-collapsed .cpn-chat-resize { display: none; }
+/* Suppress selection + keep the resize cursor across the page during a drag
+   (the pointer may stray off the grip). Mirrors body.panel-resizing. */
+body.cpn-chat-resizing { cursor: nwse-resize; user-select: none; }
 .cpn-chat-header {
 	display: flex;
 	align-items: center;
@@ -1344,6 +1376,7 @@ div.comment-input:empty:before {
 	<!-- LLM chat over the published corpus. Hidden unless config.chatEnabled. -->
 	<button id="cpn-chat-launcher" class="cpn-chat-launcher" hidden>💬 Ask these notes</button>
 	<div id="cpn-chat-panel" class="cpn-chat-panel" hidden>
+		<div id="cpn-chat-resize" class="cpn-chat-resize" aria-hidden="true" title="Drag to resize"></div>
 		<div class="cpn-chat-header" id="cpn-chat-header">
 			<span>Ask these notes</span>
 			<button id="cpn-chat-collapse" class="cpn-chat-collapse" aria-label="Collapse chat" aria-expanded="true">⌄</button>
@@ -3628,10 +3661,12 @@ ${closeButton}
 		const form = document.getElementById('cpn-chat-form');
 		const input = document.getElementById('cpn-chat-input');
 		const sendBtn = document.getElementById('cpn-chat-send');
+		const resizeHandle = document.getElementById('cpn-chat-resize');
 		if (!launcher || !panel) return;
 
 		launcher.hidden = false;
 		let conversationId;
+		let expandedHeight = ''; // drag-set inline height, stashed across collapse
 
 		// Warm the content index so the first answer's citations can resolve UIDs to
 		// titles without an extra round-trip mid-render (memoized; no-op if disabled).
@@ -3645,6 +3680,17 @@ ${closeButton}
 		// conversationId, and any in-progress input survive. There is no full close:
 		// the launcher is only the first-run entry point and never returns once open.
 		const setCollapsed = (on) => {
+			// A drag sets an inline height, which would override the collapsed
+			// rule's `height: auto` (inline beats the stylesheet) and leave the box
+			// at full height with its body hidden. Stash + clear it on collapse and
+			// restore it on expand. Width is untouched by collapse, so it needs no
+			// handling.
+			if (on) {
+				expandedHeight = panel.style.height;
+				panel.style.height = '';
+			} else if (expandedHeight) {
+				panel.style.height = expandedHeight;
+			}
 			panel.classList.toggle('cpn-chat-collapsed', on);
 			collapseBtn.textContent = on ? '⌃' : '⌄';
 			collapseBtn.setAttribute('aria-expanded', String(!on));
@@ -3659,6 +3705,39 @@ ${closeButton}
 		header.addEventListener('click', () => {
 			if (panel.classList.contains('cpn-chat-collapsed')) setCollapsed(false);
 		});
+
+		// Click-and-drag resize via the top-left corner grip. Mirrors the note-panel
+		// resizer (setupPanelResizing), but the chat box is anchored bottom-right, so
+		// dragging the corner up/left must GROW the box — hence the subtracted deltas
+		// (the note-panel right-edge handler adds them). The panel is position:fixed
+		// (not a flex item), so we set width + height directly. Size is session-only:
+		// nothing is persisted, so a reload restores the CSS default.
+		const CHAT_MIN_W = 320, CHAT_MIN_H = 300;
+		let rzX = 0, rzY = 0, rzW = 0, rzH = 0, resizing = false;
+		if (resizeHandle) {
+			resizeHandle.addEventListener('mousedown', (e) => {
+				e.preventDefault();   // don't start a text selection
+				e.stopPropagation();  // don't trigger the header's expand handler
+				const rect = panel.getBoundingClientRect();
+				resizing = true;
+				rzX = e.clientX; rzY = e.clientY;
+				rzW = rect.width; rzH = rect.height;
+				document.body.classList.add('cpn-chat-resizing');
+			});
+			document.addEventListener('mousemove', (e) => {
+				if (!resizing) return;
+				const maxW = window.innerWidth - 40, maxH = window.innerHeight - 40;
+				const w = Math.max(CHAT_MIN_W, Math.min(maxW, rzW - (e.clientX - rzX)));
+				const h = Math.max(CHAT_MIN_H, Math.min(maxH, rzH - (e.clientY - rzY)));
+				panel.style.width = w + 'px';
+				panel.style.height = h + 'px';
+			});
+			document.addEventListener('mouseup', () => {
+				if (!resizing) return;
+				resizing = false;
+				document.body.classList.remove('cpn-chat-resizing');
+			});
+		}
 
 		function addMessage(role, text) {
 			const el = document.createElement('div');

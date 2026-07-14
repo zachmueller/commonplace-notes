@@ -273,6 +273,74 @@ async function main() {
 		'C3: conversation intact after expand'
 	);
 
+	// =====================================================================
+	// Case 4 — drag-to-resize the box from the top-left corner grip
+	// =====================================================================
+	const resizeHandle = doc.getElementById('cpn-chat-resize') as HTMLElement;
+	check(!!resizeHandle, 'C4: resize grip element exists');
+
+	// jsdom's getBoundingClientRect returns zeros; stub a known start rect so the
+	// handler's startWidth/startHeight are deterministic (420 x 560, the default).
+	const START_W = 420, START_H = 560;
+	(panel as any).getBoundingClientRect = () => ({
+		width: START_W, height: START_H, top: 0, left: 0, right: START_W, bottom: START_H,
+		x: 0, y: 0, toJSON() {}
+	});
+
+	// Helper: dispatch a mouse event carrying clientX/clientY.
+	const mouse = (target: any, type: string, x: number, y: number) =>
+		target.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+
+	// Drag the corner up + left: box is anchored bottom-right, so up/left GROWS it.
+	// From (500,300) to (460,260): dx=-40, dy=-40 → w = 420-(-40)=460, h = 560-(-40)=600.
+	mouse(resizeHandle, 'mousedown', 500, 300);
+	check(doc.body.classList.contains('cpn-chat-resizing'), 'C4: body gets .cpn-chat-resizing during drag');
+	mouse(doc, 'mousemove', 460, 260);
+	check(panel.style.width === '460px', `C4: drag up/left grows width (got "${panel.style.width}")`);
+	check(panel.style.height === '600px', `C4: drag up/left grows height (got "${panel.style.height}")`);
+	mouse(doc, 'mouseup', 460, 260);
+	check(!doc.body.classList.contains('cpn-chat-resizing'), 'C4: body class cleared on mouseup');
+
+	// After mouseup the drag is inactive: a stray mousemove must not resize.
+	const frozenW = panel.style.width;
+	mouse(doc, 'mousemove', 100, 100);
+	check(panel.style.width === frozenW, 'C4: mousemove after mouseup does not resize');
+
+	// =====================================================================
+	// Case 5 — clamping to [min, viewport-40]
+	// =====================================================================
+	// Drag far down/right (huge positive delta) → shrinks, floored at the minimum.
+	mouse(resizeHandle, 'mousedown', 500, 300);
+	mouse(doc, 'mousemove', 5000, 5000);
+	check(panel.style.width === '320px', `C5: width floors at CHAT_MIN_W (got "${panel.style.width}")`);
+	check(panel.style.height === '300px', `C5: height floors at CHAT_MIN_H (got "${panel.style.height}")`);
+	// Drag far up/left (huge negative delta) → grows, capped at viewport - 40.
+	mouse(doc, 'mousemove', -5000, -5000);
+	check(panel.style.width === (window.innerWidth - 40) + 'px', `C5: width caps at innerWidth-40 (got "${panel.style.width}")`);
+	check(panel.style.height === (window.innerHeight - 40) + 'px', `C5: height caps at innerHeight-40 (got "${panel.style.height}")`);
+	mouse(doc, 'mouseup', 0, 0);
+
+	// =====================================================================
+	// Case 6 — collapse clears a drag-set inline height; expand restores it
+	// =====================================================================
+	// Set a known dragged size first.
+	mouse(resizeHandle, 'mousedown', 500, 300);
+	mouse(doc, 'mousemove', 460, 260); // w=460, h=600
+	mouse(doc, 'mouseup', 460, 260);
+	const draggedWidth = panel.style.width;   // 460px
+	const draggedHeight = panel.style.height; // 600px
+	check(draggedHeight === '600px', 'C6: precondition — height is drag-set to 600px');
+
+	collapseBtn.click();
+	check(panel.classList.contains('cpn-chat-collapsed'), 'C6: panel collapsed');
+	check(panel.style.height === '', 'C6: inline height cleared on collapse (so height:auto wins)');
+	check(panel.style.width === draggedWidth, 'C6: width is untouched by collapse');
+
+	collapseBtn.click();
+	check(!panel.classList.contains('cpn-chat-collapsed'), 'C6: panel expanded again');
+	check(panel.style.height === draggedHeight, 'C6: drag-set height restored on expand');
+	check(panel.style.width === draggedWidth, 'C6: width still intact after expand');
+
 	report();
 }
 
