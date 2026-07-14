@@ -52,6 +52,8 @@ export interface PublishingProfile {
 	cognitoAuth?: CognitoAuthProfile;
 	/** Self-hosted commenting toggle for this (public) site. */
 	commenting?: CommentingProfile;
+	/** LLM chat over the published corpus (Bedrock Knowledge Base). */
+	chat?: ChatProfile;
 	/** Comments pulled from the recency GSI per Recent Comments panel refresh. Default 25. */
 	commentsFeedLimit?: number;
 	/** Epoch ms of the last successful Recent Comments panel refresh (8h-staleness check). */
@@ -99,6 +101,27 @@ export interface ReadGateProfile {
 /** Persisted author intent for self-hosted commenting. Requires cognitoAuth.commentIdentity. */
 export interface CommentingProfile {
 	enabled: boolean;
+}
+
+/**
+ * Persisted author intent for the LLM chat feature (Bedrock Knowledge Base over
+ * the published corpus). Distinct from the deployment bookkeeping in
+ * InfrastructureState.chat — this is what the author configured, re-shown when
+ * the wizard reopens. When `enabled`, publishing also stages/uploads the per-UID
+ * `kb/{uid}.md` corpus the Knowledge Base ingests.
+ */
+export interface ChatProfile {
+	enabled: boolean;
+	/**
+	 * Knowledge Base ingestion trigger. 'auto' (default) fires a
+	 * StartIngestionJob on every publish; 'manual' leaves ingestion to a
+	 * Settings button / command.
+	 */
+	sync?: 'auto' | 'manual';
+	/** Bedrock model/inference-profile id. Default `us.anthropic.claude-sonnet-5`. */
+	modelId?: string;
+	/** Vector store backing the Knowledge Base. Default 's3vectors' (near-zero idle cost). */
+	vectorStore?: 's3vectors' | 'opensearch';
 }
 
 /**

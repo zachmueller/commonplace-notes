@@ -24,6 +24,7 @@ import { ParserExtensionManager } from './utils/parserExtensions';
 import { RoutingManager } from './routing/routingManager';
 import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
+import { KbCorpusManager } from './utils/kbCorpus';
 import { MappingManager } from './utils/mappings';
 import { NoticeManager } from './utils/notice';
 import { TemplateManager } from './utils/templateManager';
@@ -90,6 +91,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	routingManager: RoutingManager;
 	frontmatterManager: FrontmatterManager;
 	contentIndexManager: ContentIndexManager;
+	kbCorpusManager: KbCorpusManager;
 	mappingManager: MappingManager;
 	templateManager: TemplateManager;
 	publisher: Publisher;
@@ -129,6 +131,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.routingManager = new RoutingManager(this);
 		this.frontmatterManager = new FrontmatterManager(this);
 		this.contentIndexManager = new ContentIndexManager(this);
+		this.kbCorpusManager = new KbCorpusManager(this);
 		this.mappingManager = new MappingManager(this);
 		this.publisher = new Publisher(this);
 		this.templateManager = new TemplateManager(this);
@@ -1215,7 +1218,7 @@ cpn.rebuildContentIndex();
 		if (!profile) return;
 		const files = await this.publisher.getAllPublishableNotes(profile.id);
 		for (const file of files) {
-			if (profile.publishContentIndex) {
+			if (profile.publishContentIndex || profile.chat?.enabled) {
 				const rawWithFrontmatter = await this.app.vault.read(file);
 				const raw = await this.noteManager.stripFrontmatter(file, rawWithFrontmatter);
 				const title = this.frontmatterManager.getNoteTitle(file);
@@ -1228,13 +1231,19 @@ cpn.rebuildContentIndex();
 					const indexRaw = obscure
 						? await this.noteManager.rewriteRawWikilinks(raw, file, profile.id)
 						: raw;
-					await this.contentIndexManager.queueUpdate(profile.id, uid, title, indexRaw);
+					if (profile.publishContentIndex) {
+						await this.contentIndexManager.queueUpdate(profile.id, uid, title, indexRaw);
+					}
+					if (profile.chat?.enabled) {
+						await this.kbCorpusManager.queueUpdate(profile.id, uid, title, indexRaw);
+					}
 				}
 			}
 		}
 
 		// apply queued updates
 		await this.contentIndexManager.applyQueuedUpdates(profile.id);
+		await this.kbCorpusManager.applyQueuedUpdates(profile.id);
 		NoticeManager.showNotice(`Reprocessed contentIndex.json for profile ${profile.id}`);
 	}
 

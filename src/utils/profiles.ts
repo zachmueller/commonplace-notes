@@ -63,6 +63,16 @@ export class ProfileManager {
 		return `${this.getProfileDir(profileId)}/contentIndex.json`;
 	}
 
+	/** Local staging dir for the per-UID `kb/{uid}.md` chat corpus artifacts. */
+	getKbCorpusDir(profileId: string): string {
+		return `${this.getProfileDir(profileId)}/kb`;
+	}
+
+	/** Local path of a single note's chat-corpus artifact. */
+	getKbCorpusPath(profileId: string, uid: string): string {
+		return `${this.getKbCorpusDir(profileId)}/${uid}.md`;
+	}
+
 	getCombinedLocalNotesPath(profileId: string): string {
 		return `${this.getProfileDir(profileId)}/combinedNotes.json`;
 	}

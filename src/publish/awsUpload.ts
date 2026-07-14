@@ -233,10 +233,111 @@ export async function pushMappingAndIndexToS3(
 		}
 	}
 
+	// Upload changed chat-corpus artifacts (kb/{uid}.md) when chat is enabled.
+	// Incremental: only UIDs staged this publish are pushed.
+	if (profile.chat?.enabled) {
+		await pushKbCorpusToS3(plugin, profileId);
+	}
+
 	// Refresh config.json so commenting/auth (and theme/home) flags stay in sync
 	// on every publish — without this a settings change would not reach the site
 	// until the user manually re-pushed site assets.
 	await uploadConfigJson(plugin, profile);
+}
+
+/**
+ * Upload the per-UID chat corpus artifacts changed since the last push to
+ * `${s3Prefix}kb/{uid}.md`. Incremental by design — the KbCorpusManager tracks
+ * which UIDs changed this publish, so unchanged notes are not re-uploaded. The
+ * Bedrock Knowledge Base data source is scoped to this `kb/` prefix.
+ */
+export async function pushKbCorpusToS3(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string
+): Promise<void> {
+	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+	if (!profile?.awsSettings) {
+		throw new Error('Selected profile is not configured for AWS publishing');
+	}
+
+	const changedUids = plugin.kbCorpusManager.consumeChangedUids(profileId);
+	if (changedUids.length === 0) {
+		Logger.debug(`No changed KB corpus artifacts to upload for profile ${profileId}`);
+		return;
+	}
+
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const bucket = profile.awsSettings.bucketName;
+	const s3Prefix = profile.awsSettings.s3Prefix || '';
+
+	const { success } = await NoticeManager.showProgressWithCounter(
+		'Uploading chat corpus to S3',
+		changedUids.length,
+		async (updateProgress) => {
+			let completed = 0;
+			await runWithConcurrency(changedUids, async (uid) => {
+				const localPath = plugin.profileManager.getKbCorpusPath(profileId, uid);
+				if (!await plugin.app.vault.adapter.exists(localPath)) {
+					Logger.warn(`KB corpus artifact missing locally, skipping upload: ${localPath}`);
+					return;
+				}
+				const body = await plugin.app.vault.adapter.read(localPath);
+				const key = `${s3Prefix}kb/${uid}.md`;
+				await s3Client.send(new PutObjectCommand({
+					Bucket: bucket,
+					Key: key,
+					Body: body,
+					ContentType: 'text/markdown',
+				}));
+				completed++;
+				updateProgress(completed);
+				Logger.debug(`Uploaded KB corpus artifact: ${key}`);
+			}, MAX_CONCURRENCY);
+		},
+		`Chat corpus successfully uploaded to S3`,
+		`Chat corpus upload failed, check console for error details`
+	);
+
+	if (!success) throw new Error('Chat corpus upload failed');
+}
+
+/**
+ * Delete a single note's chat corpus artifact `${s3Prefix}kb/{uid}.md`. Called
+ * from the note-delete path — a wholesale content-index re-push cannot orphan-
+ * remove a per-UID object, so the delete must be explicit and keyed by UID.
+ * Returns false on a credential error (so the caller can stop), throws otherwise.
+ */
+export async function deleteKbCorpusFromS3(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+	uid: string
+): Promise<boolean> {
+	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+	if (!profile?.awsSettings) {
+		throw new Error('Selected profile is not configured for AWS publishing');
+	}
+
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const bucket = profile.awsSettings.bucketName;
+	const s3Prefix = profile.awsSettings.s3Prefix || '';
+	const key = `${s3Prefix}kb/${uid}.md`;
+
+	try {
+		await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+		Logger.debug(`Deleted KB corpus artifact ${key}`);
+		return true;
+	} catch (error) {
+		if (isCredentialError(error)) {
+			NoticeManager.showNotice(
+				'S3 permission error — please refresh your AWS credentials and try again.',
+				10000
+			);
+			Logger.error('S3 permission error during KB corpus delete:', error);
+			return false;
+		}
+		Logger.error('Error deleting KB corpus artifact from S3:', error);
+		throw error;
+	}
 }
 
 export async function deleteNoteHashesFromS3(

@@ -290,9 +290,22 @@ export class NoteManager {
 				);
 
 				// Update content index if enabled
-				if (this.plugin.settings.publishingProfiles.find(p => p.id === profileId)?.publishContentIndex) {
+				const commitProfile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
+				if (commitProfile?.publishContentIndex) {
 					Logger.debug(`Queuing contentIndex update for file ${noteState.file.basename} (${noteState.uid}) under profile ${profileId}`);
 					await this.plugin.contentIndexManager.queueUpdate(
+						profileId,
+						noteState.uid,
+						noteState.title,
+						noteState.raw
+					);
+				}
+
+				// Stage the per-UID chat corpus artifact when chat is enabled. Reuses
+				// the same scrubbed `raw` as the content index so freshness matches.
+				if (commitProfile?.chat?.enabled) {
+					Logger.debug(`Queuing KB corpus update for file ${noteState.file.basename} (${noteState.uid}) under profile ${profileId}`);
+					await this.plugin.kbCorpusManager.queueUpdate(
 						profileId,
 						noteState.uid,
 						noteState.title,
@@ -311,6 +324,7 @@ export class NoteManager {
 			await this.savePublishHistory(profileId);
 			await this.plugin.mappingManager.saveMappings();
 			await this.plugin.contentIndexManager.applyQueuedUpdates(profileId);
+			await this.plugin.kbCorpusManager.applyQueuedUpdates(profileId);
 
 			NoticeManager.showNotice(`Notes successfully committed for profile ${profileId}`);
 		} catch (error) {

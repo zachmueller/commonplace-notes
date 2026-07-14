@@ -1,7 +1,7 @@
 import { TFile, SuggestModal, App } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from '../types';
-import { pushLocalJsonsToS3, deleteNoteHashesFromS3, pushMappingAndIndexToS3, createCloudFrontInvalidation } from './awsUpload';
+import { pushLocalJsonsToS3, deleteNoteHashesFromS3, deleteKbCorpusFromS3, pushMappingAndIndexToS3, createCloudFrontInvalidation } from './awsUpload';
 import { publishLocalNotes } from './local';
 import { PathUtils } from '../utils/path';
 import { Logger } from '../utils/logging';
@@ -527,6 +527,18 @@ export class Publisher {
 
 			// Step 7: Update content index
 			await this.plugin.contentIndexManager.removeEntry(profile.id, selectedNote.uid);
+
+			// Step 7b: Prune the chat corpus artifact (local + S3). Unlike the
+			// content index, the per-UID kb/{uid}.md object is not orphan-removed
+			// by the Step 8 re-push, so delete it explicitly.
+			if (profile.chat?.enabled) {
+				await this.plugin.kbCorpusManager.removeEntry(profile.id, selectedNote.uid);
+				const kbDeleteSuccess = await deleteKbCorpusFromS3(this.plugin, profile.id, selectedNote.uid);
+				if (!kbDeleteSuccess) {
+					// Credential error — stop before re-pushing / invalidating.
+					return;
+				}
+			}
 
 			// Step 8: Push updated mappings and content index to S3
 			await pushMappingAndIndexToS3(this.plugin, profile.id);
