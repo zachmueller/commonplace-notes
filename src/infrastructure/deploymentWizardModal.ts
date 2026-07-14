@@ -9,6 +9,12 @@ import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
 
+/** A deploy step now creates OR updates a stack (idempotent re-runs), so both
+ *  terminal success states are accepted. */
+function isDeploySuccess(status: string): boolean {
+	return status === 'CREATE_COMPLETE' || status === 'UPDATE_COMPLETE';
+}
+
 /** Lowercase hex sha256 via Web Crypto (available in Obsidian's Electron renderer). */
 export async function sha256Hex(input: string): Promise<string> {
 	const data = new TextEncoder().encode(input);
@@ -912,7 +918,7 @@ export class DeploymentWizardModal extends Modal {
 
 			if (this.aborted) return;
 
-			if (finalStatus === 'CREATE_COMPLETE') {
+			if (isDeploySuccess(finalStatus)) {
 				this.certArn = await this.cfManager.getCertificateArn(stackName, this.activeProfile);
 				this.config.certificateArn = this.certArn;
 				await this.updateInfraState({ status: 'cert-deployed', certificateArn: this.certArn, certificateReused: false });
@@ -1031,7 +1037,7 @@ export class DeploymentWizardModal extends Modal {
 					pwStack, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',
 				);
 				if (this.aborted) return;
-				if (pwStatus !== 'CREATE_COMPLETE') {
+				if (!isDeploySuccess(pwStatus)) {
 					await this.updateInfraState({ status: 'failed' });
 					this.showError(container, `Password auth stack deployment failed: ${pwStatus}`);
 					return;
@@ -1060,7 +1066,7 @@ export class DeploymentWizardModal extends Modal {
 					stackName, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',
 				);
 				if (this.aborted) return;
-				if (finalStatus !== 'CREATE_COMPLETE') {
+				if (!isDeploySuccess(finalStatus)) {
 					await this.updateInfraState({ status: 'failed' });
 					this.showError(container, `Cognito auth stack deployment failed: ${finalStatus}`);
 					return;
@@ -1128,7 +1134,7 @@ export class DeploymentWizardModal extends Modal {
 
 			if (this.aborted) return;
 
-			if (finalStatus === 'CREATE_COMPLETE') {
+			if (isDeploySuccess(finalStatus)) {
 				this.stackOutputs = await this.cfManager.getStackOutputs(stackName, this.activeProfile, this.config.region);
 				await this.updateInfraState({ status: 'deployed', lastDeployTimestamp: Date.now() });
 
@@ -1233,7 +1239,7 @@ export class DeploymentWizardModal extends Modal {
 			this.config.region,
 		);
 		if (this.aborted) return;
-		if (status !== 'CREATE_COMPLETE') {
+		if (!isDeploySuccess(status)) {
 			throw new Error(`Comment stack deployment failed: ${status}`);
 		}
 
@@ -1248,7 +1254,12 @@ export class DeploymentWizardModal extends Modal {
 		});
 		this.config.commentBucketDomainName = outputs.bucketDomainName;
 		this.config.commentApiDomainName = outputs.apiDomain;
-		await this.cfManager.updateFullStack(this.config as DeploymentConfig);
+		// Targeted update: carve in ONLY the comment origins, inheriting the rest
+		// (incl. any live chat route) via UsePreviousValue.
+		await this.cfManager.updateFullStackOrigins(this.config as DeploymentConfig, {
+			CommentBucketDomainName: outputs.bucketDomainName,
+			CommentApiDomainName: outputs.apiDomain,
+		});
 		await this.cfManager.pollStackUntilComplete(
 			this.cfManager.getStackName(this.config.variantName || '', 'full'),
 			this.activeProfile,
@@ -1286,7 +1297,7 @@ export class DeploymentWizardModal extends Modal {
 			this.config.region,
 		);
 		if (this.aborted) return;
-		if (status !== 'CREATE_COMPLETE') {
+		if (!isDeploySuccess(status)) {
 			throw new Error(`Chat stack deployment failed: ${status}`);
 		}
 
@@ -1316,7 +1327,11 @@ export class DeploymentWizardModal extends Modal {
 			cls: 'cpn-wizard-description',
 		});
 		this.config.chatFunctionUrlDomainName = outputs.functionUrlDomainName;
-		await this.cfManager.updateFullStack(this.config as DeploymentConfig);
+		// Targeted update: carve in ONLY the chat origin, inheriting the rest
+		// (incl. any live comment routes) via UsePreviousValue.
+		await this.cfManager.updateFullStackOrigins(this.config as DeploymentConfig, {
+			ChatFunctionUrlDomainName: outputs.functionUrlDomainName,
+		});
 		await this.cfManager.pollStackUntilComplete(
 			this.cfManager.getStackName(this.config.variantName || '', 'full'),
 			this.activeProfile,

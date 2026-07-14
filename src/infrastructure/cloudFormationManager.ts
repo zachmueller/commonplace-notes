@@ -1,7 +1,9 @@
 import {
 	CloudFormationClient,
+	Capability,
 	CreateStackCommand,
 	UpdateStackCommand,
+	UpdateStackCommandInput,
 	DeleteStackCommand,
 	DeletionMode,
 	DescribeStacksCommand,
@@ -263,24 +265,142 @@ export class CloudFormationManager {
 		}
 	}
 
+	/** True for the CloudFormation "nothing changed" error UpdateStack raises when
+	 *  the resolved template+params are byte-identical to the live stack. This is a
+	 *  success for an idempotent re-run, not a failure. */
+	private isNoUpdatesError(err: unknown): boolean {
+		return /No updates are to be performed/i.test(String((err as any)?.message || err));
+	}
+
+	/** The parameter keys the live stack was actually deployed with (empty set if
+	 *  the stack doesn't exist). Used to decide UsePreviousValue vs an explicit
+	 *  default for a param the current template introduces but the live stack lacks. */
+	private async getDeployedParameterKeys(client: CloudFormationClient, stackName: string): Promise<Set<string>> {
+		try {
+			const resp = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+			const params = resp.Stacks?.[0]?.Parameters || [];
+			return new Set(params.map((p) => p.ParameterKey!).filter(Boolean));
+		} catch (err: any) {
+			if (/does not exist/i.test(String(err?.message || err))) return new Set();
+			throw err;
+		}
+	}
+
+	/** Send an UpdateStack, swallowing the "No updates are to be performed" no-op
+	 *  so an idempotent re-run (same template + params) is treated as success. */
+	private async sendUpdateToleratingNoop(client: CloudFormationClient, input: UpdateStackCommandInput): Promise<void> {
+		try {
+			await client.send(new UpdateStackCommand(input));
+		} catch (err) {
+			if (this.isNoUpdatesError(err)) return;
+			throw err;
+		}
+	}
+
+	/** True for a *_COMPLETE resting state that resources exist in (create OR
+	 *  update). A create-or-update caller treats either as a live stack. */
+	private isLiveStackStatus(status: string | undefined): boolean {
+		return status === 'CREATE_COMPLETE'
+			|| status === 'UPDATE_COMPLETE'
+			|| status === 'UPDATE_ROLLBACK_COMPLETE'
+			|| status === 'IMPORT_COMPLETE';
+	}
+
+	/**
+	 * Create the stack if it doesn't exist (or its leftover is unusable), else
+	 * UpdateStack in place — the single idempotent entry point every deploy*Stack
+	 * routes through, so re-running the wizard on an already-deployed profile
+	 * (e.g. to add chat/comments to a live cpn-<variant> site) updates rather than
+	 * throwing AlreadyExistsException.
+	 *
+	 * create-params and update-params differ deliberately: an update must inherit
+	 * values the current config can't supply (UsePreviousValue) — e.g. the full
+	 * stack's comment/chat/callback origin domains (blanking them would prune those
+	 * routes) or the never-persisted Cognito Google secret. Callers pass
+	 * `updateParameters` when their update needs that discipline; otherwise the
+	 * same params are reused.
+	 *
+	 * A no-op update ("No updates are to be performed") is swallowed as success. A
+	 * stack mid-operation (*_IN_PROGRESS) throws a clear, actionable error rather
+	 * than a raw SDK exception. Returns the stack name.
+	 */
+	private async createOrUpdateStack(
+		client: CloudFormationClient,
+		stackName: string,
+		params: {
+			templateBody?: string;
+			usePreviousTemplate?: boolean;
+			createParameters: Array<{ ParameterKey: string; ParameterValue?: string; UsePreviousValue?: boolean }>;
+			updateParameters?: Array<{ ParameterKey: string; ParameterValue?: string; UsePreviousValue?: boolean }>;
+			capabilities?: Capability[];
+			profileId: string;
+		},
+	): Promise<string> {
+		// Probe the current status.
+		let status: string | undefined;
+		try {
+			const resp = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+			status = resp.Stacks?.[0]?.StackStatus;
+		} catch (err: any) {
+			if (!/does not exist/i.test(String(err?.message || err))) throw err;
+			status = undefined; // No stack — fall through to create.
+		}
+
+		const tags = [
+			{ Key: 'cpn:managed', Value: 'true' },
+			{ Key: 'cpn:profile', Value: params.profileId },
+		];
+		const template = params.usePreviousTemplate
+			? { UsePreviousTemplate: true }
+			: { TemplateBody: params.templateBody };
+
+		// A live stack → update in place.
+		if (this.isLiveStackStatus(status)) {
+			try {
+				await client.send(new UpdateStackCommand({
+					StackName: stackName,
+					...template,
+					Parameters: params.updateParameters ?? params.createParameters,
+					Capabilities: params.capabilities,
+					Tags: tags,
+				}));
+			} catch (err) {
+				if (this.isNoUpdatesError(err)) return stackName; // Idempotent no-op.
+				throw err;
+			}
+			return stackName;
+		}
+
+		// Mid-operation → don't race it; surface an actionable message.
+		if (status && !CloudFormationManager.UNUSABLE_LEFTOVER_STATUSES.has(status) && status !== 'DELETE_COMPLETE') {
+			throw new Error(
+				`Stack ${stackName} is currently ${status}; wait for it to finish, then retry.`,
+			);
+		}
+
+		// No stack, DELETE_COMPLETE, or an unusable leftover → clear the leftover and create.
+		await this.recoverFailedStackBeforeCreate(client, stackName);
+		await client.send(new CreateStackCommand({
+			StackName: stackName,
+			TemplateBody: params.templateBody,
+			Parameters: params.createParameters,
+			Capabilities: params.capabilities,
+			Tags: tags,
+		}));
+		return stackName;
+	}
+
 	async deployCertificateStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cert');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
-		await this.recoverFailedStackBeforeCreate(client, stackName);
 
-		await client.send(new CreateStackCommand({
-			StackName: stackName,
-			TemplateBody: CERTIFICATE_TEMPLATE,
-			Parameters: [
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: CERTIFICATE_TEMPLATE,
+			createParameters: [
 				{ ParameterKey: 'CustomDomain', ParameterValue: config.customDomain },
 			],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		}));
-
-		return stackName;
+			profileId: config.profileId,
+		});
 	}
 
 	private buildCognitoAuthParameters(config: DeploymentConfig) {
@@ -328,20 +448,26 @@ export class CloudFormationManager {
 	async deployCognitoAuthStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cognito');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
-		await this.recoverFailedStackBeforeCreate(client, stackName);
 
-		await client.send(new CreateStackCommand({
-			StackName: stackName,
-			TemplateBody: COGNITO_AUTH_TEMPLATE,
-			Parameters: this.buildCognitoAuthParameters(config),
-			Capabilities: ['CAPABILITY_IAM'],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		}));
+		// On a re-run against a live pool, update via UsePreviousValue so the
+		// never-persisted Google client secret survives — only re-pass it when the
+		// user actually re-entered one this run. The other fields config reliably
+		// carries are safe to re-pass.
+		const updateOverrides: Partial<Record<string, string>> = {
+			VariantName: config.variantName,
+			GoogleClientId: config.googleClientId || '',
+			CallbackURL: config.callbackUrl || 'https://placeholder.invalid/auth/callback',
+			AuthDomainPrefix: config.authDomainPrefix || '',
+		};
+		if (config.googleClientSecret) updateOverrides.GoogleClientSecret = config.googleClientSecret;
 
-		return stackName;
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: COGNITO_AUTH_TEMPLATE,
+			createParameters: this.buildCognitoAuthParameters(config),
+			updateParameters: this.buildCognitoAuthUpdateParameters(updateOverrides),
+			capabilities: ['CAPABILITY_IAM'],
+			profileId: config.profileId,
+		});
 	}
 
 	/**
@@ -355,7 +481,7 @@ export class CloudFormationManager {
 		const stackName = this.getStackName(config.variantName, 'cognito');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
 
-		await client.send(new UpdateStackCommand({
+		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: COGNITO_AUTH_TEMPLATE,
 			Parameters: this.buildCognitoAuthParameters(config),
@@ -364,7 +490,7 @@ export class CloudFormationManager {
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: config.profileId },
 			],
-		}));
+		});
 
 		return stackName;
 	}
@@ -504,22 +630,15 @@ export class CloudFormationManager {
 			profile, bucketName, config.passwordHash || '', config.variantName || 'Protected',
 		);
 
-		await this.recoverFailedStackBeforeCreate(client, stackName);
-		await client.send(new CreateStackCommand({
-			StackName: stackName,
-			TemplateBody: PASSWORD_AUTH_TEMPLATE,
-			Parameters: [
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: PASSWORD_AUTH_TEMPLATE,
+			createParameters: [
 				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
 			],
-			Capabilities: ['CAPABILITY_IAM'],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		}));
-
-		return stackName;
+			capabilities: ['CAPABILITY_IAM'],
+			profileId: config.profileId,
+		});
 	}
 
 	/**
@@ -542,7 +661,7 @@ export class CloudFormationManager {
 			profile, bucketName, config.passwordHash || '', config.variantName || 'Protected',
 		);
 
-		await client.send(new UpdateStackCommand({
+		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: PASSWORD_AUTH_TEMPLATE,
 			Parameters: [
@@ -554,7 +673,7 @@ export class CloudFormationManager {
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: config.profileId },
 			],
-		}));
+		});
 
 		return stackName;
 	}
@@ -600,19 +719,33 @@ export class CloudFormationManager {
 	 * Build UpdateStack parameters that change only the keys present in
 	 * `overrides` and keep every other key at its currently-deployed value
 	 * (UsePreviousValue). This is critical for partial updates: the site
-	 * distribution's /auth/*, /comments/* and /api/comments origins+behaviors are
-	 * pruned when their domain parameters resolve to '', so an update that only
-	 * means to change the auth ARN must NOT re-pass those domains as empty (which
-	 * `buildFullStackParameters` would, from a partial config) or it silently tears
-	 * those routes off a working site. ParameterValue and UsePreviousValue are
-	 * mutually exclusive per key.
+	 * distribution's /auth/*, /comments/*, /api/comments and /api/chat
+	 * origins+behaviors are pruned when their domain parameters resolve to '', so an
+	 * update that only means to change the auth ARN must NOT re-pass those domains as
+	 * empty (which `buildFullStackParameters` would, from a partial config) or it
+	 * silently tears those routes off a working site. ParameterValue and
+	 * UsePreviousValue are mutually exclusive per key.
+	 *
+	 * `deployedKeys`, when given, is the set of parameter keys the LIVE stack was
+	 * created with. A key the template introduces that the deployed stack lacks
+	 * (e.g. ChatFunctionUrlDomainName on a site deployed before chat existed) CANNOT
+	 * use UsePreviousValue — CloudFormation rejects it ("Cannot specify
+	 * usePreviousValue ... for a parameter key not in the previous template"). Such
+	 * keys get an explicit value instead (the override, or '' default). Omit
+	 * `deployedKeys` (or pass undefined) to assume every key exists — safe when the
+	 * live stack is known to be on the current template.
 	 */
-	private buildFullStackUpdateParameters(overrides: Partial<Record<string, string>>) {
-		return CloudFormationManager.FULL_STACK_PARAM_KEYS.map((key) =>
-			key in overrides
-				? { ParameterKey: key, ParameterValue: overrides[key] }
-				: { ParameterKey: key, UsePreviousValue: true },
-		);
+	private buildFullStackUpdateParameters(
+		overrides: Partial<Record<string, string>>,
+		deployedKeys?: Set<string>,
+	) {
+		return CloudFormationManager.FULL_STACK_PARAM_KEYS.map((key) => {
+			if (key in overrides) return { ParameterKey: key, ParameterValue: overrides[key] };
+			// A newly-introduced param the live stack doesn't have can't inherit —
+			// give it an explicit default so the template upgrade succeeds.
+			if (deployedKeys && !deployedKeys.has(key)) return { ParameterKey: key, ParameterValue: '' };
+			return { ParameterKey: key, UsePreviousValue: true };
+		});
 	}
 
 	/**
@@ -625,12 +758,10 @@ export class CloudFormationManager {
 	async deployCommentStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'comment');
 		const client = this.getCloudFormationClient(config, config.region);
-		await this.recoverFailedStackBeforeCreate(client, stackName);
 
-		await client.send(new CreateStackCommand({
-			StackName: stackName,
-			TemplateBody: COMMENT_STACK_TEMPLATE,
-			Parameters: [
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: COMMENT_STACK_TEMPLATE,
+			createParameters: [
 				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
 				{ ParameterKey: 'JwksUri', ParameterValue: config.commentJwksUri || '' },
 				{ ParameterKey: 'TokenIssuer', ParameterValue: config.commentTokenIssuer || '' },
@@ -639,14 +770,9 @@ export class CloudFormationManager {
 				{ ParameterKey: 'SiteDistributionId', ParameterValue: config.siteDistributionId || '' },
 				{ ParameterKey: 'SiteOriginAccessIdentityId', ParameterValue: config.siteOriginAccessIdentityId || '' },
 			],
-			Capabilities: ['CAPABILITY_IAM'],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		}));
-
-		return stackName;
+			capabilities: ['CAPABILITY_IAM'],
+			profileId: config.profileId,
+		});
 	}
 
 	async getCommentStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<CommentStackOutputs> {
@@ -728,11 +854,9 @@ export class CloudFormationManager {
 		// KB id to the handler via the AssetsKey→CFG only on the post-deploy update
 		// (see updateChatStackWithKbId). The initial deploy uses PLACEHOLDER.
 
-		await this.recoverFailedStackBeforeCreate(client, stackName);
-		await client.send(new CreateStackCommand({
-			StackName: stackName,
-			TemplateBody: CHAT_STACK_TEMPLATE,
-			Parameters: [
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: CHAT_STACK_TEMPLATE,
+			createParameters: [
 				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
 				{ ParameterKey: 'SiteBucketName', ParameterValue: bucketName },
 				{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix || '' },
@@ -740,14 +864,9 @@ export class CloudFormationManager {
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
 				{ ParameterKey: 'SiteDistributionId', ParameterValue: siteDistributionId },
 			],
-			Capabilities: ['CAPABILITY_IAM'],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		}));
-
-		return stackName;
+			capabilities: ['CAPABILITY_IAM'],
+			profileId: config.profileId,
+		});
 	}
 
 	/**
@@ -771,7 +890,7 @@ export class CloudFormationManager {
 			modelArn: config.chatModelArn || this.defaultChatModelArn(config.region, profile.awsSettings!.awsAccountId),
 		});
 
-		await client.send(new UpdateStackCommand({
+		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: CHAT_STACK_TEMPLATE,
 			Parameters: [
@@ -787,7 +906,7 @@ export class CloudFormationManager {
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: config.profileId },
 			],
-		}));
+		});
 		return stackName;
 	}
 
@@ -836,23 +955,37 @@ export class CloudFormationManager {
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'full');
 		const client = this.getCloudFormationClient(config, config.region);
-		await this.recoverFailedStackBeforeCreate(client, stackName);
 		const template = config.originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
 
-		await client.send(new CreateStackCommand({
-			StackName: stackName,
-			TemplateBody: template,
-			Parameters: this.buildFullStackParameters(config),
-			Capabilities: ['CAPABILITY_IAM'],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		}));
+		// On a re-run against a live site, update via UsePreviousValue for every
+		// param EXCEPT the handful this fresh deploy legitimately sets (variant /
+		// prefix / domain / cert / route53 / auth ARN). This preserves the
+		// comment/chat/callback origin domains that were wired in by later
+		// sub-stack deploys — a full rebuild would blank them and prune those routes.
+		const updateOverrides: Partial<Record<string, string>> = {
+			VariantName: config.variantName,
+			S3Prefix: config.s3Prefix,
+			CustomDomain: config.customDomain,
+			CertificateArn: config.certificateArn || '',
+			UseRoute53: config.useRoute53 ? 'true' : 'false',
+			HostedZoneId: config.hostedZoneId,
+			HostedZoneName: config.hostedZoneName,
+			AuthLambdaEdgeArn: config.authLambdaEdgeArn || '',
+		};
+		// A site deployed before chat existed lacks ChatFunctionUrlDomainName, so
+		// UsePreviousValue would be rejected for it — pass explicit defaults for any
+		// param the live stack doesn't carry (this is also the template-upgrade path).
+		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
 
-		return stackName;
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: template,
+			createParameters: this.buildFullStackParameters(config),
+			updateParameters: this.buildFullStackUpdateParameters(updateOverrides, deployedKeys),
+			capabilities: ['CAPABILITY_IAM'],
+			profileId: config.profileId,
+		});
 	}
 
 	async updateFullStack(config: DeploymentConfig): Promise<string> {
@@ -862,7 +995,7 @@ export class CloudFormationManager {
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
 
-		await client.send(new UpdateStackCommand({
+		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: template,
 			Parameters: this.buildFullStackParameters(config),
@@ -871,7 +1004,41 @@ export class CloudFormationManager {
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: config.profileId },
 			],
-		}));
+		});
+
+		return stackName;
+	}
+
+	/**
+	 * Targeted full-stack update that carves in ONE feature's origin domain(s)
+	 * while inheriting every other param via UsePreviousValue. Use this from the
+	 * comment/chat attach steps instead of updateFullStack(): a full param rebuild
+	 * from config would blank the OTHER feature's origin domain (e.g. adding
+	 * comments to a site that already has chat re-passes ChatFunctionUrlDomainName=''
+	 * and prunes the live /api/chat route). The overrides carry only the just-
+	 * deployed feature's domains; everything else stays put.
+	 */
+	async updateFullStackOrigins(
+		config: DeploymentConfig,
+		overrides: Partial<Record<string, string>>,
+	): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'full');
+		const client = this.getCloudFormationClient(config, config.region);
+		const template = config.originAccessMethod === 'oac'
+			? FULL_STACK_OAC_TEMPLATE
+			: FULL_STACK_OAI_TEMPLATE;
+		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
+
+		await this.sendUpdateToleratingNoop(client, {
+			StackName: stackName,
+			TemplateBody: template,
+			Parameters: this.buildFullStackUpdateParameters(overrides, deployedKeys),
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		});
 
 		return stackName;
 	}
@@ -896,17 +1063,18 @@ export class CloudFormationManager {
 		const template = originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
+		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
 
-		await client.send(new UpdateStackCommand({
+		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: template,
-			Parameters: this.buildFullStackUpdateParameters({ AuthLambdaEdgeArn: authLambdaEdgeArn }),
+			Parameters: this.buildFullStackUpdateParameters({ AuthLambdaEdgeArn: authLambdaEdgeArn }, deployedKeys),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: profile.id },
 			],
-		}));
+		});
 
 		return stackName;
 	}
@@ -929,7 +1097,7 @@ export class CloudFormationManager {
 	): Promise<string> {
 		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
 
-		await client.send(new UpdateStackCommand({
+		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			UsePreviousTemplate: true,
 			Parameters: this.buildCognitoAuthUpdateParameters({ CallbackURL: callbackUrl }),
@@ -938,7 +1106,7 @@ export class CloudFormationManager {
 				{ Key: 'cpn:managed', Value: 'true' },
 				{ Key: 'cpn:profile', Value: profile.id },
 			],
-		}));
+		});
 
 		return stackName;
 	}
