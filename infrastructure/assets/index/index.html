@@ -1222,6 +1222,89 @@ div.comment-input:empty:before {
 	padding: 0.5em 0.75em;
 }
 
+/* LLM chat (site-wide, floating). Hidden until config enables chatEnabled. */
+.cpn-chat-launcher {
+	position: fixed;
+	right: 20px;
+	bottom: 20px;
+	z-index: 900;
+	border: 1px solid var(--border-color);
+	background-color: var(--bg-secondary);
+	color: var(--text-primary);
+	border-radius: 999px;
+	padding: 0.6em 1.1em;
+	font-size: 0.95em;
+	cursor: pointer;
+	box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+}
+.cpn-chat-launcher:hover { background-color: var(--bg-primary); }
+.cpn-chat-panel {
+	position: fixed;
+	right: 20px;
+	bottom: 20px;
+	z-index: 901;
+	width: min(420px, calc(100vw - 40px));
+	height: min(560px, calc(100vh - 40px));
+	display: flex;
+	flex-direction: column;
+	background-color: var(--bg-primary);
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+	overflow: hidden;
+}
+.cpn-chat-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0.6em 0.9em;
+	border-bottom: 1px solid var(--border-color);
+	background-color: var(--bg-secondary);
+	font-weight: 600;
+}
+.cpn-chat-close {
+	background: none;
+	border: none;
+	color: var(--text-secondary);
+	font-size: 1.3em;
+	line-height: 1;
+	cursor: pointer;
+}
+.cpn-chat-log {
+	flex: 1;
+	overflow-y: auto;
+	padding: 0.9em;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75em;
+}
+.cpn-chat-msg { max-width: 90%; padding: 0.55em 0.75em; border-radius: 8px; white-space: pre-wrap; word-wrap: break-word; }
+.cpn-chat-msg.user { align-self: flex-end; background-color: var(--bg-secondary); }
+.cpn-chat-msg.assistant { align-self: flex-start; background-color: var(--bg-secondary); }
+.cpn-chat-citations { margin-top: 0.5em; font-size: 0.85em; }
+.cpn-chat-citations a { display: inline-block; margin-right: 0.5em; }
+.cpn-chat-form { display: flex; gap: 0.5em; padding: 0.75em; border-top: 1px solid var(--border-color); }
+.cpn-chat-input {
+	flex: 1;
+	resize: none;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background-color: var(--bg-primary);
+	color: var(--text-primary);
+	padding: 0.5em;
+	font-family: inherit;
+	font-size: 0.95em;
+}
+.cpn-chat-send {
+	border: 1px solid var(--border-color);
+	background-color: var(--bg-secondary);
+	color: var(--text-primary);
+	border-radius: 6px;
+	padding: 0 0.9em;
+	cursor: pointer;
+}
+.cpn-chat-send:disabled { opacity: 0.5; cursor: default; }
+
 	</style>
 </head>
 <body>
@@ -1241,6 +1324,20 @@ div.comment-input:empty:before {
 	</header>
 
 	<div class="panels-container" id="panels"></div>
+
+	<!-- LLM chat over the published corpus. Hidden unless config.chatEnabled. -->
+	<button id="cpn-chat-launcher" class="cpn-chat-launcher" hidden>💬 Ask these notes</button>
+	<div id="cpn-chat-panel" class="cpn-chat-panel" hidden>
+		<div class="cpn-chat-header">
+			<span>Ask these notes</span>
+			<button id="cpn-chat-close" class="cpn-chat-close" aria-label="Close chat">×</button>
+		</div>
+		<div id="cpn-chat-log" class="cpn-chat-log"></div>
+		<form id="cpn-chat-form" class="cpn-chat-form">
+			<textarea id="cpn-chat-input" class="cpn-chat-input" rows="2" placeholder="Ask a question about these notes…" aria-label="Ask a question"></textarea>
+			<button type="submit" id="cpn-chat-send" class="cpn-chat-send">Send</button>
+		</form>
+	</div>
 
 <script>
 /**!
@@ -3490,6 +3587,140 @@ ${closeButton}
 	document.addEventListener('DOMContentLoaded', () => {
 		new ThemeManager();
 	});
+
+	// ====================================================================
+	// LLM chat over the published corpus (Bedrock KB via /api/chat).
+	// Streams SSE frames {type:'token'|'citation'|'done'|'error'}. Same-origin
+	// fetch rides the HttpOnly session cookie, so auth is inherited at the edge.
+	// ====================================================================
+	function chatEnabled() {
+		return !!cpnConfig().chatEnabled;
+	}
+
+	async function initChat() {
+		// Config may still be loading; wait so a slow fetch can't make
+		// chatEnabled() read false and hide the launcher permanently.
+		if (window.__CPN_CONFIG_READY__) { try { await window.__CPN_CONFIG_READY__; } catch (e) {} }
+		if (!chatEnabled()) return;
+
+		const launcher = document.getElementById('cpn-chat-launcher');
+		const panel = document.getElementById('cpn-chat-panel');
+		const closeBtn = document.getElementById('cpn-chat-close');
+		const log = document.getElementById('cpn-chat-log');
+		const form = document.getElementById('cpn-chat-form');
+		const input = document.getElementById('cpn-chat-input');
+		const sendBtn = document.getElementById('cpn-chat-send');
+		if (!launcher || !panel) return;
+
+		launcher.hidden = false;
+		let conversationId;
+
+		const open = () => { panel.hidden = false; launcher.hidden = true; input.focus(); };
+		const close = () => { panel.hidden = true; launcher.hidden = false; };
+		launcher.addEventListener('click', open);
+		closeBtn.addEventListener('click', close);
+
+		function addMessage(role, text) {
+			const el = document.createElement('div');
+			el.className = 'cpn-chat-msg ' + role;
+			el.textContent = text;
+			log.appendChild(el);
+			log.scrollTop = log.scrollHeight;
+			return el;
+		}
+
+		function renderCitations(el, uids) {
+			if (!uids.length) return;
+			const wrap = document.createElement('div');
+			wrap.className = 'cpn-chat-citations';
+			wrap.appendChild(document.createTextNode('Sources: '));
+			uids.forEach((uid) => {
+				const a = document.createElement('a');
+				// Deep link to the note; the global hash-link handler navigates in-app.
+				a.href = '#/u' + encodeURIComponent(uid);
+				a.textContent = uid;
+				wrap.appendChild(a);
+			});
+			el.appendChild(wrap);
+			log.scrollTop = log.scrollHeight;
+		}
+
+		async function ask(question) {
+			addMessage('user', question);
+			const answerEl = addMessage('assistant', '');
+			let answerText = '';
+			const citedUids = [];
+			sendBtn.disabled = true;
+			input.disabled = true;
+			try {
+				const resp = await fetch(cpnConfig().chatPath || '/api/chat', {
+					method: 'POST',
+					credentials: 'same-origin',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify(conversationId ? { question, conversationId } : { question }),
+				});
+				if (!resp.ok || !resp.body) {
+					answerEl.textContent = 'Sorry, the chat request failed (' + resp.status + ').';
+					return;
+				}
+				const reader = resp.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = '';
+				for (;;) {
+					const { value, done } = await reader.read();
+					if (done) break;
+					buffer += decoder.decode(value, { stream: true });
+					// SSE frames are separated by a blank line.
+					let idx;
+					while ((idx = buffer.indexOf('\n\n')) !== -1) {
+						const frame = buffer.slice(0, idx);
+						buffer = buffer.slice(idx + 2);
+						const line = frame.split('\n').find((l) => l.startsWith('data:'));
+						if (!line) continue;
+						let evt;
+						try { evt = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+						if (evt.type === 'token') {
+							answerText += evt.text;
+							answerEl.textContent = answerText;
+							log.scrollTop = log.scrollHeight;
+						} else if (evt.type === 'citation') {
+							if (citedUids.indexOf(evt.uid) === -1) citedUids.push(evt.uid);
+						} else if (evt.type === 'done') {
+							if (evt.conversationId) conversationId = evt.conversationId;
+						} else if (evt.type === 'error') {
+							answerText += (answerText ? '\n\n' : '') + '[error: ' + evt.error + ']';
+							answerEl.textContent = answerText;
+						}
+					}
+				}
+				if (!answerText) answerEl.textContent = '(no answer returned)';
+				renderCitations(answerEl, citedUids);
+			} catch (e) {
+				answerEl.textContent = 'Sorry, the chat request failed.';
+			} finally {
+				sendBtn.disabled = false;
+				input.disabled = false;
+				input.focus();
+			}
+		}
+
+		form.addEventListener('submit', (e) => {
+			e.preventDefault();
+			const q = input.value.trim();
+			if (!q) return;
+			input.value = '';
+			ask(q);
+		});
+		// Enter to send, Shift+Enter for newline.
+		input.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' && !e.shiftKey) {
+				e.preventDefault();
+				form.requestSubmit();
+			}
+		});
+	}
+
+	document.addEventListener('DOMContentLoaded', () => { initChat(); });
 	</script>
 </body>
 </html>

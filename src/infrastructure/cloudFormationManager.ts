@@ -17,6 +17,7 @@ import {
 	HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
+import { StartIngestionJobCommand } from '@aws-sdk/client-bedrock-agent';
 import {
 	ACMClient,
 	DescribeCertificateCommand,
@@ -36,6 +37,8 @@ import {
 	CERTIFICATE_TEMPLATE,
 	COGNITO_AUTH_TEMPLATE,
 	COMMENT_STACK_TEMPLATE,
+	CHAT_STACK_TEMPLATE,
+	CHAT_HANDLER_BODY,
 	FULL_STACK_OAC_TEMPLATE,
 	FULL_STACK_OAI_TEMPLATE,
 	PASSWORD_AUTH_TEMPLATE,
@@ -46,6 +49,7 @@ import type {
 	CertificateMatch,
 	CognitoAuthOutputs,
 	CommentStackOutputs,
+	ChatStackOutputs,
 	DeploymentConfig,
 	DiscoveredStack,
 	DnsValidationRecord,
@@ -159,6 +163,15 @@ export function mapCommentOutputs(o: Record<string, string>): CommentStackOutput
 	};
 }
 
+/** Map a chat stack's outputs into ChatStackOutputs. */
+export function mapChatOutputs(o: Record<string, string>): ChatStackOutputs {
+	return {
+		functionUrlDomainName: o['ChatFunctionUrlDomainName'] || '',
+		knowledgeBaseId: o['KnowledgeBaseId'] || '',
+		dataSourceId: o['DataSourceId'] || '',
+	};
+}
+
 /**
  * Detect a stack's role from its Output-key signatures, most-specific first,
  * falling back to the cpn-<role>- name prefix. Output keys are authoritative:
@@ -168,6 +181,7 @@ export function mapCommentOutputs(o: Record<string, string>): CommentStackOutput
  */
 export function detectStackRole(stackName: string, outputs: Record<string, string>): StackRole {
 	if ('CommentBucketName' in outputs || 'CommentTableName' in outputs) return 'comment';
+	if ('KnowledgeBaseId' in outputs) return 'chat';
 	if ('UserPoolId' in outputs) return 'cognito';
 	if ('BucketName' in outputs && 'DistributionID' in outputs) return 'full';
 	if ('EdgeFunctionVersionArn' in outputs) return 'password';
@@ -178,6 +192,7 @@ export function detectStackRole(stackName: string, outputs: Record<string, strin
 	if (stackName.startsWith('cpn-cognito-')) return 'cognito';
 	if (stackName.startsWith('cpn-password-')) return 'password';
 	if (stackName.startsWith('cpn-comment-')) return 'comment';
+	if (stackName.startsWith('cpn-chat-')) return 'chat';
 	if (stackName.startsWith('cpn-')) return 'full';
 	return 'unknown';
 }
@@ -196,7 +211,7 @@ export function deriveVariantSuffix(stackName: string, role: StackRole): string 
 	// The 'full' prefix (cpn-) is a prefix of every other role's name, so guard
 	// against e.g. 'cpn-cert-default' being read as a full stack with suffix
 	// 'cert-default'. A valid full suffix never begins with a known role segment.
-	if (role === 'full' && /^(cert|cognito|password|comment)-/.test(suffix)) return undefined;
+	if (role === 'full' && /^(cert|cognito|password|comment|chat)-/.test(suffix)) return undefined;
 	return suffix || 'default';
 }
 
@@ -566,6 +581,8 @@ export class CloudFormationManager {
 			{ ParameterKey: 'CallbackApiDomainName', ParameterValue: config.callbackApiDomainName || '' },
 			{ ParameterKey: 'CommentBucketDomainName', ParameterValue: config.commentBucketDomainName || '' },
 			{ ParameterKey: 'CommentApiDomainName', ParameterValue: config.commentApiDomainName || '' },
+			{ ParameterKey: 'ChatFunctionUrlDomainName', ParameterValue: config.chatFunctionUrlDomainName || '' },
+			{ ParameterKey: 'ChatOriginSecret', ParameterValue: config.chatOriginSecret || '' },
 		];
 	}
 
@@ -577,6 +594,7 @@ export class CloudFormationManager {
 		'VariantName', 'S3Prefix', 'CustomDomain', 'CertificateArn', 'UseRoute53',
 		'HostedZoneId', 'HostedZoneName', 'AuthLambdaEdgeArn',
 		'CallbackApiDomainName', 'CommentBucketDomainName', 'CommentApiDomainName',
+		'ChatFunctionUrlDomainName', 'ChatOriginSecret',
 	] as const;
 
 	/**
@@ -639,6 +657,180 @@ export class CloudFormationManager {
 		if (!stack) throw new Error(`Comment stack ${stackName} not found`);
 
 		return mapCommentOutputs(outputsToRecord(stack.Outputs));
+	}
+
+	/**
+	 * Compose the chat handler source (baking a `const CFG = {...}` line ahead of
+	 * the shipped body — the same S3-asset pattern as packagePasswordEdge), zip it,
+	 * and upload to the bootstrap bucket at a content-addressed key. CFG carries the
+	 * KB id, the generation model ARN, and the shared origin secret the handler
+	 * checks fail-closed. Returns the bucket + key for the stack's AssetsBucket/
+	 * AssetsKey params. Upload is skipped when the identical artifact already exists.
+	 */
+	async packageChatLambda(
+		profile: PublishingProfile,
+		bucketName: string,
+		cfg: { knowledgeBaseId: string; modelArn: string; originSecret: string },
+	): Promise<{ bucket: string; key: string }> {
+		const cfgLine = `const CFG = ${JSON.stringify(cfg)};\n`;
+		const source = cfgLine + CHAT_HANDLER_BODY;
+		const zip = buildLambdaZip(source);
+		const hash = await sha256HexBytes(zip);
+		const key = `lambda/chat-handler/${hash}.zip`;
+
+		// The chat stack deploys in the SITE region (not us-east-1), so the code zip
+		// must live in a bucket the site-region Lambda can read. Reuse the site-region
+		// S3 client + the same bootstrap bucket, uploading under the site region.
+		const s3 = this.plugin.awsSdkManager.getS3Client(profile);
+		let exists = false;
+		try {
+			await s3.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
+			exists = true;
+		} catch {
+			exists = false;
+		}
+		if (!exists) {
+			await s3.send(new PutObjectCommand({
+				Bucket: bucketName,
+				Key: key,
+				Body: zip,
+				ContentType: 'application/zip',
+			}));
+		}
+		return { bucket: bucketName, key };
+	}
+
+	/**
+	 * Deploy the LLM chat backend (Bedrock KB over the kb/ corpus + S3 Vectors +
+	 * streaming chat Lambda Function URL). Deployed in the site region, AFTER the
+	 * full stack (it needs the site bucket name). The handler code is an S3 asset
+	 * uploaded to the site bucket at a content-addressed key with config baked in.
+	 * CAPABILITY_IAM for the KB service role + Lambda role.
+	 *
+	 * @param bucketName the site S3 bucket (holds both the kb/ corpus and, under
+	 *   lambda/chat-handler/, the handler zip).
+	 */
+	async deployChatStack(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		bucketName: string,
+	): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'chat');
+		const client = this.getCloudFormationClient(config, config.region);
+
+		const { key } = await this.packageChatLambda(profile, bucketName, {
+			knowledgeBaseId: 'PLACEHOLDER', // KB id isn't known until the stack creates it.
+			modelArn: config.chatModelArn || this.defaultChatModelArn(config.region, profile.awsSettings!.awsAccountId),
+			originSecret: config.chatOriginSecret || '',
+		});
+		// NOTE: the KB id can't be known before the stack exists, so the handler
+		// reads it from the baked CFG only after a follow-up repackage+update once
+		// outputs are available. To avoid a two-phase code swap, the stack passes the
+		// KB id to the handler via the AssetsKey→CFG only on the post-deploy update
+		// (see updateChatStackWithKbId). The initial deploy uses PLACEHOLDER.
+
+		await this.recoverFailedStackBeforeCreate(client, stackName);
+		await client.send(new CreateStackCommand({
+			StackName: stackName,
+			TemplateBody: CHAT_STACK_TEMPLATE,
+			Parameters: [
+				{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
+				{ ParameterKey: 'SiteBucketName', ParameterValue: bucketName },
+				{ ParameterKey: 'S3Prefix', ParameterValue: config.s3Prefix || '' },
+				{ ParameterKey: 'AssetsBucket', ParameterValue: bucketName },
+				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+			],
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+
+		return stackName;
+	}
+
+	/**
+	 * Re-package the chat handler with the now-known KB id baked into CFG and update
+	 * the chat stack's AssetsKey so the running Lambda queries the right Knowledge
+	 * Base. Called once, after deployChatStack completes and its KnowledgeBaseId
+	 * output is read. The content-addressed key changes, so CloudFormation swaps the
+	 * function code on update.
+	 */
+	async updateChatStackWithKbId(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		bucketName: string,
+		knowledgeBaseId: string,
+	): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'chat');
+		const client = this.getCloudFormationClient(config, config.region);
+
+		const { key } = await this.packageChatLambda(profile, bucketName, {
+			knowledgeBaseId,
+			modelArn: config.chatModelArn || this.defaultChatModelArn(config.region, profile.awsSettings!.awsAccountId),
+			originSecret: config.chatOriginSecret || '',
+		});
+
+		await client.send(new UpdateStackCommand({
+			StackName: stackName,
+			TemplateBody: CHAT_STACK_TEMPLATE,
+			Parameters: [
+				{ ParameterKey: 'VariantName', UsePreviousValue: true },
+				{ ParameterKey: 'SiteBucketName', UsePreviousValue: true },
+				{ ParameterKey: 'S3Prefix', UsePreviousValue: true },
+				{ ParameterKey: 'AssetsBucket', ParameterValue: bucketName },
+				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+			],
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: [
+				{ Key: 'cpn:managed', Value: 'true' },
+				{ Key: 'cpn:profile', Value: config.profileId },
+			],
+		}));
+		return stackName;
+	}
+
+	/**
+	 * Default generation model: the Claude Sonnet 5 *inference profile* ARN in the
+	 * site region. Sonnet 5 is INFERENCE_PROFILE-only, so a bare model id fails —
+	 * the ARN uses the geo-prefixed profile id `us.anthropic.claude-sonnet-5`
+	 * (Phase 0 finding). The account id is required in the inference-profile ARN.
+	 */
+	private defaultChatModelArn(region: string, accountId: string): string {
+		return `arn:aws:bedrock:${region}:${accountId}:inference-profile/us.anthropic.claude-sonnet-5`;
+	}
+
+	async getChatStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<ChatStackOutputs> {
+		const client = this.getCloudFormationClientForProfile(profile, region);
+		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		const stack = response.Stacks?.[0];
+		if (!stack) throw new Error(`Chat stack ${stackName} not found`);
+
+		return mapChatOutputs(outputsToRecord(stack.Outputs));
+	}
+
+	/**
+	 * Fire a Bedrock KB StartIngestionJob so freshly-published kb/{uid}.md changes
+	 * become queryable. Called automatically on publish when chat.sync === 'auto',
+	 * and on demand from the Settings button / command. Returns the ingestion job
+	 * id, or null when chat isn't deployed for the profile. Best-effort: ingestion
+	 * lag is expected, so callers don't block on completion.
+	 */
+	async startChatIngestion(profile: PublishingProfile): Promise<string | null> {
+		const chat = profile.infrastructureState?.chat;
+		if (!chat?.enabled || !chat.knowledgeBaseId || !chat.dataSourceId) {
+			Logger.debug('startChatIngestion: chat not deployed for this profile, skipping');
+			return null;
+		}
+		const client = this.plugin.awsSdkManager.getBedrockAgentClient(profile);
+		const resp = await client.send(new StartIngestionJobCommand({
+			knowledgeBaseId: chat.knowledgeBaseId,
+			dataSourceId: chat.dataSourceId,
+		}));
+		const jobId = resp.ingestionJob?.ingestionJobId || null;
+		Logger.info(`Started KB ingestion job ${jobId} for profile ${profile.id}`);
+		return jobId;
 	}
 
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
@@ -1329,7 +1521,7 @@ export class CloudFormationManager {
 		};
 	}
 
-	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'password' | 'comment' | 'bootstrap'): string {
+	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'password' | 'comment' | 'chat' | 'bootstrap'): string {
 		// The bootstrap (Lambda@Edge assets) stack is one-per-account, not
 		// per-variant, so it takes no suffix.
 		if (type === 'bootstrap') return 'cpn-bootstrap';
@@ -1339,6 +1531,7 @@ export class CloudFormationManager {
 			case 'cognito': return `cpn-cognito-${suffix}`;
 			case 'password': return `cpn-password-${suffix}`;
 			case 'comment': return `cpn-comment-${suffix}`;
+			case 'chat': return `cpn-chat-${suffix}`;
 			default: return `cpn-${suffix}`;
 		}
 	}

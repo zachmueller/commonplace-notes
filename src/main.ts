@@ -352,6 +352,28 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'sync-chat-knowledge-base',
+			name: 'Sync chat knowledge base (re-index published notes)',
+			callback: async () => {
+				const profile = await this.publisher.promptForProfile();
+				if (!profile) return;
+				if (!profile.chat?.enabled) {
+					NoticeManager.showNotice('LLM chat is not enabled for this profile');
+					return;
+				}
+				try {
+					const jobId = await this.cloudFormationManager.startChatIngestion(profile);
+					NoticeManager.showNotice(jobId
+						? 'Chat knowledge base ingestion started (indexing takes a moment)'
+						: 'Chat is not fully deployed for this profile');
+				} catch (e: any) {
+					Logger.error('Manual KB ingestion failed:', e);
+					NoticeManager.showNotice(`KB ingestion failed: ${e.message}`);
+				}
+			}
+		});
+
+		this.addCommand({
 			id: 'copy-active-note-published-url',
 			name: 'Copy link to current note URL',
 			callback: async () => {

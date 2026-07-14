@@ -162,6 +162,16 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 		}
 	}
 
+	// LLM chat (consumed by the chat client via window.__CPN_CONFIG__). Emitted
+	// only when chat is enabled AND the chat stack has been deployed (its outputs
+	// supply the Function URL host behind the /api/chat behavior). The endpoint is
+	// same-origin, so the client just needs the path; auth is inherited at the edge.
+	const chat = profile.infrastructureState?.chat;
+	if (profile.chat?.enabled && chat?.enabled && chat.knowledgeBaseId) {
+		config.chatEnabled = true;
+		config.chatPath = '/api/chat';
+	}
+
 	return JSON.stringify(config, null, '\t');
 }
 

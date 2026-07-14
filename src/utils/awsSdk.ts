@@ -5,6 +5,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { LambdaClient } from '@aws-sdk/client-lambda';
 import { IAMClient } from '@aws-sdk/client-iam';
+import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
@@ -20,6 +21,7 @@ export class AwsSdkManager {
 	// Lambda@Edge cleanup targets us-east-1, which differs from the site region.
 	private lambdaClients: Map<string, LambdaClient> = new Map();
 	private iamClients: Map<string, IAMClient> = new Map();
+	private bedrockAgentClients: Map<string, BedrockAgentClient> = new Map();
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
@@ -131,6 +133,23 @@ export class AwsSdkManager {
 		return client;
 	}
 
+	/**
+	 * Bedrock Agent client for firing KB ingestion jobs (StartIngestionJob) after a
+	 * publish uploads changed kb/{uid}.md corpus objects. Pinned to the site region
+	 * (where the chat stack + KB live).
+	 */
+	getBedrockAgentClient(profile: PublishingProfile): BedrockAgentClient {
+		const existing = this.bedrockAgentClients.get(profile.id);
+		if (existing) return existing;
+
+		const client = new BedrockAgentClient({
+			region: profile.awsSettings!.region,
+			credentials: this.buildCredentialProvider(profile),
+		});
+		this.bedrockAgentClients.set(profile.id, client);
+		return client;
+	}
+
 	private buildCredentialProvider(profile: PublishingProfile): AwsCredentialIdentityProvider {
 		return buildProfileCredentialProvider(profile.awsSettings!.awsProfile);
 	}
@@ -159,6 +178,9 @@ export class AwsSdkManager {
 		for (const [key, client] of this.iamClients) {
 			if (key === profileId || key.startsWith(`${profileId}:`)) { client.destroy(); this.iamClients.delete(key); }
 		}
+
+		const bedrock = this.bedrockAgentClients.get(profileId);
+		if (bedrock) { bedrock.destroy(); this.bedrockAgentClients.delete(profileId); }
 	}
 
 	dispose(): void {
@@ -168,11 +190,13 @@ export class AwsSdkManager {
 		for (const client of this.ddbClients.values()) client.destroy();
 		for (const client of this.lambdaClients.values()) client.destroy();
 		for (const client of this.iamClients.values()) client.destroy();
+		for (const client of this.bedrockAgentClients.values()) client.destroy();
 		this.s3Clients.clear();
 		this.stsClients.clear();
 		this.cfClients.clear();
 		this.ddbClients.clear();
 		this.lambdaClients.clear();
 		this.iamClients.clear();
+		this.bedrockAgentClients.clear();
 	}
 }

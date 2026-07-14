@@ -14,9 +14,17 @@ import * as cdk from 'aws-cdk-lib';
  *   /auth/*        -> callback API Gateway (sets the HttpOnly session cookie)
  *   /api/comments  -> comment write API Gateway (cookie-authorized writes)
  *   /comments/*    -> comment S3 bucket (open, CDN-cached comment JSON reads)
+ *   /api/chat      -> chat Lambda Function URL (SSE streaming; auth-gated)
  *
  * The comment S3 origin's access config differs between OAC and OAI, so the
  * caller passes it in via `commentOriginAccess`.
+ *
+ * The chat origin is identical across OAC and OAI: a plain custom origin with a
+ * CloudFront-injected shared-secret custom header the chat Lambda validates
+ * fail-closed (CloudFront OAC cannot sign a forwarded POST body for a Function
+ * URL — proven in the Phase 0 spike — so the secret header, not OAC, is the
+ * bypass protection). Both the chat domain and the secret are '' by default, so
+ * a site that passes neither is behaviourally unchanged.
  */
 
 // AWS-managed policy IDs (global constants, same as the hardcoded CachingOptimized
@@ -67,6 +75,19 @@ export function addAuthCommentWiring(
 		description: 'API Gateway host backing the /api/comments write origin (from the comment stack)',
 	});
 
+	const chatFunctionUrlDomain = new cdk.CfnParameter(stack, 'ChatFunctionUrlDomainName', {
+		type: 'String',
+		default: '',
+		description: 'Chat Lambda Function URL host backing the /api/chat origin (from the chat stack)',
+	});
+
+	const chatOriginSecret = new cdk.CfnParameter(stack, 'ChatOriginSecret', {
+		type: 'String',
+		default: '',
+		noEcho: true,
+		description: 'Shared secret injected as the x-cpn-origin-secret header on the /api/chat origin (validated by the chat Lambda)',
+	});
+
 	new cdk.CfnCondition(stack, 'HasAuthCallback', {
 		expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(callbackApiDomain.valueAsString, '')),
 	});
@@ -77,6 +98,10 @@ export function addAuthCommentWiring(
 
 	new cdk.CfnCondition(stack, 'HasCommentApi', {
 		expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(commentApiDomain.valueAsString, '')),
+	});
+
+	new cdk.CfnCondition(stack, 'HasChat', {
+		expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(chatFunctionUrlDomain.valueAsString, '')),
 	});
 
 	const apiCustomOriginConfig = {
@@ -124,6 +149,26 @@ export function addAuthCommentWiring(
 					HTTPPort: apiCustomOriginConfig.httpPort,
 					HTTPSPort: apiCustomOriginConfig.httpsPort,
 				},
+			},
+			cdk.Aws.NO_VALUE,
+		),
+		// /api/chat -> chat Lambda Function URL, with the shared-secret custom header
+		// CloudFront injects (the chat Lambda rejects requests lacking it — bypass
+		// protection for the AuthType:NONE Function URL).
+		cdk.Fn.conditionIf(
+			'HasChat',
+			{
+				Id: 'ChatApiOrigin',
+				DomainName: chatFunctionUrlDomain.valueAsString,
+				CustomOriginConfig: {
+					OriginProtocolPolicy: apiCustomOriginConfig.originProtocolPolicy,
+					OriginSSLProtocols: apiCustomOriginConfig.originSslProtocols,
+					HTTPPort: apiCustomOriginConfig.httpPort,
+					HTTPSPort: apiCustomOriginConfig.httpsPort,
+				},
+				OriginCustomHeaders: [
+					{ HeaderName: 'x-cpn-origin-secret', HeaderValue: chatOriginSecret.valueAsString },
+				],
 			},
 			cdk.Aws.NO_VALUE,
 		),
@@ -189,6 +234,30 @@ export function addAuthCommentWiring(
 				CachedMethods: ['GET', 'HEAD'],
 				Compress: true,
 				CachePolicyId: CACHE_OPTIMIZED,
+				LambdaFunctionAssociations: cdk.Fn.conditionIf(
+					'HasAuthLambda',
+					[{ EventType: 'viewer-request', LambdaFunctionARN: cdk.Fn.ref('AuthLambdaEdgeArn') }],
+					cdk.Aws.NO_VALUE,
+				),
+			},
+			cdk.Aws.NO_VALUE,
+		),
+		// /api/chat — never cache; forward the viewer cookie to the origin. CRUCIALLY,
+		// attach the SAME viewer-request auth edge fn as /comments/* when one is
+		// configured (HasAuthLambda), so chat inherits the site's read-gate (Cognito
+		// / password / BYO). Do NOT compress (breaks SSE streaming). The
+		// shared-secret custom origin header is on the origin (above), not here.
+		cdk.Fn.conditionIf(
+			'HasChat',
+			{
+				PathPattern: '/api/chat',
+				TargetOriginId: 'ChatApiOrigin',
+				ViewerProtocolPolicy: 'redirect-to-https',
+				AllowedMethods: ALL_METHODS,
+				CachedMethods: ['GET', 'HEAD'],
+				Compress: false,
+				CachePolicyId: CACHE_DISABLED,
+				OriginRequestPolicyId: ORIGIN_REQ_ALL_VIEWER_EXCEPT_HOST,
 				LambdaFunctionAssociations: cdk.Fn.conditionIf(
 					'HasAuthLambda',
 					[{ EventType: 'viewer-request', LambdaFunctionARN: cdk.Fn.ref('AuthLambdaEdgeArn') }],

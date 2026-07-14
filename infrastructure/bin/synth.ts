@@ -5,6 +5,7 @@ import { BootstrapStack } from '../lib/bootstrap-stack';
 import { CertificateStack } from '../lib/certificate-stack';
 import { CognitoAuthStack } from '../lib/cognito-auth-stack';
 import { CommentStack } from '../lib/comment-stack';
+import { ChatStack } from '../lib/chat-stack';
 import { FullStackOac } from '../lib/full-stack-oac';
 import { FullStackOai } from '../lib/full-stack-oai';
 import { PasswordAuthStack } from '../lib/password-auth-stack';
@@ -35,6 +36,8 @@ new FullStackOac(app, 'CpnFullStackOac');
 new FullStackOai(app, 'CpnFullStackOai');
 
 new CommentStack(app, 'CpnCommentStack');
+
+new ChatStack(app, 'CpnChatStack');
 
 const assembly = app.synth();
 
@@ -103,6 +106,7 @@ const passwordTemplate = getTemplate('CpnPasswordAuthStack');
 const oacTemplate = getTemplate('CpnFullStackOac');
 const oaiTemplate = getTemplate('CpnFullStackOai');
 const commentTemplate = getTemplate('CpnCommentStack');
+const chatTemplate = getTemplate('CpnChatStack');
 
 // The password edge fn is packaged as an S3 asset, not inline. The plugin bakes
 // a `const CFG = {...}` line in front of this compacted body and zips the
@@ -110,6 +114,11 @@ const commentTemplate = getTemplate('CpnCommentStack');
 // same compaction as the old inline path, so behavior is byte-for-byte identical
 // once CFG is prepended.
 const passwordEdgeBody = compactLambdaSource('password-edge.js');
+
+// The chat handler is likewise an S3 asset (it exceeds the 4 KB inline cap and
+// needs streaming). The plugin bakes a `const CFG = {...}` line in front of this
+// compacted body and zips the result, mirroring the password edge fn.
+const chatHandlerBody = compactLambdaSource('chat-handler.js');
 
 const outputPath = path.resolve(__dirname, '../../src/infrastructure/templates.ts');
 
@@ -131,6 +140,10 @@ export const FULL_STACK_OAC_TEMPLATE = ${JSON.stringify(oacTemplate)};
 export const FULL_STACK_OAI_TEMPLATE = ${JSON.stringify(oaiTemplate)};
 
 export const COMMENT_STACK_TEMPLATE = ${JSON.stringify(commentTemplate)};
+
+export const CHAT_STACK_TEMPLATE = ${JSON.stringify(chatTemplate)};
+
+export const CHAT_HANDLER_BODY = ${JSON.stringify(chatHandlerBody)};
 `;
 
 fs.writeFileSync(outputPath, output, 'utf-8');
@@ -143,3 +156,5 @@ console.log(`  Password edge body: ${(passwordEdgeBody.length / 1024).toFixed(1)
 console.log(`  Full stack (OAC): ${(oacTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Full stack (OAI): ${(oaiTemplate.length / 1024).toFixed(1)} KB`);
 console.log(`  Comment stack: ${(commentTemplate.length / 1024).toFixed(1)} KB`);
+console.log(`  Chat stack: ${(chatTemplate.length / 1024).toFixed(1)} KB`);
+console.log(`  Chat handler body: ${(chatHandlerBody.length / 1024).toFixed(1)} KB`);

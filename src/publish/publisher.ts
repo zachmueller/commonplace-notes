@@ -269,6 +269,20 @@ export class Publisher {
 			}
 
 			NoticeManager.showNotice(`Successfully published ${files.length} note(s)`);
+
+			// Auto-trigger KB ingestion so the freshly-published kb/ corpus becomes
+			// queryable. Best-effort: ingestion lag is expected, so a failure here
+			// must not fail the publish. Manual-sync profiles skip this (button/command).
+			if (profile.publishMechanism === 'AWS'
+				&& profile.chat?.enabled
+				&& (profile.chat.sync ?? 'auto') === 'auto') {
+				try {
+					const jobId = await this.plugin.cloudFormationManager.startChatIngestion(profile);
+					if (jobId) NoticeManager.showNotice('Chat knowledge base ingestion started');
+				} catch (e) {
+					Logger.warn('KB ingestion trigger failed (publish still succeeded):', e);
+				}
+			}
 		} catch (error) {
 			NoticeManager.showNotice(`Error during publishing: ${error.message}`);
 			Logger.error('Publishing error:', error);

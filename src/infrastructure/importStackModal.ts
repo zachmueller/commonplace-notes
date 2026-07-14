@@ -23,7 +23,7 @@ import { Logger } from '../utils/logging';
 const EDGE_REGION = 'us-east-1';
 
 /** The importable roles (excludes 'unknown') in the order slots are populated. */
-const ROLE_ORDER: StackRole[] = ['full', 'cert', 'cognito', 'password', 'comment'];
+const ROLE_ORDER: StackRole[] = ['full', 'cert', 'cognito', 'password', 'comment', 'chat'];
 
 const ROLE_LABELS: Record<StackRole, string> = {
 	full: 'Site',
@@ -31,6 +31,7 @@ const ROLE_LABELS: Record<StackRole, string> = {
 	cognito: 'Read-gate: Cognito',
 	password: 'Read-gate: Password',
 	comment: 'Comments',
+	chat: 'LLM chat',
 	unknown: 'Unrecognized',
 };
 

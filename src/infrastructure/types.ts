@@ -11,6 +11,8 @@ export type DeploymentStatus =
 	| 'deployed'
 	| 'comment-deploying'
 	| 'comment-deployed'
+	| 'chat-deploying'
+	| 'chat-deployed'
 	| 'failed'
 	| 'destroying';
 
@@ -94,6 +96,29 @@ export interface CommentStackOutputs {
 	tableName: string;
 }
 
+/** Deployment bookkeeping for the LLM chat stack (Bedrock KB over the corpus). */
+export interface ChatState {
+	stackName: string;
+	enabled: boolean;
+	/** Chat Lambda Function URL host (backs the /api/chat CloudFront origin). */
+	functionUrlDomainName: string;
+	knowledgeBaseId: string;
+	dataSourceId: string;
+	/** Ingestion trigger: 'auto' fires on publish, 'manual' via button/command. */
+	sync: 'auto' | 'manual';
+	/** Bedrock model/inference-profile ARN used for generation. */
+	modelArn: string;
+	/** Shared secret injected as the /api/chat origin header (also baked into the handler). */
+	originSecret: string;
+}
+
+/** Raw outputs read from a deployed chat stack. */
+export interface ChatStackOutputs {
+	functionUrlDomainName: string;
+	knowledgeBaseId: string;
+	dataSourceId: string;
+}
+
 export interface InfrastructureState {
 	certStackName?: string;
 	fullStackName?: string;
@@ -116,6 +141,7 @@ export interface InfrastructureState {
 	cognitoAuth?: CognitoAuthState;
 	passwordAuth?: PasswordAuthState;
 	comment?: CommentState;
+	chat?: ChatState;
 }
 
 export interface DeploymentConfig {
@@ -160,6 +186,20 @@ export interface DeploymentConfig {
 	/** Site distribution id / OAI id for the comment bucket's cross-stack read grant. */
 	siteDistributionId?: string;
 	siteOriginAccessIdentityId?: string;
+	/** Deploy the LLM chat backend (Bedrock KB over the published corpus). */
+	chatEnabled?: boolean;
+	/** KB ingestion trigger. Default 'auto' (StartIngestionJob on publish). */
+	chatSync?: 'auto' | 'manual';
+	/** Bedrock model/inference-profile ARN for generation (default Claude Sonnet 5). */
+	chatModelArn?: string;
+	/** Vector store backing the KB (default S3 Vectors; OpenSearch is an upgrade path). */
+	chatVectorStore?: 's3vectors' | 'opensearch';
+	/** Site bucket name, passed to the chat stack so its KB data source can read kb/. */
+	siteBucketName?: string;
+	/** Chat Lambda Function URL host, threaded into the site distribution's /api/chat origin. */
+	chatFunctionUrlDomainName?: string;
+	/** Shared secret for the /api/chat origin header (generated at deploy time). */
+	chatOriginSecret?: string;
 }
 
 export interface StackOutputs {
@@ -178,7 +218,7 @@ export interface StackOutputs {
  * cpn-* (or cpn:managed-tagged) stack whose Outputs match no known role — the
  * import UI leaves it unchecked with a manual role-override dropdown.
  */
-export type StackRole = 'full' | 'cert' | 'cognito' | 'password' | 'comment' | 'unknown';
+export type StackRole = 'full' | 'cert' | 'cognito' | 'password' | 'comment' | 'chat' | 'unknown';
 
 /**
  * A CloudFormation stack found by scanning an account/region during import.

@@ -3,7 +3,7 @@ import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
-import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
+import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, ChatStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from '../publish/awsUpload';
 import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 
@@ -33,6 +33,8 @@ export class DeploymentWizardModal extends Modal {
 	private cognitoStackName: string = '';
 	private commentOutputs: CommentStackOutputs | null = null;
 	private commentStackName: string = '';
+	private chatOutputs: ChatStackOutputs | null = null;
+	private chatStackName: string = '';
 	private passwordStackName: string = '';
 	private passwordEdgeArn: string = '';
 	private aborted = false;
@@ -64,6 +66,8 @@ export class DeploymentWizardModal extends Modal {
 			googleClientId: auth?.googleClientId || '',
 			authDomainPrefix: auth?.authDomainPrefix || '',
 			commentingEnabled: profile.commenting?.enabled || false,
+			chatEnabled: profile.chat?.enabled || false,
+			chatSync: profile.chat?.sync || 'auto',
 		};
 	}
 
@@ -330,6 +334,44 @@ export class DeploymentWizardModal extends Modal {
 			// prefix change so the text input keeps focus.
 			const hintEl = container.createDiv({ cls: 'cpn-oauth-hint' });
 			this.renderGoogleOAuthHint(hintEl);
+		}
+
+		// --- LLM chat over the published corpus ------------------------------
+		new Setting(container)
+			.setName('Enable LLM chat over published notes')
+			.setDesc('Deploy a Bedrock Knowledge Base + streaming chat endpoint behind this distribution. Readers can ask questions across your published notes and get grounded, citation-bearing answers. Chat inherits whatever read-access mode you set above (the endpoint is only reachable through the auth-gated CloudFront path).')
+			.addToggle(toggle => toggle
+				.setValue(this.config.chatEnabled || false)
+				.onChange(v => {
+					this.config.chatEnabled = v;
+					this.renderStep();
+				}));
+
+		if (this.config.chatEnabled) {
+			// Explicit cost disclosure — the vector-store choice is the big cost lever.
+			const cost = container.createEl('p', { cls: 'cpn-wizard-description' });
+			cost.setText(
+				'Cost: the default S3 Vectors store has near-zero idle cost (a few cents/month for storage). ' +
+				'Per-question cost is proportional to Bedrock usage (model + embedding tokens). ' +
+				'OpenSearch Serverless (an advanced upgrade path, not deployed here) carries an always-on ~$350–700/month floor.'
+			);
+
+			new Setting(container)
+				.setName('Knowledge base sync')
+				.setDesc('Auto: a publish automatically re-indexes changed notes (recommended). Manual: re-index on demand from a command/button (ingestion is not instantaneous).')
+				.addDropdown(dd => dd
+					.addOption('auto', 'Auto (on every publish)')
+					.addOption('manual', 'Manual (command only)')
+					.setValue(this.config.chatSync || 'auto')
+					.onChange(v => { this.config.chatSync = v as 'auto' | 'manual'; }));
+
+			new Setting(container)
+				.setName('Chat model (advanced)')
+				.setDesc('Bedrock inference-profile ARN for answer generation. Leave blank to default to Claude Sonnet 5 in your region. Note: Sonnet 5 is inference-profile-only — use an inference-profile ARN, not a bare model id.')
+				.addText(text => text
+					.setValue(this.config.chatModelArn || '')
+					.setPlaceholder('arn:aws:bedrock:<region>:<acct>:inference-profile/us.anthropic.claude-sonnet-5')
+					.onChange(v => { this.config.chatModelArn = v.trim() || undefined; }));
 		}
 	}
 
@@ -1100,6 +1142,11 @@ export class DeploymentWizardModal extends Modal {
 				await this.runCommentDeploy(container, eventLog);
 				if (this.aborted) return;
 
+				// Optionally deploy the chat backend, then re-update the full stack to
+				// attach the /api/chat origin + behavior (auth-gated, secret-header).
+				await this.runChatDeploy(container, eventLog);
+				if (this.aborted) return;
+
 				// Populate the profile from stack outputs and seed the initial site
 				// assets (landing index.html, styles, scripts, config) so the deployed
 				// site serves a working page immediately. Done automatically here rather
@@ -1211,6 +1258,84 @@ export class DeploymentWizardModal extends Modal {
 		await this.updateInfraState({ status: 'comment-deployed' });
 	}
 
+	/**
+	 * Deploy the LLM chat backend (when enabled), then re-update the full stack to
+	 * attach the /api/chat origin + behavior (carrying the shared secret header and
+	 * the auth-edge association). Runs after the full stack (needs the site bucket
+	 * + distribution) and after any comment deploy (so its full-stack update layers
+	 * on top). The chat handler is packaged with a generated origin secret; the same
+	 * secret is injected by CloudFront and validated fail-closed by the Lambda.
+	 */
+	private async runChatDeploy(container: HTMLElement, eventLog: HTMLElement): Promise<void> {
+		if (!this.config.chatEnabled || !this.stackOutputs) return;
+
+		container.createEl('p', {
+			text: 'Deploying the chat backend (Bedrock Knowledge Base, S3 Vectors, streaming endpoint)...',
+			cls: 'cpn-wizard-description',
+		});
+
+		// Generate the CloudFront↔origin shared secret once, here: baked into the
+		// handler zip AND injected as the /api/chat origin custom header.
+		this.config.chatOriginSecret = this.generateOriginSecret();
+		const bucketName = this.stackOutputs.bucketName;
+
+		const chatStackName = await this.cfManager.deployChatStack(this.config as DeploymentConfig, this.activeProfile, bucketName);
+		await this.updateInfraState({ status: 'chat-deploying' });
+
+		const status = await this.cfManager.pollStackUntilComplete(
+			chatStackName,
+			this.activeProfile,
+			(event) => this.appendEvent(eventLog, event),
+			this.config.region,
+		);
+		if (this.aborted) return;
+		if (status !== 'CREATE_COMPLETE') {
+			throw new Error(`Chat stack deployment failed: ${status}`);
+		}
+
+		const outputs = await this.cfManager.getChatStackOutputs(chatStackName, this.activeProfile, this.config.region);
+		this.chatStackName = chatStackName;
+		this.chatOutputs = outputs;
+
+		// The handler was packaged with a PLACEHOLDER KB id (unknown until the stack
+		// created the KB). Re-package with the real id and update the stack so the
+		// Lambda queries the right Knowledge Base.
+		container.createEl('p', {
+			text: 'Finalizing the chat function with the knowledge base id...',
+			cls: 'cpn-wizard-description',
+		});
+		await this.cfManager.updateChatStackWithKbId(this.config as DeploymentConfig, this.activeProfile, bucketName, outputs.knowledgeBaseId);
+		await this.cfManager.pollStackUntilComplete(
+			chatStackName,
+			this.activeProfile,
+			(event) => this.appendEvent(eventLog, event),
+			this.config.region,
+		);
+		if (this.aborted) return;
+
+		// Re-update the full stack to carve in the /api/chat origin + behavior.
+		container.createEl('p', {
+			text: 'Attaching the chat route to the site distribution...',
+			cls: 'cpn-wizard-description',
+		});
+		this.config.chatFunctionUrlDomainName = outputs.functionUrlDomainName;
+		await this.cfManager.updateFullStack(this.config as DeploymentConfig);
+		await this.cfManager.pollStackUntilComplete(
+			this.cfManager.getStackName(this.config.variantName || '', 'full'),
+			this.activeProfile,
+			(event) => this.appendEvent(eventLog, event),
+			this.config.region,
+		);
+		await this.updateInfraState({ status: 'chat-deployed' });
+	}
+
+	/** Generate a URL-safe random shared secret for the /api/chat origin header. */
+	private generateOriginSecret(): string {
+		const bytes = new Uint8Array(32);
+		globalThis.crypto.getRandomValues(bytes);
+		return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+	}
+
 	private renderStep6Complete(): void {
 		const container = this.contentEl.createDiv({ cls: 'cpn-wizard-step' });
 		container.createEl('h2', { text: 'Deployment Complete' });
@@ -1289,6 +1414,17 @@ export class DeploymentWizardModal extends Modal {
 			});
 		}
 
+		if (this.config.chatEnabled && this.chatOutputs) {
+			const chatDiv = container.createDiv({ cls: 'cpn-wizard-outputs' });
+			chatDiv.createEl('h3', { text: 'LLM chat is deployed' });
+			chatDiv.createEl('p', {
+				text: 'Run "Publish all notes" to upload the kb/ corpus, which triggers a knowledge-base '
+					+ 'ingestion. Indexing is not instantaneous — wait a minute after the first publish, then '
+					+ 'open the site and use the "Ask these notes" button.',
+				cls: 'cpn-wizard-description',
+			});
+		}
+
 		new Setting(container)
 			.setName('Re-apply profile settings')
 			.setDesc('Outputs were already applied and the initial site assets uploaded automatically. Use this to re-apply the outputs and re-push the site assets.')
@@ -1354,6 +1490,7 @@ export class DeploymentWizardModal extends Modal {
 			cognitoAuth: this.buildCognitoAuthState(),
 			passwordAuth: this.buildPasswordAuthState(),
 			comment: this.buildCommentState(),
+			chat: this.buildChatState(),
 		};
 
 		// Persist read-gate intent (mode + low-sensitivity hash for redeploys).
@@ -1375,6 +1512,10 @@ export class DeploymentWizardModal extends Modal {
 
 		profile.commenting = (this.config.commentingEnabled && this.commentOutputs)
 			? { enabled: true }
+			: undefined;
+
+		profile.chat = (this.config.chatEnabled && this.chatOutputs)
+			? { enabled: true, sync: this.config.chatSync || 'auto', modelId: this.config.chatModelArn }
 			: undefined;
 
 		await this.plugin.saveSettings();
@@ -1440,6 +1581,23 @@ export class DeploymentWizardModal extends Modal {
 			bucketDomainName: this.commentOutputs.bucketDomainName,
 			apiDomain: this.commentOutputs.apiDomain,
 			tableName: this.commentOutputs.tableName,
+		};
+	}
+
+	/** Chat-stack deployment bookkeeping, or undefined when not deployed this run. */
+	private buildChatState() {
+		if (!this.config.chatEnabled || !this.chatOutputs) return undefined;
+		const accountId = this.plugin.settings.publishingProfiles.find(p => p.id === this.profile.id)?.awsSettings?.awsAccountId || '';
+		return {
+			stackName: this.chatStackName,
+			enabled: true,
+			functionUrlDomainName: this.chatOutputs.functionUrlDomainName,
+			knowledgeBaseId: this.chatOutputs.knowledgeBaseId,
+			dataSourceId: this.chatOutputs.dataSourceId,
+			sync: this.config.chatSync || 'auto',
+			modelArn: this.config.chatModelArn
+				|| `arn:aws:bedrock:${this.config.region}:${accountId}:inference-profile/us.anthropic.claude-sonnet-5`,
+			originSecret: this.config.chatOriginSecret || '',
 		};
 	}
 
