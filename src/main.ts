@@ -33,6 +33,7 @@ import { Publisher } from './publish/publisher';
 import { Logger } from './utils/logging';
 import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
+import { DeployHookManager } from './infrastructure/hooks/deployHookManager';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { RecentCommentsView, RECENT_COMMENTS_VIEW } from './views/recentCommentsView';
 import type { CommentThreadCache } from './utils/recentComments';
@@ -97,6 +98,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	publisher: Publisher;
 	awsSdkManager: AwsSdkManager;
 	cloudFormationManager: CloudFormationManager;
+	deployHookManager: DeployHookManager;
 	private registeredProfileCommandIds: string[] = [];
 
 	// Session-only per-note comment thread cache, shared by both comments-panel
@@ -137,6 +139,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.templateManager = new TemplateManager(this);
 		this.awsSdkManager = new AwsSdkManager(this);
 		this.cloudFormationManager = new CloudFormationManager(this);
+		this.deployHookManager = new DeployHookManager(this);
 
 		// Initialize indicator updates
 		// Targeted indicator refresh upon file open events

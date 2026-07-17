@@ -98,6 +98,9 @@ export function openUpgradePasswordGateModal(ctx: ProfileContext, profile: Publi
 						}
 						const { edgeFunctionVersionArn } = await cfm.getPasswordAuthOutputs(recreated, profile);
 
+						// Pre-deploy hooks (succeed-with-warning; never blocks).
+						await plugin.deployHookManager.runDeployHooks('pre', { profile, outputs: null });
+
 						// Re-point the site distribution at the new edge version.
 						await cfm.updateFullStackAuthLambda(
 							state.fullStackName!,
@@ -121,6 +124,15 @@ export function openUpgradePasswordGateModal(ctx: ProfileContext, profile: Publi
 						};
 						profile.readGate = { mode: 'password', passwordHash: config.passwordHash };
 						await plugin.saveSettings();
+						// Post-deploy hooks — fire once after the reconcile settles. Guarded so a
+						// failed outputs fetch cannot turn a successful upgrade into a failure.
+						try {
+							const outputs = await cfm.getStackOutputs(state.fullStackName!, profile, state.region);
+							await plugin.deployHookManager.runDeployHooks('post', { profile, outputs });
+						} catch (hookErr) {
+							Logger.error('Post-deploy hooks could not run (the password upgrade still succeeded):', hookErr);
+							new Notice('Post-deploy hooks could not run (see console); the upgrade succeeded.');
+						}
 						modal.close();
 						ctx.rerenderProfile();
 						new Notice('Password gate upgraded successfully.');

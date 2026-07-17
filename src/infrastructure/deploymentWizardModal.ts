@@ -1115,6 +1115,13 @@ export class DeploymentWizardModal extends Modal {
 				this.config.callbackApiDomainName = this.cognitoOutputs.callbackApiDomain;
 			}
 
+			// Pre-deploy hooks — succeed-with-warning; never blocks the deploy. No
+			// stack exists yet on a greenfield deploy, so outputs is null.
+			await this.plugin.deployHookManager.runDeployHooks('pre', {
+				profile: this.activeProfile,
+				outputs: null,
+			});
+
 			const stackName = await this.cfManager.deployFullStack(this.config as DeploymentConfig);
 
 			await this.updateInfraState({
@@ -1167,6 +1174,16 @@ export class DeploymentWizardModal extends Modal {
 				});
 				await this.applyOutputsToProfile();
 				if (this.aborted) return;
+
+				// Post-deploy hooks — fire ONCE, after the whole deploy sequence has
+				// settled (the final reconciled distribution, incl. comment/chat origin
+				// updates). Attached here rather than inside applyOutputsToProfile() so
+				// the step-6 "Re-apply & re-push assets" button does not re-fire hooks.
+				// this.stackOutputs was set above inside this success block.
+				await this.plugin.deployHookManager.runDeployHooks('post', {
+					profile: this.activeProfile,
+					outputs: this.stackOutputs!,
+				});
 
 				this.step = 6;
 				this.renderStep();

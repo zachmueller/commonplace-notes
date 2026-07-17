@@ -47,6 +47,9 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 					btn.setButtonText('Updating...');
 					statusEl.empty();
 					try {
+						// Pre-deploy hooks (succeed-with-warning; never blocks).
+						await plugin.deployHookManager.runDeployHooks('pre', { profile, outputs: null });
+
 						// Targeted update: change ONLY the auth ARN and inherit every
 						// other parameter via UsePreviousValue. Rebuilding the full
 						// parameter set from this partial config would blank the
@@ -78,6 +81,16 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 						if (finalStatus === 'UPDATE_COMPLETE') {
 							state.authLambdaEdgeArn = arnValue || undefined;
 							await plugin.saveSettings();
+							// Post-deploy hooks — fire once after the reconcile settles. Guarded so a
+							// failed outputs fetch cannot turn a successful update into a failure.
+							try {
+								const outputs = await plugin.cloudFormationManager.getStackOutputs(
+									state.fullStackName!, profile, state.region);
+								await plugin.deployHookManager.runDeployHooks('post', { profile, outputs });
+							} catch (hookErr) {
+								Logger.error('Post-deploy hooks could not run (the stack update still succeeded):', hookErr);
+								new Notice('Post-deploy hooks could not run (see console); the update succeeded.');
+							}
 							modal.close();
 							ctx.rerenderProfile();
 							new Notice('Infrastructure updated successfully.');

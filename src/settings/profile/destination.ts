@@ -4,6 +4,7 @@ import { initAWSSettings } from './shared';
 import { renderInfrastructureSection } from './infrastructure';
 import { renderAuthSection } from './auth';
 import { renderSiteCustomizationSection } from './siteCustomization';
+import { renderDeployHooksSection } from './deployHooks';
 
 /**
  * "Destination" section: publish mechanism + base URL, then mechanism-specific
@@ -52,6 +53,9 @@ export function renderDestinationSection(
 
 		const siteSection = ctx.createSection(profileContainer, 'Site Customization');
 		renderSiteCustomizationSection(ctx, siteSection);
+
+		const hooksSection = ctx.createSection(profileContainer, 'Deploy hooks', { defaultCollapsed: true });
+		renderDeployHooksSection(ctx, hooksSection);
 	} else {
 		renderLocalSettings(ctx, destSection);
 	}
