@@ -39,14 +39,14 @@ export class MappingManager {
 		const uidToHashPath = `${mappingDir}/uid-to-hash.json`;
 
 		try {
-			let slugToUid = {};
-			let uidToHash = {};
+			let slugToUid: Record<string, string> = {};
+			let uidToHash: Record<string, string> = {};
 			const timestamp = Date.now();
 
 			// Try to load slug-to-uid mapping
 			try {
 				const slugToUidContent = await this.plugin.app.vault.adapter.read(slugToUidPath);
-				slugToUid = JSON.parse(slugToUidContent);
+				slugToUid = JSON.parse(slugToUidContent) as Record<string, string>;
 			} catch (e) {
 				// If file exists but is corrupted, back it up
 				if (await this.plugin.app.vault.adapter.exists(slugToUidPath)) {
@@ -68,8 +68,8 @@ export class MappingManager {
 							JSON.stringify({
 								timestamp,
 								file: 'slug-to-uid.json',
-								error: e.message,
-								stack: e.stack
+								error: e instanceof Error ? e.message : String(e),
+								stack: e instanceof Error ? e.stack : undefined
 							})
 						);
 					} catch (backupError) {
@@ -81,7 +81,7 @@ export class MappingManager {
 			// Try to load uid-to-hash mapping
 			try {
 				const uidToHashContent = await this.plugin.app.vault.adapter.read(uidToHashPath);
-				uidToHash = JSON.parse(uidToHashContent);
+				uidToHash = JSON.parse(uidToHashContent) as Record<string, string>;
 			} catch (e) {
 				// If file exists but is corrupted, back it up
 				if (await this.plugin.app.vault.adapter.exists(uidToHashPath)) {
@@ -103,8 +103,8 @@ export class MappingManager {
 							JSON.stringify({
 								timestamp,
 								file: 'uid-to-hash.json',
-								error: e.message,
-								stack: e.stack
+								error: e instanceof Error ? e.message : String(e),
+								stack: e instanceof Error ? e.stack : undefined
 							})
 						);
 					} catch (backupError) {

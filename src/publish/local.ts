@@ -1,7 +1,7 @@
 import { TFile } from 'obsidian';
 import * as path from 'path';
 import CommonplaceNotesPlugin from '../main';
-import { Logger } from '../utils/logging';
+import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 
 export async function publishLocalNotes(
@@ -70,7 +70,7 @@ export async function publishLocalNotes(
 
 	} catch (error) {
 		Logger.error('Error in local publishing:', error);
-		NoticeManager.showNotice(`Local publishing failed: ${error.message}`);
+		NoticeManager.showNotice(`Local publishing failed: ${errorMessage(error)}`);
 		return false;
 	}
 }
@@ -80,7 +80,7 @@ async function combineNotesData(
 	profileId: string,
 	stagedNotesDir: string
 ) {
-	const combinedNotes: Record<string, any> = {};
+	const combinedNotes: Record<string, unknown> = {};
 
 	// Read all staged note files
 	const stagedFiles = await plugin.app.vault.adapter.list(stagedNotesDir);
@@ -89,7 +89,7 @@ async function combineNotesData(
 		if (file.endsWith('.json') && path.basename(file) !== 'index.json') {
 			try {
 				const content = await plugin.app.vault.adapter.read(file);
-				const noteData = JSON.parse(content);
+				const noteData = JSON.parse(content) as { uid?: string };
 
 				// Use UID as the key for the combined object
 				if (noteData.uid) {
@@ -107,7 +107,7 @@ async function combineNotesData(
 async function processTemplate(
 	plugin: CommonplaceNotesPlugin,
 	profileId: string,
-	combinedNotes: Record<string, any>
+	combinedNotes: Record<string, unknown>
 ): Promise<string> {
 	// Read the template file
 	const templatePath = plugin.profileManager.getLocalTemplateHtmlPath();
@@ -133,19 +133,19 @@ async function processTemplate(
 	await plugin.mappingManager.loadProfileMappings(profileId);
 	const mappingDir = plugin.profileManager.getMappingDir(profileId);
 
-	let slugToUid = {};
-	let uidToHash = {};
+	let slugToUid: Record<string, unknown> = {};
+	let uidToHash: Record<string, unknown> = {};
 
 	try {
 		const slugToUidContent = await plugin.app.vault.adapter.read(`${mappingDir}/slug-to-uid.json`);
-		slugToUid = JSON.parse(slugToUidContent);
+		slugToUid = JSON.parse(slugToUidContent) as Record<string, unknown>;
 	} catch (e) {
 		Logger.warn('Could not load slug-to-uid mapping:', e);
 	}
 
 	try {
 		const uidToHashContent = await plugin.app.vault.adapter.read(`${mappingDir}/uid-to-hash.json`);
-		uidToHash = JSON.parse(uidToHashContent);
+		uidToHash = JSON.parse(uidToHashContent) as Record<string, unknown>;
 	} catch (e) {
 		Logger.warn('Could not load uid-to-hash mapping:', e);
 	}

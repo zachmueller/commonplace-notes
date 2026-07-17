@@ -3,7 +3,7 @@ import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { TFile, parseYaml } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
-import { Logger } from '../utils/logging';
+import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs, renderVendorJs } from './siteRenderer';
 import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
@@ -149,7 +149,7 @@ export async function pushLocalJsonsToS3(
 		if (isCredentialError(error)) {
 			NoticeManager.showNotice('S3 permission error — please refresh your AWS credentials and try again.', 10000);
 		} else {
-			NoticeManager.showNotice(`Upload failed: ${error.message}`);
+			NoticeManager.showNotice(`Upload failed: ${errorMessage(error)}`);
 		}
 		return false;
 	}
@@ -508,7 +508,7 @@ export async function pushSiteAssetsToS3(
 		if (isCredentialError(error)) {
 			NoticeManager.showNotice('S3 permission error — please refresh your AWS credentials and try again.', 10000);
 		} else {
-			NoticeManager.showNotice(`Site assets upload failed: ${error.message}`);
+			NoticeManager.showNotice(`Site assets upload failed: ${errorMessage(error)}`);
 		}
 		return false;
 	}
@@ -544,7 +544,7 @@ export async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugi
 		return true;
 	} catch (error) {
 		Logger.error('Failed to create CloudFront invalidation:', error);
-		NoticeManager.showNotice('Failed to create CloudFront invalidation: ' + error.message);
+		NoticeManager.showNotice('Failed to create CloudFront invalidation: ' + errorMessage(error));
 		return false;
 	}
 }

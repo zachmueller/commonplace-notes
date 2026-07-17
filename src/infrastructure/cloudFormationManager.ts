@@ -24,6 +24,7 @@ import {
 	ACMClient,
 	DescribeCertificateCommand,
 	ListCertificatesCommand,
+	KeyAlgorithm,
 } from '@aws-sdk/client-acm';
 import {
 	Route53Client,
@@ -61,13 +62,13 @@ import type {
 	StackRole,
 } from './types';
 import { certCoversDomain } from './certMatch';
-import { Logger } from '../utils/logging';
+import { Logger, errorMessage, errorCode } from '../utils/logging';
 
 const POLL_INTERVAL_MS = 5000;
 
 /** CloudFront-compatible ACM key algorithms. ListCertificates defaults to RSA
  * only, so ECDSA certs must be requested explicitly via Includes.keyTypes. */
-const CLOUDFRONT_KEY_TYPES = ['RSA_2048', 'EC_prime256v1', 'EC_secp384r1'];
+const CLOUDFRONT_KEY_TYPES: KeyAlgorithm[] = ['RSA_2048', 'EC_prime256v1', 'EC_secp384r1'];
 
 /** Light projection of an ACM ListCertificates summary (SANs may be truncated). */
 interface CertSummaryLite {
@@ -254,8 +255,8 @@ export class CloudFormationManager {
 		try {
 			const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 			status = response.Stacks?.[0]?.StackStatus;
-		} catch (err: any) {
-			if (/does not exist/i.test(String(err?.message || err))) return; // No leftover — normal create.
+		} catch (err: unknown) {
+			if (/does not exist/i.test(errorMessage(err))) return; // No leftover — normal create.
 			throw err;
 		}
 
@@ -269,7 +270,7 @@ export class CloudFormationManager {
 	 *  the resolved template+params are byte-identical to the live stack. This is a
 	 *  success for an idempotent re-run, not a failure. */
 	private isNoUpdatesError(err: unknown): boolean {
-		return /No updates are to be performed/i.test(String((err as any)?.message || err));
+		return /No updates are to be performed/i.test(errorMessage(err));
 	}
 
 	/** The parameter keys the live stack was actually deployed with (empty set if
@@ -280,8 +281,8 @@ export class CloudFormationManager {
 			const resp = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 			const params = resp.Stacks?.[0]?.Parameters || [];
 			return new Set(params.map((p) => p.ParameterKey!).filter(Boolean));
-		} catch (err: any) {
-			if (/does not exist/i.test(String(err?.message || err))) return new Set();
+		} catch (err: unknown) {
+			if (/does not exist/i.test(errorMessage(err))) return new Set();
 			throw err;
 		}
 	}
@@ -341,8 +342,8 @@ export class CloudFormationManager {
 		try {
 			const resp = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 			status = resp.Stacks?.[0]?.StackStatus;
-		} catch (err: any) {
-			if (!/does not exist/i.test(String(err?.message || err))) throw err;
+		} catch (err: unknown) {
+			if (!/does not exist/i.test(errorMessage(err))) throw err;
 			status = undefined; // No stack — fall through to create.
 		}
 
@@ -544,8 +545,8 @@ export class CloudFormationManager {
 			if (status && (status === 'CREATE_COMPLETE' || status === 'UPDATE_COMPLETE')) {
 				return mapBootstrapOutputs(outputsToRecord(existing.Stacks?.[0]?.Outputs)).assetsBucketName || bucketName;
 			}
-		} catch (err: any) {
-			if (!/does not exist/i.test(String(err?.message || err))) throw err;
+		} catch (err: unknown) {
+			if (!/does not exist/i.test(errorMessage(err))) throw err;
 		}
 
 		await this.recoverFailedStackBeforeCreate(client, stackName);
@@ -1149,8 +1150,8 @@ export class CloudFormationManager {
 		try {
 			const status = await this.getStackStatus(stackName, profile, region);
 			return status === 'DELETE_COMPLETE' ? null : status;
-		} catch (err: any) {
-			const message = String(err?.message || err);
+		} catch (err: unknown) {
+			const message = errorMessage(err);
 			if (/does not exist/i.test(message) || /not found/i.test(message)) return null;
 			throw err;
 		}
@@ -1233,8 +1234,8 @@ export class CloudFormationManager {
 				keyMarker = listed.NextKeyMarker;
 				versionIdMarker = listed.NextVersionIdMarker;
 			} while (keyMarker || versionIdMarker);
-		} catch (err: any) {
-			const code = err?.name || err?.Code;
+		} catch (err: unknown) {
+			const code = errorCode(err);
 			if (code === 'NoSuchBucket') return; // Already gone — nothing to empty.
 			throw err;
 		}
@@ -1250,8 +1251,8 @@ export class CloudFormationManager {
 		const client = this.plugin.awsSdkManager.getS3Client(profile);
 		try {
 			await client.send(new DeleteBucketCommand({ Bucket: bucketName }));
-		} catch (err: any) {
-			const code = err?.name || err?.Code;
+		} catch (err: unknown) {
+			const code = errorCode(err);
 			if (code === 'NoSuchBucket') return; // Already gone.
 			throw err;
 		}
@@ -1309,8 +1310,8 @@ export class CloudFormationManager {
 		const pollGone = async (): Promise<string> => {
 			try {
 				return await this.pollStackUntilCompleteByClient(client, stackName, onEvent);
-			} catch (err: any) {
-				if (/does not exist/i.test(String(err?.message || err))) return 'DELETE_COMPLETE';
+			} catch (err: unknown) {
+				if (/does not exist/i.test(errorMessage(err))) return 'DELETE_COMPLETE';
 				throw err;
 			}
 		};
@@ -1393,7 +1394,7 @@ export class CloudFormationManager {
 		do {
 			const response = await client.send(new ListCertificatesCommand({
 				CertificateStatuses: ['ISSUED'],
-				Includes: { keyTypes: CLOUDFRONT_KEY_TYPES as any },
+				Includes: { keyTypes: CLOUDFRONT_KEY_TYPES },
 				NextToken: nextToken,
 			}));
 			for (const cert of response.CertificateSummaryList || []) {

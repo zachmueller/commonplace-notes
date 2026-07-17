@@ -32,7 +32,7 @@ export class ContentIndexManager {
 		const indexPath = this.plugin.profileManager.getContentIndexPath(profileId);
 		try {
 			const content = await this.plugin.app.vault.adapter.read(indexPath);
-			const index = JSON.parse(content);
+			const index = JSON.parse(content) as ContentIndex;
 			this.loadedIndices.set(profileId, index);
 			return index;
 		} catch (e) {

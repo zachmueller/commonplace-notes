@@ -2,7 +2,7 @@ import { TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from './path';
 import { ResolvedNoteInfo } from './remarkObsidianLinks';
-import { Logger } from './logging';
+import { Logger, errorMessage } from './logging';
 import { NoticeManager } from '../utils/notice';
 import { UrlScheme } from './urlScheme';
 import type { ParserContext } from './parser/types';
@@ -46,7 +46,7 @@ export class NoteManager {
 		const historyPath = this.plugin.profileManager.getPublishHistoryPath(profileId);
 		try {
 			const content = await this.plugin.app.vault.adapter.read(historyPath);
-			const history = JSON.parse(content);
+			const history = JSON.parse(content) as Record<string, string[]>;
 			this.publishHistory.set(profileId, history);
 			return history;
 		} catch (e) {
@@ -330,7 +330,7 @@ export class NoteManager {
 		} catch (error) {
 			Logger.error(`Error committing pending notes for profile ${profileId}:`, error);
 			// TODO: Handle error state, possibly move failed notes to error staging
-			NoticeManager.showNotice(`Error committing notes: ${error.message}`);
+			NoticeManager.showNotice(`Error committing notes: ${errorMessage(error)}`);
 			throw error;
 		}
 	}

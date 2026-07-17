@@ -1,6 +1,7 @@
 import { Setting } from 'obsidian';
 import { ProfileContext } from '../context';
 import { initAWSSettings } from './shared';
+import type { AWSProfileSettings } from '../../types';
 
 /**
  * "Authentication & Delivery" section (AWS profiles): AWS account/profile/region,
@@ -103,9 +104,10 @@ export function renderAuthSection(ctx: ProfileContext, containerEl: HTMLElement)
 			.addOption('all', 'Publish all')
 			.addOption('manual', 'Manual')
 			.setValue(profile.awsSettings?.cloudFrontInvalidationScheme || 'individual')
-			.onChange(async (value: any) => {
+			.onChange(async (value) => {
 				if (profile.awsSettings) {
-					profile.awsSettings.cloudFrontInvalidationScheme = value;
+					profile.awsSettings.cloudFrontInvalidationScheme =
+						value as AWSProfileSettings['cloudFrontInvalidationScheme'];
 					await plugin.saveSettings();
 				}
 			}));

@@ -1,6 +1,6 @@
 import { Notice, Setting } from 'obsidian';
 import { PublishingProfile } from '../../types';
-import { Logger } from '../../utils/logging';
+import { Logger, errorMessage } from '../../utils/logging';
 import { DeploymentWizardModal } from '../../infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from '../../infrastructure/dnsAssistantModal';
 import { googleOAuthUrls } from '../../infrastructure/cognitoUrls';
@@ -91,7 +91,7 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 				.addButton(btn => btn
 					.setButtonText('Copy')
 					.onClick(() => {
-						navigator.clipboard.writeText(jsOrigin);
+						void navigator.clipboard.writeText(jsOrigin);
 						new Notice('Copied!');
 					}));
 			new Setting(containerEl)
@@ -100,7 +100,7 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 				.addButton(btn => btn
 					.setButtonText('Copy')
 					.onClick(() => {
-						navigator.clipboard.writeText(redirectUri);
+						void navigator.clipboard.writeText(redirectUri);
 						new Notice('Copied!');
 					}));
 
@@ -140,9 +140,9 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 								} else {
 									new Notice(`Stack update ended with status: ${finalStatus}`);
 								}
-							} catch (err: any) {
+							} catch (err: unknown) {
 								Logger.error('Error syncing Cognito callback URL:', err);
-								new Notice(`Sync failed: ${err.message}`);
+								new Notice(`Sync failed: ${errorMessage(err)}`);
 							} finally {
 								btn.setDisabled(false);
 								btn.setButtonText('Sync callback URL');
@@ -216,7 +216,7 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 						profile.baseUrl = `https://${outputs.siteUrl}/`;
 						await plugin.saveSettings();
 						ctx.rerenderProfile();
-					} catch (err: any) {
+					} catch (err: unknown) {
 						Logger.error('Error syncing stack outputs:', err);
 					}
 				}));

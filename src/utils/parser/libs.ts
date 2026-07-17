@@ -46,6 +46,8 @@ import remarkObsidianLinks from '../remarkObsidianLinks';
 import remarkLineNumbers from '../remarkLineNumbers';
 import remarkCallouts from '../remarkCallouts';
 import type { ParserLibs, Plugin } from './types';
+import type { Node } from 'unist';
+import type { VFile } from 'vfile';
 
 /**
  * `defineTransform` — wrap a bare `(tree, file) => void` visitor into a proper
@@ -54,10 +56,14 @@ import type { ParserLibs, Plugin } from './types';
  */
 const defineTransform: ParserLibs['defineTransform'] = (fn) =>
 	function () {
-		return (tree: any, file: any) => {
+		return (tree: Node, file: VFile) => {
 			fn(tree, file);
 		};
-	} as Plugin;
+		// `as unknown as Plugin`: unified bundles its own `vfile` copy, so the
+		// top-level `VFile` type doesn't structurally overlap unified's expected
+		// transformer signature. Routing through `unknown` is the standard escape
+		// for this dual-version skew (avoids an `any` on the transformer params).
+	} as unknown as Plugin;
 
 let cached: ParserLibs | null = null;
 
@@ -87,8 +93,10 @@ export function buildParserLibs(): ParserLibs {
 		rehypeAutolinkHeadings,
 		remarkMath,
 		// heavy math renderers — lazy thunks: `const k = await libs.rehypeKatex();`
-		rehypeKatex: () => import('rehype-katex').then((m) => m.default ?? m),
-		rehypeMathjax: () => import('rehype-mathjax').then((m) => m.default ?? m),
+		rehypeKatex: () =>
+			import('rehype-katex').then((m: { default?: unknown }): unknown => m.default ?? m),
+		rehypeMathjax: () =>
+			import('rehype-mathjax').then((m: { default?: unknown }): unknown => m.default ?? m),
 		defineTransform,
 	};
 	return cached;

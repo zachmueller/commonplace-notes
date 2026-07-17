@@ -22,7 +22,7 @@ export function buildProfileCredentialProvider(awsProfile: string): AwsCredentia
 		fromSSO({ profile: awsProfile }),
 	];
 
-	return async (identityProperties?: Record<string, any>) => {
+	return async (identityProperties?: Record<string, unknown>) => {
 		let lastError: unknown;
 		for (const provider of providers) {
 			try {

@@ -1,7 +1,7 @@
 import { TFile } from 'obsidian';
 import path from 'path';
 import CommonplaceNotesPlugin from '../main';
-import { Logger } from './logging';
+import { Logger, errorCode } from './logging';
 
 export class PathUtils {
 	static sluggify(s: string): string {
@@ -99,7 +99,8 @@ export class PathUtils {
 						}
 					} catch (error) {
 						// Only ignore errors if directory already exists
-						if (error.code !== 'EEXIST') {
+						const code = (error as { code?: unknown })?.code;
+						if (code !== 'EEXIST') {
 							throw error;
 						}
 					}

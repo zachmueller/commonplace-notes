@@ -3,8 +3,9 @@ import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
-import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, ChatStackOutputs, DeploymentConfig, HostedZoneInfo, OriginAccessMethod, StackEvent, StackOutputs } from './types';
+import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, ChatStackOutputs, DeploymentConfig, HostedZoneInfo, InfrastructureState, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from '../publish/awsUpload';
+import { errorMessage } from '../utils/logging';
 import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
@@ -93,10 +94,10 @@ export class DeploymentWizardModal extends Modal {
 
 		switch (this.step) {
 			case 1: this.renderStep1Configure(); break;
-			case 2: this.renderStep2DeployCert(); break;
-			case 3: this.renderStep3DnsValidation(); break;
-			case 4: this.renderStep4DeployCognito(); break;
-			case 5: this.renderStep5DeployFull(); break;
+			case 2: void this.renderStep2DeployCert(); break;
+			case 3: void this.renderStep3DnsValidation(); break;
+			case 4: void this.renderStep4DeployCognito(); break;
+			case 5: void this.renderStep5DeployFull(); break;
 			case 6: this.renderStep6Complete(); break;
 		}
 	}
@@ -179,7 +180,7 @@ export class DeploymentWizardModal extends Modal {
 
 		if (this.config.useRoute53) {
 			const route53Container = container.createDiv({ cls: 'cpn-route53-section' });
-			this.renderRoute53Section(route53Container);
+			void this.renderRoute53Section(route53Container);
 		}
 
 		this.renderAuthSection(container);
@@ -419,7 +420,7 @@ export class DeploymentWizardModal extends Modal {
 		if (copyable) {
 			const btn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 			btn.addEventListener('click', () => {
-				navigator.clipboard.writeText(value);
+				void navigator.clipboard.writeText(value);
 				new Notice('Copied!');
 			});
 		}
@@ -558,10 +559,10 @@ export class DeploymentWizardModal extends Modal {
 				}
 				this.renderAllZonesDropdown(container, zones);
 			}
-		} catch (err: any) {
+		} catch (err: unknown) {
 			loadingEl.remove();
 			container.createEl('p', {
-				text: `Could not load hosted zones: ${err.message}`,
+				text: `Could not load hosted zones: ${errorMessage(err)}`,
 				cls: 'cpn-wizard-description',
 			});
 			this.renderRoute53ManualInputs(container);
@@ -646,8 +647,8 @@ export class DeploymentWizardModal extends Modal {
 							text: 'Note: Update your domain registrar\'s nameservers to point to the Route53 nameservers for this zone.',
 							cls: 'cpn-wizard-description',
 						});
-					} catch (err: any) {
-						new Notice(`Error creating zone: ${err.message}`);
+					} catch (err: unknown) {
+						new Notice(`Error creating zone: ${errorMessage(err)}`);
 					}
 				}));
 
@@ -696,11 +697,11 @@ export class DeploymentWizardModal extends Modal {
 		let matches: CertificateMatch[];
 		try {
 			matches = await this.cfManager.findMatchingCertificates(domain, this.activeProfile);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			if (this.aborted) return;
 			// Non-fatal (e.g. missing acm:ListCertificates): fall back to creating a
 			// new cert or pasting an existing ARN.
-			statusEl.setText(`Couldn't list existing certificates: ${err.message}. Create a new certificate, or enter an existing certificate ARN.`);
+			statusEl.setText(`Couldn't list existing certificates: ${errorMessage(err)}. Create a new certificate, or enter an existing certificate ARN.`);
 			this.renderCertChooser(chooserEl, [], domain);
 			return;
 		}
@@ -736,7 +737,7 @@ export class DeploymentWizardModal extends Modal {
 						this.renderManualArnEntry(container, domain);
 					} else if (v === '__all__') {
 						container.empty();
-						this.renderAllCertsChooser(container, domain);
+						void this.renderAllCertsChooser(container, domain);
 					} else if (v === '__create__') {
 						this.selectedCertMatch = null;
 					} else {
@@ -751,9 +752,9 @@ export class DeploymentWizardModal extends Modal {
 				.setCta()
 				.onClick(() => {
 					if (this.selectedCertMatch) {
-						this.reuseCertificate(this.selectedCertMatch);
+						void this.reuseCertificate(this.selectedCertMatch);
 					} else {
-						this.runCertCreate();
+						void this.runCertCreate();
 					}
 				}));
 	}
@@ -799,10 +800,10 @@ export class DeploymentWizardModal extends Modal {
 					try {
 						const match = await this.cfManager.describeCertificateForReuse(arnValue.trim(), domain, this.activeProfile);
 						await this.reuseCertificate(match);
-					} catch (err: any) {
+					} catch (err: unknown) {
 						btn.setDisabled(false);
 						statusEl.setText('');
-						new Notice(err.message);
+						new Notice(errorMessage(err));
 					}
 				}))
 			.addButton(btn => btn
@@ -817,9 +818,9 @@ export class DeploymentWizardModal extends Modal {
 		let certs: CertificateMatch[];
 		try {
 			certs = await this.cfManager.listIssuedCertificatesForDomain(domain, this.activeProfile);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			if (this.aborted) return;
-			loadingEl.setText(`Couldn't list certificates: ${err.message}`);
+			loadingEl.setText(`Couldn't list certificates: ${errorMessage(err)}`);
 			return;
 		}
 		if (this.aborted) return;
@@ -858,9 +859,9 @@ export class DeploymentWizardModal extends Modal {
 					try {
 						const match = await this.cfManager.describeCertificateForReuse(selected.arn, domain, this.activeProfile);
 						await this.reuseCertificate(match);
-					} catch (err: any) {
+					} catch (err: unknown) {
 						btn.setDisabled(false);
-						new Notice(err.message);
+						new Notice(errorMessage(err));
 					}
 				}))
 			.addButton(btn => btn
@@ -933,9 +934,9 @@ export class DeploymentWizardModal extends Modal {
 				await this.updateInfraState({ status: 'failed' });
 				this.showError(container, `Certificate stack deployment failed: ${finalStatus}`);
 			}
-		} catch (err: any) {
+		} catch (err: unknown) {
 			await this.updateInfraState({ status: 'failed' });
-			this.showError(container, `Error deploying certificate: ${err.message}`);
+			this.showError(container, `Error deploying certificate: ${errorMessage(err)}`);
 		}
 	}
 
@@ -965,7 +966,7 @@ export class DeploymentWizardModal extends Modal {
 				const nameEl = row.createEl('code', { text: record.name });
 				const copyNameBtn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 				copyNameBtn.addEventListener('click', () => {
-					navigator.clipboard.writeText(record.name);
+					void navigator.clipboard.writeText(record.name);
 					new Notice('Copied!');
 				});
 
@@ -973,7 +974,7 @@ export class DeploymentWizardModal extends Modal {
 				const valueEl = row.createEl('code', { text: record.value });
 				const copyValueBtn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 				copyValueBtn.addEventListener('click', () => {
-					navigator.clipboard.writeText(record.value);
+					void navigator.clipboard.writeText(record.value);
 					new Notice('Copied!');
 				});
 			}
@@ -994,8 +995,8 @@ export class DeploymentWizardModal extends Modal {
 							statusEl.setText(`Certificate status: ${status}. Waiting for validation...`);
 						}
 					}));
-		} catch (err: any) {
-			this.showError(container, `Error fetching validation records: ${err.message}`);
+		} catch (err: unknown) {
+			this.showError(container, `Error fetching validation records: ${errorMessage(err)}`);
 		}
 	}
 
@@ -1081,9 +1082,9 @@ export class DeploymentWizardModal extends Modal {
 
 			this.step = 5;
 			this.renderStep();
-		} catch (err: any) {
+		} catch (err: unknown) {
 			await this.updateInfraState({ status: 'failed' });
-			this.showError(container, `Error deploying authentication: ${err.message}`);
+			this.showError(container, `Error deploying authentication: ${errorMessage(err)}`);
 		}
 	}
 
@@ -1191,9 +1192,9 @@ export class DeploymentWizardModal extends Modal {
 				await this.updateInfraState({ status: 'failed' });
 				this.showError(container, `Stack deployment failed: ${finalStatus}`);
 			}
-		} catch (err: any) {
+		} catch (err: unknown) {
 			await this.updateInfraState({ status: 'failed' });
-			this.showError(container, `Error deploying infrastructure: ${err.message}`);
+			this.showError(container, `Error deploying infrastructure: ${errorMessage(err)}`);
 		}
 	}
 
@@ -1386,7 +1387,7 @@ export class DeploymentWizardModal extends Modal {
 					`Stack Name: ${this.cfManager.getStackName(this.config.variantName || '', 'full')}`,
 					`Origin Access: ${this.config.originAccessMethod === 'oac' ? 'OAC' : 'OAI'}`,
 				].join('\n');
-				navigator.clipboard.writeText(text);
+				void navigator.clipboard.writeText(text);
 				new Notice('Stack outputs copied to clipboard.');
 			});
 
@@ -1623,7 +1624,11 @@ export class DeploymentWizardModal extends Modal {
 	}
 
 	private refreshSettingsTab(): void {
-		const setting = (this.app as any).setting;
+		// `app.setting` is an undocumented Obsidian internal (the settings modal);
+		// we only need to re-render the active tab, so type just that surface.
+		const setting = (this.app as App & {
+			setting?: { activeTab?: { display?: () => void } };
+		}).setting;
 		if (setting?.activeTab?.display) {
 			setting.activeTab.display();
 		}
@@ -1640,7 +1645,7 @@ export class DeploymentWizardModal extends Modal {
 		};
 	}
 
-	private async updateInfraState(partial: Record<string, any>): Promise<void> {
+	private async updateInfraState(partial: Partial<InfrastructureState>): Promise<void> {
 		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === this.profile.id);
 		if (!profile) return;
 

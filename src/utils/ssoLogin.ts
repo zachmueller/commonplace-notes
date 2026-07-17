@@ -185,7 +185,9 @@ async function openVerificationUrl(url: string): Promise<void> {
 	try {
 		// Obsidian desktop runs on Electron; `shell.openExternal` opens the
 		// system browser. Imported lazily so a missing module never breaks load.
-		const { shell } = require('electron');
+		const { shell } = require('electron') as {
+			shell: { openExternal(url: string): Promise<void> };
+		};
 		await shell.openExternal(url);
 	} catch (err) {
 		Logger.warn('Could not open browser automatically for SSO login:', err);

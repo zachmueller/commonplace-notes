@@ -56,7 +56,10 @@ if (CLEAN && fs.existsSync(VAULT_PATH)) {
 	fs.rmSync(VAULT_PATH, { recursive: true, force: true });
 }
 
-// Create vault directory structure
+// Create vault directory structure. NOTE: `.obsidian` is hard-coded (not read from
+// `Vault#configDir`, as the plugin-review lint suggests) because this script runs in
+// Node *before* Obsidian is launched — there is no Vault instance to query. `.obsidian`
+// is Obsidian's default and this script controls the vault it creates.
 const obsidianDir = path.join(VAULT_PATH, ".obsidian");
 const pluginsDir = path.join(obsidianDir, "plugins");
 const pluginDir = path.join(pluginsDir, PLUGIN_ID);

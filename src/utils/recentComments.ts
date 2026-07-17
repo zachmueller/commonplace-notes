@@ -3,7 +3,7 @@ import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { refreshCredentials } from '../publish/awsCredentials';
-import { Logger } from './logging';
+import { Logger, errorCode } from './logging';
 
 /**
  * Recent Comments panel data layer (author-facing Phase 2). Two-tier sourcing:
@@ -126,8 +126,8 @@ async function queryRecent(
 
 	try {
 		return await run();
-	} catch (e: any) {
-		if (AUTH_ERR.test(e?.name ?? '')) {
+	} catch (e: unknown) {
+		if (AUTH_ERR.test(errorCode(e) ?? '')) {
 			Logger.debug('Recent comments query hit an auth error; refreshing credentials and retrying once');
 			await refreshCredentials(plugin, profile.id); // invalidates the cached DDB client
 			return run();                                  // getDynamoDBClient rebuilds with fresh creds
@@ -265,7 +265,7 @@ export async function buildRecentFeed(
 		return {
 			noteUid,
 			noteTitle: file
-				? (plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') ?? file.basename)
+				? ((plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-title') as string | undefined) ?? file.basename)
 				: undefined,
 			localPath: file?.path,
 			recent: recentForNote,

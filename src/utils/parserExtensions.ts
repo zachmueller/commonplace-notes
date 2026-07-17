@@ -18,7 +18,7 @@
  */
 
 import { Notice, normalizePath, parseYaml } from 'obsidian';
-import type { Processor } from 'unified';
+import type { Plugin, Processor } from 'unified';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';
 import { buildParserLibs } from './parser/libs';
@@ -235,9 +235,10 @@ export class ParserExtensionManager {
 				continue;
 			}
 			if (typeof produced === 'function') {
-				processor = processor.use(produced as any);
+				processor = processor.use(produced as Plugin);
 			} else if (Array.isArray(produced) && typeof produced[0] === 'function') {
-				processor = processor.use(produced[0] as any, produced[1]);
+				const [plugin, options] = produced as [Plugin, unknown];
+				processor = processor.use(plugin, options as Record<string, unknown>);
 			} else {
 				this.recordRuntimeFailure(
 					def,

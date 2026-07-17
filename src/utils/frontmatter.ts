@@ -5,7 +5,7 @@ import { Logger } from './logging';
 import { NoticeManager } from '../utils/notice';
 
 export class FrontmatterManager {
-    private queue: Map<string, Record<string, any>> = new Map();
+    private queue: Map<string, Record<string, unknown>> = new Map();
     private app: App;
 	private plugin: CommonplaceNotesPlugin;
 	private cachedUIDs: Map<string, string> = new Map();
@@ -18,12 +18,12 @@ export class FrontmatterManager {
 		this.app = plugin.app;
     }
 
-	getFrontmatter(file: TFile): any {
+	getFrontmatter(file: TFile): Record<string, unknown> | undefined {
 		const fileCache = this.app.metadataCache.getCache(file.path);
 		return fileCache?.frontmatter;
 	}
 
-	getFrontmatterValue(file: TFile, key: string): any {
+	getFrontmatterValue(file: TFile, key: string): unknown {
 		const fm = this.getFrontmatter(file);
 		return fm ? fm[key] : null;
 	}
@@ -43,7 +43,7 @@ export class FrontmatterManager {
 		}
 
 		if (Array.isArray(rawContexts)) {
-			return rawContexts;
+			return rawContexts as string[];
 		}
 
 		if (typeof rawContexts === 'string') {
@@ -144,7 +144,7 @@ export class FrontmatterManager {
 
 			const existingUID = this.getFrontmatterValue(file, 'cpn-uid');
 			if (existingUID) {
-				return existingUID;
+				return String(existingUID);
 			}
 
 			// Only add new UID if cpn-publish-contexts contains a value
@@ -166,8 +166,8 @@ export class FrontmatterManager {
 
 	getNoteTitle(file: TFile): string {
 		try {
-			const title = this.getFrontmatterValue(file, 'cpn-title') || file.basename;
-			return title;
+			const title = this.getFrontmatterValue(file, 'cpn-title');
+			return title ? String(title) : file.basename;
 		} catch (error) {
 			console.error('Error getting note title:', error);
 			throw error;
@@ -184,7 +184,7 @@ export class FrontmatterManager {
 		return typeof v === 'string' && v.trim() ? v.trim() : null;
 	}
 
-    add(file: TFile, updates: Record<string, any>) {
+    add(file: TFile, updates: Record<string, unknown>) {
         const path = file.path;
         if (!this.queue.has(path)) {
             this.queue.set(path, {});
@@ -206,10 +206,10 @@ export class FrontmatterManager {
 		Logger.debug('Frontmatter queue and cachedUIDs cleared after processing frontmatter');
     }
 
-	async updateFrontmatter(file: TFile, updates: Record<string, any>) {
+	async updateFrontmatter(file: TFile, updates: Record<string, unknown>) {
 		return new Promise<void>((resolve, reject) => {
 			try {
-				this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				void this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 					Object.entries(updates).forEach(([key, value]) => {
 						if (value === undefined) {
 							delete frontmatter[key];
@@ -238,10 +238,10 @@ export class FrontmatterManager {
 	 * Writes directly via `processFrontMatter` — not through the batch queue,
 	 * since routing is interactive.
 	 */
-	async mergeFrontmatter(file: TFile, updates: Record<string, any>): Promise<void> {
+	async mergeFrontmatter(file: TFile, updates: Record<string, unknown>): Promise<void> {
 		return new Promise<void>((resolve, reject) => {
 			try {
-				this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				void this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 					for (const [key, value] of Object.entries(updates)) {
 						if (value === undefined) {
 							delete frontmatter[key];
@@ -253,7 +253,7 @@ export class FrontmatterManager {
 
 						if (existingArray !== null) {
 							// Array (or JSON-array string) property → union + de-dupe.
-							const incoming = Array.isArray(value) ? value : [value];
+							const incoming: unknown[] = Array.isArray(value) ? value : [value];
 							frontmatter[key] = [...new Set([...existingArray, ...incoming])];
 						} else if (
 							existing &&
@@ -279,12 +279,12 @@ export class FrontmatterManager {
 	}
 
 	/** Coerce an existing frontmatter value to an array if it is one (or a JSON-array string), else null. */
-	private asArrayOrNull(existing: any): any[] | null {
-		if (Array.isArray(existing)) return existing;
+	private asArrayOrNull(existing: unknown): unknown[] | null {
+		if (Array.isArray(existing)) return existing as unknown[];
 		if (typeof existing === 'string' && existing.trim().startsWith('[')) {
 			try {
-				const parsed = JSON.parse(existing);
-				if (Array.isArray(parsed)) return parsed;
+				const parsed: unknown = JSON.parse(existing);
+				if (Array.isArray(parsed)) return parsed as unknown[];
 			} catch {
 				// Not valid JSON — fall through, treat as scalar.
 			}

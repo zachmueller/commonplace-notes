@@ -44,7 +44,7 @@ const UID_WIKILINK = /\[\[([0-9A-HJKMNP-TV-Z]{6,})\]\]/g;
  * syntax; if the title is empty after sanitizing, the UID is used as the alias.
  */
 export function rewriteCommentWikilinks(md: string, resolve: CommentLinkResolver): string {
-	return md.replace(UID_WIKILINK, (_whole, uid) => {
+	return md.replace(UID_WIKILINK, (_whole: string, uid: string) => {
 		const resolved = resolve(uid);
 		if (!resolved) return uid; // not local → plain text
 		const alias = resolved.title.replace(/[\[\]|]/g, ' ').replace(/\s+/g, ' ').trim() || uid;

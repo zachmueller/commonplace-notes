@@ -9,7 +9,7 @@ interface NodeWithPosition extends Node {
 		hName?: string;
 		hProperties?: {
 			className?: string[];
-			[key: string]: any;
+			[key: string]: unknown;
 		};
 	};
 }

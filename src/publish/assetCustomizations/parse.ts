@@ -45,7 +45,7 @@ function asString(value: unknown): string | null {
 }
 
 function isAssetSlot(value: string): value is AssetSlot {
-	return Object.prototype.hasOwnProperty.call(SLOT_TO_ASSET, value);
+	return Object.prototype.hasOwnProperty.call(SLOT_TO_ASSET, value) === true;
 }
 
 // ---------------------------------------------------------------------------

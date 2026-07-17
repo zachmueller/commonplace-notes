@@ -1,6 +1,6 @@
 import { Modal, Notice, Setting } from 'obsidian';
 import { PublishingProfile } from '../../types';
-import { Logger } from '../../utils/logging';
+import { Logger, errorMessage } from '../../utils/logging';
 import { sha256Hex } from '../../infrastructure/deploymentWizardModal';
 import type { DeploymentConfig } from '../../infrastructure/types';
 import { ProfileContext } from '../context';
@@ -136,9 +136,9 @@ export function openUpgradePasswordGateModal(ctx: ProfileContext, profile: Publi
 						modal.close();
 						ctx.rerenderProfile();
 						new Notice('Password gate upgraded successfully.');
-					} catch (err: any) {
+					} catch (err: unknown) {
 						Logger.error('Error upgrading password gate:', err);
-						new Notice(`Upgrade failed: ${err.message}`);
+						new Notice(`Upgrade failed: ${errorMessage(err)}`);
 						btn.setDisabled(false);
 						btn.setButtonText('Upgrade');
 					}

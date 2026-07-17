@@ -15,9 +15,8 @@ import type { CompiledParserFn } from './types';
 // AsyncFunction constructor
 // ---------------------------------------------------------------------------
 
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-	...args: string[]
-) => CompiledParserFn;
+const AsyncFunction = (Object.getPrototypeOf(async function () {}) as { constructor: unknown })
+	.constructor as new (...args: string[]) => CompiledParserFn;
 
 // ---------------------------------------------------------------------------
 // Type stripping
@@ -71,7 +70,7 @@ export function compileParserFunction(strippedCode: string): CompiledParserFn {
  * @param argNames - Parameter names injected into the function body.
  * @returns `{ fn }` on success, or `{ error }` with a descriptive message.
  */
-export function compileUserFunction<Fn = (...args: any[]) => Promise<unknown>>(
+export function compileUserFunction<Fn = (...args: unknown[]) => Promise<unknown>>(
 	rawCode: string,
 	argNames: readonly string[],
 ): { fn: Fn } | { error: string } {

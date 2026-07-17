@@ -30,7 +30,9 @@ interface TemplaterApi {
 /** Look up Templater's plugin API (`tp`) if the plugin is installed and enabled. */
 function resolveTemplater(plugin: CommonplaceNotesPlugin): unknown {
 	// Obsidian's plugin registry is untyped; guard defensively.
-	const plugins = (plugin.app as unknown as { plugins?: { plugins?: Record<string, any> } }).plugins;
+	const plugins = (plugin.app as unknown as {
+		plugins?: { plugins?: Record<string, { templater?: unknown }> };
+	}).plugins;
 	return plugins?.plugins?.['templater-obsidian']?.templater ?? undefined;
 }
 

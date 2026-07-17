@@ -53,19 +53,20 @@ export class NoticeManager {
 
 			return { success: true, result };
 		} catch (error) {
+			const err = error instanceof Error ? error : new Error(String(error));
 			// Stop animation and update notice with error message
 			this.stopLoadingAnimation(notice);
-			Logger.error(error.message);
+			Logger.error(err.message);
 			if (errorMessage) {
 				notice.setMessage(`❌ ${errorMessage}`);
 				window.setTimeout(() => notice.hide(), 8000);
 			} else {
-				notice.setMessage(`❌ Error: ${error.message}`);
+				notice.setMessage(`❌ Error: ${err.message}`);
 				window.setTimeout(() => notice.hide(), 8000);
 			}
-			
-			Logger.error('Operation failed:', error);
-			return { success: false, error };
+
+			Logger.error('Operation failed:', err);
+			return { success: false, error: err };
 		}
 	}
 
@@ -98,18 +99,19 @@ export class NoticeManager {
 
 			return { success: true, result };
 		} catch (error) {
+			const err = error instanceof Error ? error : new Error(String(error));
 			this.stopLoadingAnimation(notice);
-			Logger.error(error.message);
+			Logger.error(err.message);
 			if (errorMessage) {
 				notice.setMessage(`❌ ${errorMessage}`);
 				window.setTimeout(() => notice.hide(), 8000);
 			} else {
-				notice.setMessage(`❌ Error: ${error.message}`);
+				notice.setMessage(`❌ Error: ${err.message}`);
 				window.setTimeout(() => notice.hide(), 8000);
 			}
 
-			Logger.error('Operation failed:', error);
-			return { success: false, error };
+			Logger.error('Operation failed:', err);
+			return { success: false, error: err };
 		}
 	}
 

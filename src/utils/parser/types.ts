@@ -10,6 +10,8 @@
 
 import type { App, TFile } from 'obsidian';
 import type { Plugin, Processor } from 'unified';
+import type { Node } from 'unist';
+import type { VFile } from 'vfile';
 import type { FrontmatterManager } from '../frontmatter';
 import type { ResolvedNoteInfo } from '../remarkObsidianLinks';
 import type { UrlScheme } from '../urlScheme';
@@ -138,7 +140,7 @@ export interface ParserLibs {
 	rehypeKatex: () => Promise<unknown>;
 	rehypeMathjax: () => Promise<unknown>;
 	/** Wrap a raw `(tree, file) => void` transformer into a unified plugin. */
-	defineTransform: (fn: (tree: any, file: any) => void) => Plugin;
+	defineTransform: (fn: (tree: Node, file: VFile) => void) => Plugin;
 }
 
 /** Re-export for convenience at call sites. */

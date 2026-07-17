@@ -17,7 +17,7 @@ import type {
 	ReadGateMode,
 	StackRole,
 } from './types';
-import { Logger } from '../utils/logging';
+import { Logger, errorMessage } from '../utils/logging';
 
 /** us-east-1 always hosts the certificate and Lambda@Edge auth stacks. */
 const EDGE_REGION = 'us-east-1';
@@ -167,9 +167,9 @@ export class ImportStackModal extends Modal {
 						this.initRows();
 						this.phase = 'results';
 						this.render();
-					} catch (err: any) {
+					} catch (err: unknown) {
 						Logger.error('Error scanning for stacks:', err);
-						errorEl.setText(`Scan failed: ${err.message}`);
+						errorEl.setText(`Scan failed: ${errorMessage(err)}`);
 						errorEl.show();
 						btn.setDisabled(false).setButtonText('Scan for stacks');
 					}
@@ -415,9 +415,9 @@ export class ImportStackModal extends Modal {
 			this.onImported();
 			const summary = roles.map(r => ROLE_LABELS[r]).join(', ');
 			new Notice(`Imported ${roles.length} stack(s): ${summary}.`);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			Logger.error('Error importing stacks:', err);
-			new Notice(`Import failed: ${err.message}`);
+			new Notice(`Import failed: ${errorMessage(err)}`);
 		}
 	}
 

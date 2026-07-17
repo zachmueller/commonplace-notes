@@ -4,7 +4,7 @@ import { PublishingProfile, NoteConnection, CloudFrontInvalidationScheme } from 
 import { pushLocalJsonsToS3, deleteNoteHashesFromS3, deleteKbCorpusFromS3, pushMappingAndIndexToS3, createCloudFrontInvalidation } from './awsUpload';
 import { publishLocalNotes } from './local';
 import { PathUtils } from '../utils/path';
-import { Logger } from '../utils/logging';
+import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
@@ -284,11 +284,12 @@ export class Publisher {
 				}
 			}
 		} catch (error) {
-			NoticeManager.showNotice(`Error during publishing: ${error.message}`);
-			Logger.error('Publishing error:', error);
+			const err = error instanceof Error ? error : new Error(String(error));
+			NoticeManager.showNotice(`Error during publishing: ${err.message}`);
+			Logger.error('Publishing error:', err);
 
 			// Move staged files to error directory
-			await this.handlePublishError(profile.id, error);
+			await this.handlePublishError(profile.id, err);
 		}
 	}
 
@@ -563,7 +564,7 @@ export class Publisher {
 			NoticeManager.showNotice(`Successfully deleted published note: ${selectedNote.slug}`);
 		} catch (error) {
 			Logger.error('Error deleting published note:', error);
-			NoticeManager.showNotice(`Error deleting note: ${error.message}`);
+			NoticeManager.showNotice(`Error deleting note: ${errorMessage(error)}`);
 		}
 	}
 }

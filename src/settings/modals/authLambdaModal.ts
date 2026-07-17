@@ -1,6 +1,6 @@
 import { Modal, Notice, Setting } from 'obsidian';
 import { PublishingProfile } from '../../types';
-import { Logger } from '../../utils/logging';
+import { Logger, errorMessage } from '../../utils/logging';
 import { ProfileContext } from '../context';
 
 /**
@@ -99,9 +99,9 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 							btn.setDisabled(false);
 							btn.setButtonText('Update Stack');
 						}
-					} catch (err: any) {
+					} catch (err: unknown) {
 						Logger.error('Error updating auth lambda:', err);
-						new Notice(`Update failed: ${err.message}`);
+						new Notice(`Update failed: ${errorMessage(err)}`);
 						btn.setDisabled(false);
 						btn.setButtonText('Update Stack');
 					}

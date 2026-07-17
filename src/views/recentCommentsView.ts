@@ -162,7 +162,7 @@ export class RecentCommentsView extends ItemView {
 		if (contexts.length === 0) return;
 		const profile = this.currentNoteContext(contexts);
 		// Pure read — NOT getNoteUID, which mints/queues a cpn-uid as a side effect.
-		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid');
+		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid') as string | undefined;
 		if (!noteUid) return;
 
 		this.isRefreshing = true;
@@ -241,7 +241,7 @@ export class RecentCommentsView extends ItemView {
 		}
 		const profile = this.currentNoteContext(contexts);
 		// Pure read — NOT getNoteUID, which mints/queues a cpn-uid as a side effect.
-		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid');
+		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid') as string | undefined;
 		if (!noteUid) return empty('Publish this note first to load its comments.');
 
 		const cached = getCachedThread(this.plugin, profile.id, noteUid);
@@ -349,7 +349,7 @@ export class RecentCommentsView extends ItemView {
 		const contexts = this.activeNoteContexts(file);
 		if (contexts.length === 0) return '';
 		const profile = this.currentNoteContext(contexts);
-		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid');
+		const noteUid = this.plugin.frontmatterManager.getFrontmatterValue(file, 'cpn-uid') as string | undefined;
 		if (!noteUid) return '';
 		const cached = getCachedThread(this.plugin, profile.id, noteUid);
 		if (!cached) return 'Not loaded';
@@ -387,7 +387,7 @@ export class RecentCommentsView extends ItemView {
 			title.addEventListener('auxclick', (evt) => {
 				if (evt.button === 1) {
 					evt.preventDefault();
-					this.openLocalNote(group, 'tab');
+					void this.openLocalNote(group, 'tab');
 				}
 			});
 		} else {
@@ -468,7 +468,7 @@ export class RecentCommentsView extends ItemView {
 		for (const f of this.plugin.app.vault.getMarkdownFiles()) {
 			// Pure metadataCache read — NOT getNoteUID, which mints/queues a UID as
 			// a side effect (see resolveLocalNote in recentComments.ts).
-			const uid = this.plugin.frontmatterManager.getFrontmatterValue(f, 'cpn-uid');
+			const uid = this.plugin.frontmatterManager.getFrontmatterValue(f, 'cpn-uid') as string | undefined;
 			if (uid && !map.has(uid)) map.set(uid, f);
 		}
 		return map;

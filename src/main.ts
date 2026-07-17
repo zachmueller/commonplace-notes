@@ -30,7 +30,7 @@ import { NoticeManager } from './utils/notice';
 import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
 import { Publisher } from './publish/publisher';
-import { Logger } from './utils/logging';
+import { Logger, errorMessage, errorCode } from './utils/logging';
 import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
 import { DeployHookManager } from './infrastructure/hooks/deployHookManager';
@@ -147,7 +147,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			this.app.workspace.on('file-open', (file) => {
 				if (file) {
 					Logger.debug(`File opened for indicator: ${file?.path}`);
-					this.indicatorManager.updateIndicators(file);
+					void this.indicatorManager.updateIndicators(file);
 				}
 			})
 		);
@@ -218,13 +218,13 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	async activateRecentCommentsView() {
 		const existing = this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW);
 		if (existing.length > 0) {
-			this.app.workspace.revealLeaf(existing[0]);
+			void this.app.workspace.revealLeaf(existing[0]);
 			return;
 		}
 		const leaf = this.app.workspace.getRightLeaf(false);
 		if (!leaf) return;
 		await leaf.setViewState({ type: RECENT_COMMENTS_VIEW, active: true });
-		this.app.workspace.revealLeaf(leaf);
+		void this.app.workspace.revealLeaf(leaf);
 	}
 
 	private registerCommands() {
@@ -314,7 +314,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				if (!activeView?.file) return false;
 				if (checking) return true;
 				
-				this.publisher.publishSingle(activeView.file);
+				void this.publisher.publishSingle(activeView.file);
 				return true;
 			}
 		});
@@ -327,7 +327,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				if (!activeView?.file) return false;
 				if (checking) return true;
 				
-				this.publisher.publishConnected(activeView.file);
+				void this.publisher.publishConnected(activeView.file);
 				return true;
 			}
 		});
@@ -371,9 +371,9 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					NoticeManager.showNotice(jobId
 						? 'Chat knowledge base ingestion started (indexing takes a moment)'
 						: 'Chat is not fully deployed for this profile');
-				} catch (e: any) {
+				} catch (e: unknown) {
 					Logger.error('Manual KB ingestion failed:', e);
-					NoticeManager.showNotice(`KB ingestion failed: ${e.message}`);
+					NoticeManager.showNotice(`KB ingestion failed: ${errorMessage(e)}`);
 				}
 			}
 		});
@@ -635,8 +635,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 							'Use "Force-clean leftover infrastructure" in Settings → Danger Zone to finish.',
 						);
 					}
-				} catch (err: any) {
-					NoticeManager.showNotice(`Error destroying infrastructure: ${err.message}`);
+				} catch (err: unknown) {
+					NoticeManager.showNotice(`Error destroying infrastructure: ${errorMessage(err)}`);
 				}
 			}
 		});
@@ -819,8 +819,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				} else {
 					removedStacks.add(stackName);
 				}
-			} catch (err: any) {
-				const message = String(err?.message || err);
+			} catch (err: unknown) {
+				const message = errorMessage(err);
 				if (/does not exist/i.test(message)) { removedStacks.add(stackName); return; } // Already gone — success.
 				Logger.warn(`Failed to delete stack ${stackName}:`, err);
 				leftoverStacks.push(stackName);
@@ -1071,11 +1071,11 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			await client.send(new DeleteFunctionCommand({ FunctionName: functionName }));
 			Logger.info(`Deleted orphaned Lambda@Edge function ${functionName}`);
 			return 'deleted';
-		} catch (err: any) {
-			const name = err?.name || err?.Code;
+		} catch (err: unknown) {
+			const name = errorCode(err);
 			if (name === 'ResourceNotFoundException') return 'gone';
 			// CloudFront still has replicas — the canonical "not ready yet" error.
-			if (name === 'InvalidParameterValueException' || /replicated function/i.test(String(err?.message || err))) {
+			if (name === 'InvalidParameterValueException' || /replicated function/i.test(errorMessage(err))) {
 				Logger.info(`Lambda@Edge ${functionName} still replicating; will retry later.`);
 				return 'replicating';
 			}
@@ -1103,8 +1103,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			await client.send(new DeleteRoleCommand({ RoleName: roleName }));
 			Logger.info(`Deleted orphaned edge-fn role ${roleName}`);
 			return 'deleted';
-		} catch (err: any) {
-			const name = err?.name || err?.Code;
+		} catch (err: unknown) {
+			const name = errorCode(err);
 			if (name === 'NoSuchEntityException') return 'gone';
 			Logger.warn(`Could not delete orphaned IAM role ${roleName}:`, err);
 			return 'failed';
@@ -1112,7 +1112,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const saved = (await this.loadData()) as Partial<CommonplaceNotesSettings> | null;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
 		await this.migrateSettings();
 	}
 
@@ -1240,7 +1241,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 						if (checking) return true;
 
 						// Toggle the publish context
-						this.frontmatterManager.togglePublishContext(activeFile, profile.id);
+						void this.frontmatterManager.togglePublishContext(activeFile, profile.id);
 						return true;
 					}
 				});
@@ -1437,7 +1438,7 @@ cpn.rebuildContentIndex();
 	}
 
 	private async writePreviewCSV(filePath: string, changes: PublishContextChange[]): Promise<void> {
-		const stringifyArray = (arr: any[]): string =>
+		const stringifyArray = (arr: unknown[]): string =>
 			'[' + arr.map(item => typeof item === 'string'
 				? `'${item}'` : item).join(', ') + ']';
 		const csvContent = [
@@ -1493,7 +1494,7 @@ cpn.rebuildContentIndex();
 
 				changes.push({
 					filePath,
-					currentContexts: this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts') || [],
+					currentContexts: (this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts') as string[] | undefined) || [],
 					proposedContexts: [],
 					action: 'Excluded',
 					includePattern: '',
@@ -1508,7 +1509,7 @@ cpn.rebuildContentIndex();
 			);
 
 			if (matchingIncludes.length > 0) {
-				const currentContexts = this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts') || [];
+				const currentContexts = (this.frontmatterManager.getFrontmatterValue(file, 'cpn-publish-contexts') as string[] | undefined) || [];
 				let proposedContexts = [...currentContexts];
 
 				// Process each matching pattern

@@ -1,6 +1,7 @@
 import { App, Modal, Notice, Setting } from 'obsidian';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
+import { errorMessage } from '../utils/logging';
 
 export class DnsAssistantModal extends Modal {
 	private cfManager: CloudFormationManager;
@@ -46,7 +47,7 @@ export class DnsAssistantModal extends Modal {
 				row.createEl('code', { text: record.name });
 				const copyNameBtn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 				copyNameBtn.addEventListener('click', () => {
-					navigator.clipboard.writeText(record.name);
+					void navigator.clipboard.writeText(record.name);
 					new Notice('Copied name!');
 				});
 
@@ -54,7 +55,7 @@ export class DnsAssistantModal extends Modal {
 				row.createEl('code', { text: record.value });
 				const copyValueBtn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 				copyValueBtn.addEventListener('click', () => {
-					navigator.clipboard.writeText(record.value);
+					void navigator.clipboard.writeText(record.value);
 					new Notice('Copied value!');
 				});
 			}
@@ -77,9 +78,9 @@ export class DnsAssistantModal extends Modal {
 				.addButton(btn => btn
 					.setButtonText('Close')
 					.onClick(() => this.close()));
-		} catch (err: any) {
+		} catch (err: unknown) {
 			loadingEl.remove();
-			contentEl.createEl('p', { text: `Error: ${err.message}`, cls: 'cpn-wizard-error' });
+			contentEl.createEl('p', { text: `Error: ${errorMessage(err)}`, cls: 'cpn-wizard-error' });
 		}
 	}
 

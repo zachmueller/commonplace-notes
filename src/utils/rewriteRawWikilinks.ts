@@ -18,9 +18,11 @@
  */
 
 import { unified } from 'unified';
+import type { Plugin } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
+import type { Text } from 'mdast';
 import { parseWikilinkInner } from './wikilinkParse';
 
 /**
@@ -43,7 +45,7 @@ export function scrubRawWikilinks(raw: string, resolveUid: ResolveUid): string {
 	// Match the publish pipeline's text-node segmentation (remark-parse +
 	// remark-gfm run before remark-obsidian-links). Positions are on by default,
 	// giving each text node a source offset to splice against.
-	const tree = unified().use(remarkParse).use(remarkGfm).parse(raw);
+	const tree = unified().use(remarkParse).use(remarkGfm as Plugin).parse(raw);
 
 	interface Edit {
 		start: number;
@@ -52,7 +54,7 @@ export function scrubRawWikilinks(raw: string, resolveUid: ResolveUid): string {
 	}
 	const edits: Edit[] = [];
 
-	visit(tree, 'text', (node: any) => {
+	visit(tree, 'text', (node: Text) => {
 		if (!node.position || node.position.start.offset == null) return;
 		const base: number = node.position.start.offset;
 		const value: string = node.value;

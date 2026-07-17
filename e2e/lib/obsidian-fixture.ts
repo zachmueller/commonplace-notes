@@ -27,6 +27,12 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// The Obsidian community-plugin review flags `.obsidian` string literals and asks
+// for `Vault#configDir` instead. That does NOT apply here: this harness scaffolds
+// the vault's config dir on disk *before* Obsidian is launched (see ensureTestVault
+// below), so there is no `App`/`Vault` instance in scope to read `configDir` from —
+// `obsidian` isn't even imported in this file. `.obsidian` is Obsidian's default and
+// the harness fully controls the vault it creates, so the assumption is safe.
 const OBSIDIAN_CONFIG_DIR = ".obsidian";
 
 /** Default test vault path — can be overridden with E2E_VAULT_PATH env var */
