@@ -263,6 +263,56 @@ pre code {
 	padding: 1em;
 }
 
+/* Copy-to-clipboard button on rendered code fences. The button is anchored to
+   the <pre> (which is position:relative) so it stays pinned to the top-right
+   while the <code> scrolls horizontally under it. Hidden at rest, revealed on
+   hover / keyboard focus; always visible on touch devices (no hover). */
+.content pre {
+	position: relative;
+}
+
+.copy-code-button {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	margin: 0;
+	background-color: var(--code-bg);
+	color: var(--text-secondary);
+	border: 1px solid var(--code-border);
+	border-radius: 4px;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.copy-code-button:hover {
+	color: var(--text-primary);
+}
+
+.content pre:hover .copy-code-button,
+.copy-code-button:focus-visible {
+	opacity: 1;
+}
+
+.copy-code-button.copied {
+	color: rgb(var(--callout-success));
+	border-color: rgb(var(--callout-success));
+	opacity: 1;
+}
+
+/* No hover to reveal the button on touch devices — keep it always visible. */
+@media (hover: none) {
+	.copy-code-button {
+		opacity: 1;
+	}
+}
+
 /* Callout blocks. Static callouts render as <div>; foldable callouts
    ([!type]- / [!type]+) render as native <details>/<summary> (no JS). */
 [data-callout-type] {
@@ -2204,6 +2254,43 @@ ${closeButton}
 					<div class="comments" hidden></div>
 				`;
 			}
+
+			// Copy-to-clipboard button on every rendered code fence. Scoped to
+			// `.content pre`, so it skips inline <code> (no <pre>), error panels,
+			// and diff panels (those use .diff-body / no .content). Mirrors the
+			// permanent-link copy handler below (navigator.clipboard.writeText).
+			const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+			const CHECK_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+			panel.querySelectorAll('.content pre').forEach(pre => {
+				const code = pre.querySelector('code');
+				if (!code) return;
+				const btn = document.createElement('button');
+				btn.type = 'button';
+				btn.className = 'copy-code-button';
+				btn.setAttribute('aria-label', 'Copy code');
+				btn.innerHTML = COPY_ICON_SVG;
+				let resetTimer = null;
+				btn.addEventListener('click', async () => {
+					// textContent excludes the button (it's a sibling of <code>);
+					// trim the trailing newline the code handler preserves.
+					const text = code.textContent.replace(/\n$/, '');
+					try {
+						await navigator.clipboard.writeText(text);
+						btn.classList.add('copied');
+						btn.innerHTML = CHECK_ICON_SVG;
+						btn.setAttribute('aria-label', 'Copied');
+						clearTimeout(resetTimer);
+						resetTimer = setTimeout(() => {
+							btn.classList.remove('copied');
+							btn.innerHTML = COPY_ICON_SVG;
+							btn.setAttribute('aria-label', 'Copy code');
+						}, 1500);
+					} catch (err) {
+						console.error('Failed to copy code:', err);
+					}
+				});
+				pre.appendChild(btn);
+			});
 
 			// Add click handlers for links
 			panel.querySelectorAll('a[href^="#"]').forEach(link => {
