@@ -230,14 +230,25 @@ export class Publisher {
 				`${files.length} notes processed`
 			);
 
-			// Commit any pending frontmatter updates
-			if (this.plugin.frontmatterManager.hasUpdates()) {
-				Logger.debug(`Processing frontmatter updates`);
-				await this.plugin.frontmatterManager.process();
-			}
+			// Commit frontmatter + write queued notes to staging, with a loading Notice
+			// covering the (potentially long) per-note JSON write-out loop.
+			const staging = await NoticeManager.showProgress(
+				`Writing ${files.length} notes to staging`,
+				(async () => {
+					// Commit any pending frontmatter updates
+					if (this.plugin.frontmatterManager.hasUpdates()) {
+						Logger.debug(`Processing frontmatter updates`);
+						await this.plugin.frontmatterManager.process();
+					}
 
-			// Commit all queued notes to staging
-			await this.plugin.noteManager.commitPendingNotes(profile.id);
+					// Commit all queued notes to staging
+					await this.plugin.noteManager.commitPendingNotes(profile.id);
+				})(),
+				`${files.length} notes staged`
+			);
+			if (!staging.success) {
+				throw staging.error ?? new Error('Note staging failed');
+			}
 
 			// Upload to destination
 			let uploadSuccess = false;

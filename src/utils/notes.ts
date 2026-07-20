@@ -2,8 +2,7 @@ import { TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PathUtils } from './path';
 import { ResolvedNoteInfo } from './remarkObsidianLinks';
-import { Logger, errorMessage } from './logging';
-import { NoticeManager } from '../utils/notice';
+import { Logger } from './logging';
 import { UrlScheme } from './urlScheme';
 import type { ParserContext } from './parser/types';
 import { scrubRawWikilinks } from './rewriteRawWikilinks';
@@ -325,12 +324,11 @@ export class NoteManager {
 			await this.plugin.mappingManager.saveMappings();
 			await this.plugin.contentIndexManager.applyQueuedUpdates(profileId);
 			await this.plugin.kbCorpusManager.applyQueuedUpdates(profileId);
-
-			NoticeManager.showNotice(`Notes successfully committed for profile ${profileId}`);
 		} catch (error) {
 			Logger.error(`Error committing pending notes for profile ${profileId}:`, error);
 			// TODO: Handle error state, possibly move failed notes to error staging
-			NoticeManager.showNotice(`Error committing notes: ${errorMessage(error)}`);
+			// Success/error Notices are owned by the showProgress wrapper in publishNotes;
+			// rethrow so the caller renders the error Notice and runs handlePublishError.
 			throw error;
 		}
 	}
