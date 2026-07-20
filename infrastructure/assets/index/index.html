@@ -1754,7 +1754,10 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 					params[key] = decodeURIComponent(tok.slice(eq + 1)); // last-wins
 				}
 				return {
-					type: head.charAt(0),
+					// Canonicalize the title type: '~' is the canonical human-readable
+					// form; an inbound 't' is normalized to '~' so it displays as '~'
+					// everywhere (address bar, panel identity). resolveHash accepts both.
+					type: head.charAt(0) === 't' ? '~' : head.charAt(0),
 					value: decodeURIComponent(head.slice(1)),
 					params
 				};

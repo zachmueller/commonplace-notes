@@ -5,8 +5,9 @@
  * - 'original' scheme: #{type}={value}  (ampersand-delimited, `=` separator)
  *
  * The leading `{type}` is a single-char code the site's `resolveHash()` switches on:
- * `u` = cpn-uid, `p` = permanent content-hash, `t` = title/slug, and `~` = a
- * human-readable alias for `t` (both `#/t{slug}` and `#/~{slug}` resolve identically).
+ * `u` = cpn-uid, `p` = permanent content-hash, and `~` = title/slug (the canonical
+ * human-readable form). An inbound `t` is accepted as a title code too but is
+ * normalized to `~` on parse, so the address bar always shows `~` for title links.
  *
  * The scheme setting only controls **output**. Parsing always accepts both formats.
  */

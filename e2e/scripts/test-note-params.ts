@@ -62,8 +62,13 @@ function noteJson(uid: string) {
 	};
 }
 
+// Minimal Headers stub so the app's cpnAuthGate (reads response.headers.get(...))
+// can run against these fixtures without throwing. No auth header / content-type
+// means "not gated", which is correct for plain JSON data responses.
+const noHeaders = { get: (_name: string) => null };
+
 function jsonResponse(obj: any) {
-	return { ok: true, status: 200, json: async () => obj } as any;
+	return { ok: true, status: 200, headers: noHeaders, json: async () => obj } as any;
 }
 
 function makeFetch() {
@@ -78,7 +83,7 @@ function makeFetch() {
 		if (u.includes('/notes/')) {
 			return jsonResponse(noteJson(UID));
 		}
-		return { ok: false, status: 404, json: async () => ({}) } as any;
+		return { ok: false, status: 404, headers: noHeaders, json: async () => ({}) } as any;
 	};
 }
 
@@ -215,6 +220,12 @@ async function main() {
 		W.__parseURLFragment('#/u%20space;width=800')[0],
 		{ type: 'u', value: ' space', params: { width: '800' } },
 		'A8: id value is decoded independently of params'
+	);
+	// Inbound title type 't' canonicalizes to '~' (the canonical human-readable form).
+	eq(
+		W.__parseURLFragment('#/tmy-slug'),
+		[{ type: '~', value: 'my-slug', params: {} }],
+		'A9: inbound t (title) type canonicalizes to ~'
 	);
 
 	// =====================================================================
