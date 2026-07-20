@@ -32,6 +32,37 @@ export class FrontmatterManager {
 		return this.getFrontmatter(file) !== undefined;
 	}
 
+	/** Normalize a UID for comparison: trim + uppercase (Crockford Base32 is uppercase). */
+	static normalizeUID(uid: unknown): string {
+		return String(uid ?? '').trim().toUpperCase();
+	}
+
+	/**
+	 * Every markdown file whose `cpn-uid` equals `uid` (normalized), in vault order.
+	 * Empty if none. Scope = any md file carrying the UID (not just publish-context notes).
+	 * Pure metadataCache read — do NOT use getNoteUID, which mints a cpn-uid as a side effect.
+	 */
+	getFilesByUID(uid: string): TFile[] {
+		const target = FrontmatterManager.normalizeUID(uid);
+		if (!target) return [];
+		return this.app.vault.getMarkdownFiles().filter(
+			(f) => FrontmatterManager.normalizeUID(this.getFrontmatterValue(f, 'cpn-uid')) === target,
+		);
+	}
+
+	/**
+	 * One-pass `cpn-uid` -> file map (normalized keys, first file wins on duplicate).
+	 * Same pure-read caveat as getFilesByUID — never getNoteUID.
+	 */
+	buildUidToFileMap(): Map<string, TFile> {
+		const map = new Map<string, TFile>();
+		for (const f of this.app.vault.getMarkdownFiles()) {
+			const uid = FrontmatterManager.normalizeUID(this.getFrontmatterValue(f, 'cpn-uid'));
+			if (uid && !map.has(uid)) map.set(uid, f);
+		}
+		return map;
+	}
+
 	/**
 	 * Normalize publish contexts - convert string to array if needed and track problematic files
 	 */

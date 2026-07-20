@@ -179,6 +179,12 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
 		this.registerCommands();
 
+		// Custom URI: obsidian://commonplace-notes?action=open-uid&uid=<cpn-uid>.
+		// Namespaced action so future features slot in under the same handler.
+		this.registerObsidianProtocolHandler('commonplace-notes', (params) => {
+			void this.handleProtocol(params);
+		});
+
 		// Recent Comments side panel (author-facing Phase 2).
 		this.registerView(RECENT_COMMENTS_VIEW, (leaf) => new RecentCommentsView(leaf, this));
 		this.addRibbonIcon('message-square', 'Comments', () => this.activateRecentCommentsView());
@@ -225,6 +231,44 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		if (!leaf) return;
 		await leaf.setViewState({ type: RECENT_COMMENTS_VIEW, active: true });
 		void this.app.workspace.revealLeaf(leaf);
+	}
+
+	/** Dispatch obsidian://commonplace-notes URIs on their `action` param. */
+	private async handleProtocol(params: Record<string, string>): Promise<void> {
+		switch (params.action) {
+			case 'open-uid':
+				await this.openNoteByUid(params.uid);
+				return;
+			default:
+				NoticeManager.showNotice(`Unknown commonplace-notes action: ${params.action ?? '(none)'}`);
+		}
+	}
+
+	/** Resolve a cpn-uid to its note and open it (new tab, or reveal an already-open leaf). */
+	private async openNoteByUid(uid?: string): Promise<void> {
+		if (!uid || !uid.trim()) {
+			NoticeManager.showNotice('No UID provided in URI');
+			return;
+		}
+		const matches = this.frontmatterManager.getFilesByUID(uid);
+		if (matches.length === 0) {
+			NoticeManager.showNotice(`No note found with UID ${uid}`);
+			return;
+		}
+		if (matches.length > 1) {
+			NoticeManager.showNotice(`Duplicate UID ${uid} on ${matches.length} notes — opening the first`);
+		}
+		const file = matches[0];
+
+		// Reveal an already-open leaf for this file; else open in a new tab.
+		const existing = this.app.workspace.getLeavesOfType('markdown').find(
+			(leaf) => leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path,
+		);
+		if (existing) {
+			void this.app.workspace.revealLeaf(existing);
+		} else {
+			await this.app.workspace.getLeaf('tab').openFile(file);
+		}
 	}
 
 	private registerCommands() {

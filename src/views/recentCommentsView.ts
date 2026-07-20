@@ -2,6 +2,7 @@ import { ItemView, WorkspaceLeaf, Component, MarkdownRenderer, Keymap, PaneType,
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile, CommentsPanelMode } from '../types';
 import { NoticeManager } from '../utils/notice';
+import { FrontmatterManager } from '../utils/frontmatter';
 import {
 	buildRecentFeed,
 	getThread,
@@ -448,7 +449,7 @@ export class RecentCommentsView extends ItemView {
 		// own internal-link handling — no custom click wiring). Unresolvable UIDs
 		// degrade to plain UID text.
 		const md = rewriteCommentWikilinks(comment.body, (uid) => {
-			const file = this.uidToFile.get(uid);
+			const file = this.uidToFile.get(FrontmatterManager.normalizeUID(uid));
 			if (!file) return null;
 			return {
 				linktext: this.plugin.app.metadataCache.fileToLinktext(file, group.localPath ?? '', true),
@@ -464,14 +465,9 @@ export class RecentCommentsView extends ItemView {
 
 	/** Scan the vault once for cpn-uid → file (first file wins on duplicate UID). */
 	private buildUidToFileMap(): Map<string, TFile> {
-		const map = new Map<string, TFile>();
-		for (const f of this.plugin.app.vault.getMarkdownFiles()) {
-			// Pure metadataCache read — NOT getNoteUID, which mints/queues a UID as
-			// a side effect (see resolveLocalNote in recentComments.ts).
-			const uid = this.plugin.frontmatterManager.getFrontmatterValue(f, 'cpn-uid') as string | undefined;
-			if (uid && !map.has(uid)) map.set(uid, f);
-		}
-		return map;
+		// Canonical scan lives on FrontmatterManager (normalized keys, pure metadataCache
+		// read — never getNoteUID, which mints/queues a UID as a side effect).
+		return this.plugin.frontmatterManager.buildUidToFileMap();
 	}
 
 	/** Open the local source note for a group; notice fallback when unresolved. */

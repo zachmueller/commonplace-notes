@@ -193,11 +193,9 @@ export async function getThread(
 
 /** Read-only reverse lookup: comment noteUid -> local vault file (if published here). */
 function resolveLocalNote(plugin: CommonplaceNotesPlugin, noteUid: string): TFile | null {
-	// Pure metadataCache read — do NOT use FrontmatterManager.getNoteUID, which
-	// mints/queues a cpn-uid as a side effect for notes with publish contexts.
-	return plugin.app.vault.getMarkdownFiles().find(
-		(f) => plugin.frontmatterManager.getFrontmatterValue(f, 'cpn-uid') === noteUid,
-	) ?? null;
+	// Canonical UID->file lookup lives on FrontmatterManager (pure metadataCache read;
+	// never getNoteUID, which mints/queues a cpn-uid as a side effect). First match wins.
+	return plugin.frontmatterManager.getFilesByUID(noteUid)[0] ?? null;
 }
 
 /**
