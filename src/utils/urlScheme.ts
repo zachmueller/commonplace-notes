@@ -4,6 +4,10 @@
  * - 'current' scheme:  #/{type}{value}  (slash-delimited, no `=`)
  * - 'original' scheme: #{type}={value}  (ampersand-delimited, `=` separator)
  *
+ * The leading `{type}` is a single-char code the site's `resolveHash()` switches on:
+ * `u` = cpn-uid, `p` = permanent content-hash, `t` = title/slug, and `~` = a
+ * human-readable alias for `t` (both `#/t{slug}` and `#/~{slug}` resolve identically).
+ *
  * The scheme setting only controls **output**. Parsing always accepts both formats.
  */
 

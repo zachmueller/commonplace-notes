@@ -15,7 +15,7 @@
  *   - parseURLFragment surfaces `;diff=` as params.diff on the segment.
  *   - panelKey folds the diff target into the identity key, so a plain note and a
  *     diffed note are distinct panels (don't dedupe against each other).
- *   - resolveHash resolves t/u/p and throws on unknown types.
+ *   - resolveHash resolves t/~/u/p (~ is an alias for t) and throws on unknown types.
  *   - addPanel with params.diff builds a diff (left=target/old, right=base/new),
  *     renders a .diff-body, stores data-diff + data-panel-id, skips comments, and
  *     round-trips `;diff=` through updateURL.
@@ -41,6 +41,7 @@ const SITE_APP_JS: string = assets.SITE_APP_JS;
 // ---------------------------------------------------------------------------
 
 const UID = 'abc-123'; // contains a '-' on purpose (exercises panelId handling)
+const SLUG = 'my-slug'; // slug that maps to UID via slug-to-uid.json
 const CUR_HASH = 'hashcurrent000'; // current published version of UID
 const PRIOR_HASH = 'hashprior0000'; // its prior version
 
@@ -62,8 +63,13 @@ function noteJson(hash: string, raw: string, priorHash: string | null) {
 	};
 }
 
+// Minimal Headers stub so the app's cpnAuthGate (reads response.headers.get(...))
+// can run against these fixtures without throwing. No auth header / content-type
+// means "not gated", which is correct for plain JSON data responses.
+const noHeaders = { get: (_name: string) => null };
+
 function jsonResponse(obj: any) {
-	return { ok: true, status: 200, json: async () => obj } as any;
+	return { ok: true, status: 200, headers: noHeaders, json: async () => obj } as any;
 }
 
 function makeFetch() {
@@ -71,6 +77,9 @@ function makeFetch() {
 		const u = String(url);
 		if (u.includes('/static/mapping/uid-to-hash.json')) {
 			return jsonResponse({ [UID]: CUR_HASH });
+		}
+		if (u.includes('/static/mapping/slug-to-uid.json')) {
+			return jsonResponse({ [SLUG]: UID });
 		}
 		if (u.includes('/static/content/contentIndex.json')) {
 			return jsonResponse({});
@@ -82,7 +91,7 @@ function makeFetch() {
 			return jsonResponse(noteJson(PRIOR_HASH, RAW_PRIOR, null));
 		}
 		// Any other note hash (e.g. an unresolvable diff target) → 404.
-		return { ok: false, status: 404, json: async () => ({}) } as any;
+		return { ok: false, status: 404, headers: noHeaders, json: async () => ({}) } as any;
 	};
 }
 
@@ -203,10 +212,12 @@ async function main() {
 	);
 
 	// =====================================================================
-	// C. resolveHash resolves t/u/p and throws on unknown
+	// C. resolveHash resolves t/~/u/p and throws on unknown
 	// =====================================================================
 	eq(await W.__resolveHash('p', 'literalhash'), 'literalhash', 'C1: p resolves to itself');
 	eq(await W.__resolveHash('u', UID), CUR_HASH, 'C2: u resolves via uid-to-hash');
+	eq(await W.__resolveHash('t', SLUG), CUR_HASH, 'C2t: t resolves via slug-to-uid → uid-to-hash');
+	eq(await W.__resolveHash('~', SLUG), CUR_HASH, 'C2~: ~ is an alias for t (same resolution)');
 	{
 		let threw = false;
 		try { await W.__resolveHash('z', 'x'); } catch { threw = true; }

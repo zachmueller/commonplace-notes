@@ -1788,6 +1788,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		async function resolveHash(type, value) {
 			let hash;
 			switch (type) {
+				case '~': // Title/slug (human-readable alias for 't')
 				case 't': // Title/slug
 					console.log('Resolving by title');
 					const slugMap = await fetchMapping('/static/mapping/slug-to-uid.json');
