@@ -4,7 +4,8 @@ import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
 import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, ChatStackOutputs, DeploymentConfig, HostedZoneInfo, InfrastructureState, OriginAccessMethod, StackEvent, StackOutputs } from './types';
-import { pushSiteAssetsToS3, createCloudFrontInvalidation } from '../publish/awsUpload';
+import { pushSiteAssetsToS3, createCloudFrontInvalidation, hasRestrictedObjects } from '../publish/awsUpload';
+import { edgeEnforcesGroups } from '../utils/access';
 import { errorMessage } from '../utils/logging';
 import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 
@@ -37,7 +38,7 @@ export class DeploymentWizardModal extends Modal {
 	private selectedCertMatch: CertificateMatch | null = null;
 	private stackOutputs: StackOutputs | null = null;
 	private cognitoOutputs: CognitoAuthOutputs | null = null;
-	/** Stack owning the Cognito read-gate edge fn (set when reads are Cognito-gated). */
+	/** Stack owning the Cognito edge fn (Cognito-gated reads, or a public site with access groups). */
 	private cognitoEdgeStackName: string | undefined;
 	private cognitoStackName: string = '';
 	private commentOutputs: CommentStackOutputs | null = null;
@@ -69,7 +70,13 @@ export class DeploymentWizardModal extends Modal {
 			// Read-gate mode + built-in Cognito + Google auth — re-seed persisted
 			// author intent (the Google secret + password plaintext are never
 			// stored, so they are always re-entered; the password hash is reused).
-			readGateMode: profile.readGate?.mode || (auth?.enabled ? 'cognito' : 'none'),
+			// readGate is only persisted for non-public modes, so fall back to the
+			// deployed mode before guessing from the pool: a public site with a
+			// comment-identity pool must not re-run as Cognito-gated.
+			readGateMode: profile.readGate?.mode
+				|| profile.infrastructureState?.readGateMode
+				|| (auth?.enabled ? 'cognito' : 'none'),
+			publicSiteAccessGroups: profile.publicSiteAccessGroups || false,
 			passwordHash: profile.readGate?.passwordHash,
 			commentIdentityEnabled: auth?.commentIdentity || false,
 			googleClientId: auth?.googleClientId || '',
@@ -194,9 +201,24 @@ export class DeploymentWizardModal extends Modal {
 				.onClick(() => this.handleStep1Next()));
 	}
 
-	/** The Cognito pool is provisioned whenever reads are Cognito-gated OR comments need identity. */
+	/**
+	 * The Cognito pool is provisioned whenever reads are Cognito-gated, comments
+	 * need identity, or a public site gates individual notes with access groups.
+	 */
 	private cognitoPoolNeeded(): boolean {
-		return this.config.readGateMode === 'cognito' || !!this.config.commentIdentityEnabled;
+		return this.config.readGateMode === 'cognito'
+			|| !!this.config.commentIdentityEnabled
+			|| this.publicAccessGroupsWanted();
+	}
+
+	/** Public reads, plus per-note access groups (the public-reads edge fn). */
+	private publicAccessGroupsWanted(): boolean {
+		return (this.config.readGateMode || 'none') === 'none' && !!this.config.publicSiteAccessGroups;
+	}
+
+	/** Whether this run deploys the Cognito edge stack (and in which mode). */
+	private cognitoEdgeWanted(): boolean {
+		return this.config.readGateMode === 'cognito' || this.publicAccessGroupsWanted();
 	}
 
 	/**
@@ -248,6 +270,20 @@ export class DeploymentWizardModal extends Modal {
 					this.config.readGateMode = v as DeploymentConfig['readGateMode'];
 					this.renderStep();
 				}));
+
+		if ((this.config.readGateMode || 'none') === 'none') {
+			new Setting(container)
+				.setName('Gate individual notes with access groups')
+				.setDesc('Keep the site public, but let notes that list "cpn-access-groups" require Google sign-in and group membership. '
+					+ 'Needs the Cognito + Google setup below. This attaches a small Lambda@Edge function to every request, public ones included: '
+					+ 'about US$0.60 per million requests plus a small duration charge, and a few milliseconds of latency. Public notes stay anonymous.')
+				.addToggle(toggle => toggle
+					.setValue(!!this.config.publicSiteAccessGroups)
+					.onChange(v => {
+						this.config.publicSiteAccessGroups = v;
+						this.renderStep();
+					}));
+		}
 
 		if (this.config.readGateMode === 'password') {
 			new Setting(container)
@@ -1084,12 +1120,16 @@ export class DeploymentWizardModal extends Modal {
 				this.cognitoOutputs = await this.cfManager.getCognitoAuthOutputs(stackName, this.activeProfile);
 				this.cognitoStackName = stackName;
 
-				// The read-gate edge fn is its own stack now (S3 asset, no inline size
+				// The Cognito edge fn is its own stack now (S3 asset, no inline size
 				// cap). It bakes the pool's ids, so it deploys after the pool, and only
-				// when reads are Cognito-gated (comment identity alone doesn't need it).
-				if (this.config.readGateMode === 'cognito') {
+				// when reads are Cognito-gated or a public site gates notes with access
+				// groups (public-reads build). Comment identity alone doesn't need it.
+				if (this.cognitoEdgeWanted()) {
+					const publicReads = this.publicAccessGroupsWanted();
 					container.createEl('p', {
-						text: 'Deploying the Cognito viewer-request function in us-east-1...',
+						text: publicReads
+							? 'Deploying the access-groups viewer-request function (public reads) in us-east-1...'
+							: 'Deploying the Cognito viewer-request function in us-east-1...',
 						cls: 'cpn-wizard-description',
 					});
 					const edgeStack = await this.cfManager.deployCognitoEdgeStack(
@@ -1097,6 +1137,7 @@ export class DeploymentWizardModal extends Modal {
 						this.activeProfile,
 						this.cognitoOutputs,
 						(e) => this.appendEvent(eventLog, e),
+						{ publicReads },
 					);
 					const edgeStatus = await this.cfManager.pollStackUntilComplete(
 						edgeStack, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',
@@ -1125,14 +1166,58 @@ export class DeploymentWizardModal extends Modal {
 		}
 	}
 
-	/** The viewer-request edge-fn ARN for the active read-gate mode (''=public). */
+	/**
+	 * The viewer-request edge-fn ARN for the active read-gate mode. '' = no edge
+	 * fn (fully public). A public site with access groups gets the public-reads
+	 * Cognito edge fn. Removing an edge fn that guards published gated notes is
+	 * refused later, in guardGatedNotesBeforeDeploy().
+	 */
 	private resolveReadGateArn(): string {
 		switch (this.config.readGateMode) {
 			case 'cognito': return this.cognitoOutputs?.edgeFunctionVersionArn || '';
 			case 'password': return this.passwordEdgeArn || '';
 			case 'byo': return this.config.authLambdaEdgeArn || '';
-			default: return '';
+			default:
+				return this.publicAccessGroupsWanted() ? (this.cognitoOutputs?.edgeFunctionVersionArn || '') : '';
 		}
+	}
+
+	/**
+	 * Fail-open guard for re-runs against a live site: if the site bucket already
+	 * holds gated notes (`restricted/`) and the edge fn this deploy attaches would
+	 * not enforce access groups (none at all, a password gate, an un-vouched BYO
+	 * fn), stop. Otherwise the deploy would make those notes world-readable.
+	 * Returns an error message, or null to proceed.
+	 */
+	private async guardGatedNotesBeforeDeploy(): Promise<string | null> {
+		const fullStack = this.cfManager.getStackName(this.config.variantName || '', 'full');
+		let bucket: string;
+		try {
+			bucket = (await this.cfManager.getStackOutputs(fullStack, this.activeProfile, this.config.region)).bucketName;
+		} catch (err) {
+			// A fresh deploy has no site (and no gated notes) yet.
+			if (/does not exist|not found/i.test(errorMessage(err))) return null;
+			throw err;
+		}
+		// The profile as it will look after this deploy, for the shared rule.
+		const after: PublishingProfile = {
+			...this.activeProfile,
+			infrastructureState: {
+				status: 'deploying',
+				useRoute53: false,
+				originAccessMethod: this.config.originAccessMethod || 'oac',
+				readGateMode: this.config.readGateMode || 'none',
+				cognitoAuth: this.cognitoEdgeStackName && this.cognitoOutputs
+					? { ...this.cognitoOutputs, stackName: this.cognitoStackName, enabled: true, commentIdentity: false, edgeStackName: this.cognitoEdgeStackName }
+					: undefined,
+			},
+		};
+		if (edgeEnforcesGroups(after, this.config.authLambdaEdgeArn)) return null;
+		if (!bucket || !(await hasRestrictedObjects(this.plugin, this.activeProfile.id, bucket))) return null;
+		return 'This site already publishes gated notes (under restricted/), and this deployment would attach no edge function '
+			+ 'that enforces access groups, so those notes would become readable by anyone. Remove "cpn-access-groups" from those '
+			+ 'notes and publish, or remove the groups under Access groups settings, then re-run the wizard. '
+			+ '(On a public site, keep "Gate individual notes with access groups" on.)';
 	}
 
 	private async renderStep5DeployFull(): Promise<void> {
@@ -1151,6 +1236,12 @@ export class DeploymentWizardModal extends Modal {
 			// a later deploy once the comment stack exists.
 			if (this.cognitoPoolNeeded() && this.cognitoOutputs?.callbackApiDomain) {
 				this.config.callbackApiDomainName = this.cognitoOutputs.callbackApiDomain;
+			}
+
+			const guardError = await this.guardGatedNotesBeforeDeploy();
+			if (guardError) {
+				this.showError(container, guardError);
+				return;
 			}
 
 			// Pre-deploy hooks — succeed-with-warning; never blocks the deploy. No
@@ -1558,6 +1649,8 @@ export class DeploymentWizardModal extends Modal {
 			? { mode: this.config.readGateMode, passwordHash: this.config.passwordHash }
 			: undefined;
 
+		profile.publicSiteAccessGroups = this.publicAccessGroupsWanted() || undefined;
+
 		// Persist author intent (re-shown when the wizard reopens); secret is never stored.
 		if (this.cognitoPoolNeeded()) {
 			profile.cognitoAuth = {
@@ -1621,6 +1714,7 @@ export class DeploymentWizardModal extends Modal {
 			edgeStackName: this.cognitoEdgeStackName,
 			accessGroupsBucket: this.cognitoOutputs.accessGroupsBucket || undefined,
 			accessGroupsKey: this.cognitoOutputs.accessGroupsKey || undefined,
+			edgePublicReads: (this.cognitoEdgeStackName && this.publicAccessGroupsWanted()) || undefined,
 		};
 	}
 

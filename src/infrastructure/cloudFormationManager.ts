@@ -152,9 +152,12 @@ export function mapCognitoOutputs(o: Record<string, string>): CognitoAuthOutputs
 	};
 }
 
-/** Map any S3-asset edge stack's outputs (password or Cognito): the version ARN. */
-export function mapEdgeOutputs(o: Record<string, string>): { edgeFunctionVersionArn: string } {
-	return { edgeFunctionVersionArn: o['EdgeFunctionVersionArn'] || '' };
+/**
+ * Map any S3-asset edge stack's outputs (password or Cognito): the version ARN,
+ * and for the Cognito edge stack whether it runs in public-reads mode.
+ */
+export function mapEdgeOutputs(o: Record<string, string>): { edgeFunctionVersionArn: string; publicReads: boolean } {
+	return { edgeFunctionVersionArn: o['EdgeFunctionVersionArn'] || '', publicReads: o['PublicReads'] === 'true' };
 }
 
 /** Map a password auth stack's outputs (just the edge fn version ARN). */
@@ -655,11 +658,14 @@ export class CloudFormationManager {
 	/**
 	 * Compose the Cognito viewer-request edge fn (baked CFG + shared JWT verifier +
 	 * handler) from a deployed pool's outputs and upload it to the bootstrap bucket.
+	 * `publicReads` builds the public-site variant: only `/restricted/*` needs a
+	 * token (see auth-edge.js).
 	 */
 	async packageCognitoEdge(
 		profile: PublishingProfile,
 		bucketName: string,
 		pool: Pick<CognitoAuthOutputs, 'hostedUiDomain' | 'userPoolClientId' | 'userPoolId'>,
+		opts: { publicReads?: boolean } = {},
 	): Promise<{ bucket: string; key: string; codeSha256: string }> {
 		// Pool ids are `<region>_<id>`; the pool always lives in us-east-1 today,
 		// but derive it so the JWKS/issuer URLs can never disagree with the pool.
@@ -669,6 +675,7 @@ export class CloudFormationManager {
 			clientId: pool.userPoolClientId,
 			region,
 			userPoolId: pool.userPoolId,
+			publicReads: !!opts.publicReads,
 		};
 		const cfgLine = `const CFG = ${JSON.stringify(cfg)};\n`;
 		return this.packageLambdaAsset(profile, bucketName, 'lambda/auth-edge', cfgLine + AUTH_EDGE_BODY);
@@ -695,34 +702,39 @@ export class CloudFormationManager {
 	 * Deploy (or update) the Cognito viewer-request edge stack
 	 * (`cpn-authedge-<variant>`) from a deployed pool's outputs. Pinned to
 	 * us-east-1 (Lambda@Edge). Returns the stack name; read the ARN with
-	 * getEdgeStackOutputs after polling.
+	 * getEdgeStackOutputs after polling. `publicReads` deploys the public-site
+	 * variant (a `none` read gate with per-note access groups).
 	 */
 	async deployCognitoEdgeStack(
 		config: DeploymentConfig,
 		profile: PublishingProfile,
 		pool: Pick<CognitoAuthOutputs, 'hostedUiDomain' | 'userPoolClientId' | 'userPoolId'>,
 		onEvent?: (event: StackEvent) => void,
+		opts: { publicReads?: boolean } = {},
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'authedge');
 		const client = this.getCloudFormationClient(config, 'us-east-1');
 
 		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
-		const { bucket, key, codeSha256 } = await this.packageCognitoEdge(profile, bucketName, pool);
+		const { bucket, key, codeSha256 } = await this.packageCognitoEdge(profile, bucketName, pool, opts);
 
+		// Also used for updates (createOrUpdateStack falls back to these), so a
+		// stack created before PublicReads existed gets it explicitly.
 		return this.createOrUpdateStack(client, stackName, {
 			templateBody: COGNITO_EDGE_TEMPLATE,
 			createParameters: [
 				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
 				{ ParameterKey: 'CodeSha256', ParameterValue: codeSha256 },
+				{ ParameterKey: 'PublicReads', ParameterValue: opts.publicReads ? 'true' : 'false' },
 			],
 			capabilities: ['CAPABILITY_IAM'],
 			profileId: config.profileId,
 		});
 	}
 
-	/** Versioned edge fn ARN from any S3-asset edge stack (password or Cognito). */
-	async getEdgeStackOutputs(stackName: string, profile: PublishingProfile): Promise<{ edgeFunctionVersionArn: string }> {
+	/** Versioned edge fn ARN (and Cognito public-reads mode) from any S3-asset edge stack. */
+	async getEdgeStackOutputs(stackName: string, profile: PublishingProfile): Promise<{ edgeFunctionVersionArn: string; publicReads: boolean }> {
 		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
@@ -1172,7 +1184,8 @@ export class CloudFormationManager {
 	 * Settings "Update Auth Lambda@Edge" modal): a full parameter rebuild from a
 	 * partial config would blank CallbackApiDomainName/CommentBucketDomainName/
 	 * CommentApiDomainName and prune the /auth/*, /comments/*, /api/comments routes
-	 * off a working site. Pass '' to remove read-gating.
+	 * off a working site. Pass '' to remove read-gating. `extraOverrides` sets
+	 * other params in the same update (e.g. CallbackApiDomainName).
 	 */
 	async updateFullStackAuthLambda(
 		stackName: string,
@@ -1180,6 +1193,7 @@ export class CloudFormationManager {
 		authLambdaEdgeArn: string,
 		profile: PublishingProfile,
 		region?: string,
+		extraOverrides: Partial<Record<string, string>> = {},
 	): Promise<string> {
 		const client = this.getCloudFormationClientForProfile(profile, region);
 		const template = originAccessMethod === 'oac'
@@ -1190,7 +1204,7 @@ export class CloudFormationManager {
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: template,
-			Parameters: this.buildFullStackUpdateParameters({ AuthLambdaEdgeArn: authLambdaEdgeArn }, deployedKeys),
+			Parameters: this.buildFullStackUpdateParameters({ ...extraOverrides, AuthLambdaEdgeArn: authLambdaEdgeArn }, deployedKeys),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -1261,8 +1275,10 @@ export class CloudFormationManager {
 	 *      Retain (an update of the deployed template), so step 3 can drop them
 	 *      from the stack without deleting a function CloudFront may still use.
 	 *   3. Update the pool stack to the current template (adds the trigger).
-	 *   4. When reads are Cognito-gated: deploy/update the separate edge stack and
-	 *      re-point the site distribution at its version ARN.
+	 *   4. When reads are Cognito-gated, or the site is public and opted in to
+	 *      per-note access groups (`publicSiteAccessGroups`): deploy/update the
+	 *      separate edge stack (public-reads mode for the latter) and re-point the
+	 *      site distribution at its version ARN.
 	 *   5. Persist the new state; park the legacy edge fn + role in
 	 *      `pendingEdgeCleanup` for deletion once CloudFront drops the replicas.
 	 * Safe to re-run: on a current deployment it just refreshes the trigger and
@@ -1357,16 +1373,26 @@ export class CloudFormationManager {
 		}, 'Cognito pool stack update');
 		const pool = await this.getCognitoAuthOutputs(poolStack, profile);
 
-		// 4) Edge stack + re-point the site (only when reads are Cognito-gated).
+		// 4) Edge stack + re-point the site: whole-site Cognito gate, or a public
+		// site that opted in to per-note access groups (public-reads build).
+		const mode = state.readGateMode ?? 'none';
+		const publicReads = mode === 'none';
+		const wantsEdge = mode === 'cognito' || (publicReads && !!profile.publicSiteAccessGroups);
 		let edgeArn = '';
 		let edgeStackName: string | undefined;
-		if (state.readGateMode === 'cognito') {
-			edgeStackName = await this.deployCognitoEdgeStack(config, profile, pool, onEvent);
+		if (wantsEdge) {
+			edgeStackName = await this.deployCognitoEdgeStack(config, profile, pool, onEvent, { publicReads });
 			await expectComplete(edgeStackName, 'us-east-1', 'Cognito edge stack deploy');
 			edgeArn = (await this.getEdgeStackOutputs(edgeStackName, profile)).edgeFunctionVersionArn;
 			if (!edgeArn) throw new Error('The Cognito edge stack did not report a version ARN.');
 			if (state.fullStackName && state.authLambdaEdgeArn !== edgeArn) {
-				await this.updateFullStackAuthLambda(state.fullStackName, state.originAccessMethod, edgeArn, profile, state.region);
+				// A public site that already has comment identity has the /auth/*
+				// callback origin; set it anyway (idempotent) so sign-in for gated
+				// notes can never land on a site without the callback route.
+				const extra = publicReads && pool.callbackApiDomain
+					? { CallbackApiDomainName: pool.callbackApiDomain }
+					: {};
+				await this.updateFullStackAuthLambda(state.fullStackName, state.originAccessMethod, edgeArn, profile, state.region, extra);
 				await expectComplete(state.fullStackName, state.region || profile.awsSettings?.region || 'us-east-1', 'Site stack re-point');
 			}
 			state.authLambdaEdgeArn = edgeArn;
@@ -1381,6 +1407,7 @@ export class CloudFormationManager {
 			accessGroupsKey: pool.accessGroupsKey || undefined,
 			// Force a membership re-upload on the next sync.
 			accessGroupsSyncedHash: undefined,
+			edgePublicReads: edgeStackName ? (publicReads || undefined) : cognito.edgePublicReads,
 		};
 		if (orphan && (orphan.functionName || orphan.roleName)) {
 			profile.pendingEdgeCleanup = [...(profile.pendingEdgeCleanup || []), orphan];

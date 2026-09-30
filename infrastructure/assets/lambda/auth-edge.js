@@ -15,15 +15,30 @@
 //         token's `cognito:groups` claim (set by the pool's pre-token-generation
 //         trigger from the plugin-managed groups.json). Otherwise
 //         403 with `x-cpn-auth: forbidden`.
-//       - `GET /restricted/whoami` answers `{ groups, email }` from the verified
-//         token, so the SPA knows which partitions to load without probing.
+//       - `GET /restricted/whoami` answers `{ groups, email, signedIn }` from the
+//         verified token, so the SPA knows which partitions to load without probing.
+//
+// Public-reads mode (`CFG.publicReads`, a public site that only gates the notes
+// that list access groups):
+//   * Every path outside `/restricted/` passes straight through: no cookie read,
+//     no token verification, no JWKS fetch. Public notes stay anonymous.
+//   * `GET /restricted/whoami` without a valid token answers 200
+//     `{ groups: [], signedIn: false }`. A 401 here would make the SPA's
+//     `cpnAuthGate` reload the page on a public site.
+//   * `/restricted/<group>/...` without a valid token, or without membership,
+//     gets the same 403 `x-cpn-auth: forbidden`, even for a navigation. The SPA
+//     only fetch()es restricted paths (it can't follow a cross-origin 302 to the
+//     Hosted UI), and one uniform answer for "signed out" and "not a member"
+//     tells an anonymous reader nothing about whether a note exists. The SPA
+//     offers sign-in itself, from whoami's `signedIn` flag.
 //
 // Packaging: an S3 asset (see infrastructure/lib/cognito-edge-stack.ts). The
 // plugin bakes a leading `const CFG = {...};` line (Lambda@Edge forbids env
 // vars) ahead of lib-jwt-verify.js + this file. No inline size cap applies.
 //
 // `CFG` shape:
-//   { domain, clientId, region, userPoolId }   // domain = full https Hosted UI origin
+//   { domain, clientId, region, userPoolId, publicReads }
+//   domain = full https Hosted UI origin; publicReads = true for public sites.
 
 const JWKS_URI = 'https://cognito-idp.' + CFG.region + '.amazonaws.com/' + CFG.userPoolId + '/.well-known/jwks.json';
 const TOKEN_ISS = 'https://cognito-idp.' + CFG.region + '.amazonaws.com/' + CFG.userPoolId;
@@ -106,17 +121,26 @@ exports.handler = async (event) => {
 	// Let the OAuth callback through unauthenticated; it is what sets the cookie.
 	if (uri.indexOf('/auth/') === 0) return request;
 
+	// Public site: only the restricted partitions need a token.
+	const publicReads = CFG.publicReads === true;
+	if (publicReads && uri.indexOf(RESTRICTED_PREFIX) !== 0) return request;
+
 	const cookieHeader = request.headers.cookie ? request.headers.cookie.map((h) => h.value).join('; ') : '';
 	const token = readCpnCookie(cookieHeader);
 	const claims = token ? await verifyIdToken(token) : null;
 	if (!claims) {
+		if (publicReads) {
+			return uri === WHOAMI_URI
+				? jsonResponse(200, null, { groups: [], email: '', signedIn: false })
+				: jsonResponse(403, 'forbidden', { error: 'cpn_forbidden' });
+		}
 		return isNavigation(request)
 			? loginRedirect(request)
 			: jsonResponse(401, 'required', { error: 'cpn_auth_required' });
 	}
 
 	if (uri === WHOAMI_URI) {
-		return jsonResponse(200, null, { groups: tokenGroups(claims), email: claims.email || '' });
+		return jsonResponse(200, null, { groups: tokenGroups(claims), email: claims.email || '', signedIn: true });
 	}
 
 	if (uri.indexOf(RESTRICTED_PREFIX) === 0) {

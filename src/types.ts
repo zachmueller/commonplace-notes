@@ -81,6 +81,14 @@ export interface PublishingProfile {
 	 * notes are not published on BYO sites.
 	 */
 	byoEnforcesAccessGroups?: boolean;
+	/**
+	 * Public read gate (`none`) only: the author opted in to per-note access
+	 * groups on a public site. The Cognito edge fn is then deployed in
+	 * public-reads mode and attached to the distribution: public notes stay
+	 * anonymous, and only `/restricted/<group>/*` needs sign-in + membership.
+	 * Costs a Lambda@Edge invocation (and a few ms) on every request.
+	 */
+	publicSiteAccessGroups?: boolean;
 }
 
 /** One access group: who may read notes gated to it. */

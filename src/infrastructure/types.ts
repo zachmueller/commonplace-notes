@@ -82,6 +82,11 @@ export interface CognitoAuthState {
 	accessGroupsKey?: string;
 	/** sha256 of the last membership file uploaded, so publishes skip no-op uploads. */
 	accessGroupsSyncedHash?: string;
+	/**
+	 * True when the edge stack runs in public-reads mode (a `none` read gate that
+	 * gates only notes with access groups). False/absent: whole-site sign-in.
+	 */
+	edgePublicReads?: boolean;
 }
 
 /** Raw outputs read from a deployed Cognito auth stack (plus its edge stack). */
@@ -192,6 +197,11 @@ export interface DeploymentConfig {
 	callbackUrl?: string;
 	/** API Gateway host for the /auth/* callback origin (from the Cognito auth stack). */
 	callbackApiDomainName?: string;
+	/**
+	 * Public read gate only: also deploy the Cognito edge fn in public-reads mode
+	 * so notes can be gated with access groups (transient wizard selection).
+	 */
+	publicSiteAccessGroups?: boolean;
 	/** Per-account bootstrap bucket (Lambda assets + access-group membership file). */
 	assetsBucket?: string;
 	/** Bootstrap-bucket key of the pre-token-generation trigger code zip. */

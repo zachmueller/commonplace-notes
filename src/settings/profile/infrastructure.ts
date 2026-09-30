@@ -84,17 +84,26 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 		// groups need. Idempotent, so it doubles as "redeploy the latest edge fn".
 		if (state.cognitoAuth?.stackName && !state.imported) {
 			const cognito = state.cognitoAuth;
+			// A public site that opted in to access groups needs the public-reads
+			// edge fn deployed AND attached; the upgrade does both.
+			const publicGating = (state.readGateMode ?? 'none') === 'none' && !!profile.publicSiteAccessGroups;
 			const needsUpgrade = !cognito.accessGroupsKey
-				|| (state.readGateMode === 'cognito' && !cognito.edgeStackName);
+				|| (state.readGateMode === 'cognito' && !cognito.edgeStackName)
+				|| (publicGating && (!cognito.edgeStackName || !cognito.edgePublicReads
+					|| state.authLambdaEdgeArn !== cognito.edgeFunctionVersionArn));
+			const upgradeLabel = publicGating ? 'Deploy access-groups edge function' : 'Upgrade Cognito gate';
 			const eventLog = containerEl.createDiv({ cls: 'cpn-wizard-event-log' });
 			eventLog.hide();
 			new Setting(containerEl)
 				.setName('Cognito gate')
 				.setDesc(needsUpgrade
-					? 'Upgrade required for per-note access groups: moves the sign-in edge function to its own stack and adds the group-membership trigger. The site stays up; takes several minutes.'
+					? (publicGating
+						? 'Needed for access groups on this public site: adds the group-membership trigger to the sign-in pool and attaches the '
+							+ 'access-groups edge function (public notes stay anonymous; every request runs it). The site stays up; takes several minutes.'
+						: 'Upgrade required for per-note access groups: moves the sign-in edge function to its own stack and adds the group-membership trigger. The site stays up; takes several minutes.')
 					: 'Up to date. Re-run to redeploy the latest edge function and trigger code.')
 				.addButton(btn => btn
-					.setButtonText(needsUpgrade ? 'Upgrade Cognito gate' : 'Redeploy')
+					.setButtonText(needsUpgrade ? upgradeLabel : 'Redeploy')
 					.setClass(needsUpgrade ? 'mod-cta' : '')
 					.onClick(async () => {
 						btn.setDisabled(true);
@@ -122,7 +131,7 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 							Logger.error('Error upgrading the Cognito gate:', err);
 							new Notice(`Cognito gate upgrade failed: ${errorMessage(err)}`);
 							btn.setDisabled(false);
-							btn.setButtonText(needsUpgrade ? 'Upgrade Cognito gate' : 'Redeploy');
+							btn.setButtonText(needsUpgrade ? upgradeLabel : 'Redeploy');
 						}
 					}));
 		}

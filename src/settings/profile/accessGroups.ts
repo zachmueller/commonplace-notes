@@ -36,6 +36,29 @@ export function renderAccessGroupsSection(ctx: ProfileContext, containerEl: HTML
 		status.descEl.addClass('mod-warning');
 	}
 
+	// Public site: opt in to the public-reads edge fn (per-request cost).
+	const state = profile.infrastructureState;
+	if ((state?.readGateMode ?? 'none') === 'none' && profile.publishMechanism === 'AWS') {
+		const hasPool = !!state?.cognitoAuth?.stackName;
+		const toggle = new Setting(containerEl)
+			.setName('Gate notes on this public site')
+			.setDesc((hasPool
+				? 'Keep the site public, but let notes that list a group require Google sign-in and membership. '
+				: 'Needs the Cognito sign-in pool: re-run the deployment wizard with "Gate individual notes with access groups" on. ')
+				+ 'Attaches a small Lambda@Edge function to every request (about US$0.60 per million requests plus a small duration charge, '
+				+ 'and a few milliseconds of latency). After turning this on, run Settings → Infrastructure → Deploy access-groups edge function. '
+				+ 'Turning it off leaves the edge function in place, so published gated notes stay protected; they are removed from the site at the next publish.')
+			.addToggle(t => t
+				.setValue(!!profile.publicSiteAccessGroups)
+				.setDisabled(!hasPool && !profile.publicSiteAccessGroups)
+				.onChange(async (v) => {
+					profile.publicSiteAccessGroups = v || undefined;
+					await plugin.saveSettings();
+					ctx.rerenderProfile();
+				}));
+		if (!hasPool) toggle.descEl.addClass('mod-warning');
+	}
+
 	// BYO read gate: the author vouches for their edge fn.
 	if (profile.infrastructureState?.readGateMode === 'byo') {
 		new Setting(containerEl)

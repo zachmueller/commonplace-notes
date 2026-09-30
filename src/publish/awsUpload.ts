@@ -549,6 +549,30 @@ export async function applyAccessTransitions(
 }
 
 /**
+ * Whether any gated note copy (anything under `<s3Prefix>restricted/`) is
+ * published in the profile's site bucket. `bucket` overrides the profile's
+ * bucket (the wizard knows it from the live stack before the profile does).
+ * Used to refuse detaching the group-enforcing edge function, which would make
+ * those objects world-readable.
+ */
+export async function hasRestrictedObjects(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+	bucket?: string,
+): Promise<boolean> {
+	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+	const bucketName = bucket || profile?.awsSettings?.bucketName;
+	if (!profile?.awsSettings || !bucketName) return false;
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const page = await s3Client.send(new ListObjectsV2Command({
+		Bucket: bucketName,
+		Prefix: `${profile.awsSettings.s3Prefix || ''}restricted/`,
+		MaxKeys: 1,
+	}));
+	return (page.KeyCount ?? page.Contents?.length ?? 0) > 0;
+}
+
+/**
  * Delete every object under a group partition (`restricted/<group>/`), e.g.
  * after the group is removed from settings. Returns the number deleted.
  */

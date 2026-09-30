@@ -2,6 +2,8 @@ import { Modal, Notice, Setting } from 'obsidian';
 import { PublishingProfile } from '../../types';
 import { Logger, errorMessage } from '../../utils/logging';
 import { ProfileContext } from '../context';
+import { edgeEnforcesGroups } from '../../utils/access';
+import { hasRestrictedObjects } from '../../publish/awsUpload';
 
 /**
  * Modal to set/clear the viewer-request Lambda@Edge ARN gating an AWS site.
@@ -16,6 +18,7 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 
 	const modal = new Modal(app);
 	let arnValue = state.authLambdaEdgeArn || '';
+	let detachConfirmed = false;
 
 	modal.onOpen = () => {
 		modal.titleEl.setText('Update Auth Lambda@Edge');
@@ -31,7 +34,7 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 			.addText(text => text
 				.setValue(arnValue)
 				.setPlaceholder('arn:aws:lambda:us-east-1:...:function:name:version')
-				.onChange(v => { arnValue = v; }));
+				.onChange(v => { arnValue = v; detachConfirmed = false; }));
 
 		const statusEl = modal.contentEl.createDiv();
 
@@ -46,6 +49,39 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 					btn.setDisabled(true);
 					btn.setButtonText('Updating...');
 					statusEl.empty();
+					// Fail-open guard: published gated notes (restricted/) are only
+					// protected by an edge fn that enforces access groups. Swapping it
+					// for anything else (or '') would make them world-readable.
+					if (!edgeEnforcesGroups(profile, arnValue)) {
+						let gatedPublished: boolean;
+						try {
+							gatedPublished = await hasRestrictedObjects(plugin, profile.id);
+						} catch (err: unknown) {
+							Logger.error('Could not check for published gated notes:', err);
+							new Notice(`Could not check for published gated notes: ${errorMessage(err)}`);
+							btn.setDisabled(false);
+							btn.setButtonText('Update Stack');
+							return;
+						}
+						if (gatedPublished && !detachConfirmed) {
+							statusEl.createEl('p', {
+								cls: 'mod-warning',
+								text: 'This site publishes gated notes (under restricted/), and this ARN does not enforce access groups. '
+									+ 'After the update anyone could read them. Remove "cpn-access-groups" from those notes and publish, '
+									+ 'or remove the groups under Access groups, first.',
+							});
+							new Setting(statusEl).addButton(b => b
+								.setButtonText('Detach anyway (gated notes become public)')
+								.setWarning()
+								.onClick(() => {
+									detachConfirmed = true;
+									btn.buttonEl.click();
+								}));
+							btn.setDisabled(false);
+							btn.setButtonText('Update Stack');
+							return;
+						}
+					}
 					try {
 						// Pre-deploy hooks (succeed-with-warning; never blocks).
 						await plugin.deployHookManager.runDeployHooks('pre', { profile, outputs: null });

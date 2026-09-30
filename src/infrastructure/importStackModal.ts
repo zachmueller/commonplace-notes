@@ -465,6 +465,11 @@ export class ImportStackModal extends Modal {
 		// Determine which read-gate is active. When both are present the user's
 		// selector wins; otherwise infer from the full stack's AuthLambdaEdgeArn.
 		const readGateMode = this.resolveReadGateMode(authLambdaEdgeArn, cognito, password, authedge);
+		// A public site running the public-reads Cognito edge fn (per-note access
+		// groups): resolveReadGateMode reports 'none' for it.
+		const edgePublicReads = !!authedge && mapEdgeOutputs(authedge.outputs).publicReads;
+		const publicSiteGating = readGateMode === 'none' && edgePublicReads && !!cognito
+			&& !!authLambdaEdgeArn && authLambdaEdgeArn === cognitoEdgeArn(cognito, authedge);
 
 		const commentPresent = !!comment;
 
@@ -488,6 +493,7 @@ export class ImportStackModal extends Modal {
 				edgeStackName: authedge?.stackName,
 				accessGroupsBucket: o.accessGroupsBucket || undefined,
 				accessGroupsKey: o.accessGroupsKey || undefined,
+				edgePublicReads: edgePublicReads || undefined,
 			};
 		}
 
@@ -558,6 +564,7 @@ export class ImportStackModal extends Modal {
 			}
 			: undefined;
 		profile.commenting = commentPresent ? { enabled: true } : undefined;
+		profile.publicSiteAccessGroups = publicSiteGating || undefined;
 	}
 
 	/**
@@ -580,7 +587,10 @@ export class ImportStackModal extends Modal {
 			if (password) return 'password';
 			return 'none';
 		}
-		if (cognito && authArn === cognitoEdgeArn(cognito, authedge)) return 'cognito';
+		if (cognito && authArn === cognitoEdgeArn(cognito, authedge)) {
+			// The public-reads build of the Cognito edge fn keeps the site public.
+			return authedge && mapEdgeOutputs(authedge.outputs).publicReads ? 'none' : 'cognito';
+		}
 		if (password && authArn === mapPasswordOutputs(password.outputs).edgeFunctionVersionArn) return 'password';
 		return 'byo';
 	}

@@ -126,9 +126,13 @@ export type GatedPublishCheck = { ok: true } | { ok: false; reason: string };
 
 /**
  * Whether this profile can publish gated notes at all. Gated notes need an edge
- * function that enforces `/restricted/<group>/*`: the built-in Cognito gate (on
- * the upgraded, separate edge stack with the membership trigger), or a BYO edge
- * function the author has explicitly vouched for.
+ * function that enforces `/restricted/<group>/*`:
+ *   - `cognito`: the built-in whole-site gate, on the upgraded separate edge
+ *     stack with the membership trigger;
+ *   - `none`: a public site that opted in (`publicSiteAccessGroups`) and runs the
+ *     same edge fn in public-reads mode (only restricted paths need sign-in);
+ *   - `byo`: a custom edge function the author has explicitly vouched for.
+ * Every other state fails closed.
  */
 export function canPublishGated(profile: PublishingProfile): GatedPublishCheck {
 	if (profile.publishMechanism !== 'AWS') {
@@ -136,15 +140,35 @@ export function canPublishGated(profile: PublishingProfile): GatedPublishCheck {
 	}
 	const state = profile.infrastructureState;
 	const mode = state?.readGateMode ?? 'none';
+	const c = state?.cognitoAuth;
+	// The site must actually run the group-aware edge fn. A hand-set ARN (via
+	// "Auth Lambda@Edge → Update") could be anything, so fail closed.
+	const runsCurrentEdge = !!state?.authLambdaEdgeArn && state.authLambdaEdgeArn === c?.edgeFunctionVersionArn;
 	if (mode === 'cognito') {
-		const c = state?.cognitoAuth;
 		if (!c?.edgeStackName || !c.accessGroupsKey) {
 			return { ok: false, reason: 'the Cognito gate needs the one-time upgrade (Settings → Infrastructure → Upgrade Cognito gate)' };
 		}
-		// The site must actually run the group-aware edge fn. A hand-set ARN (via
-		// "Auth Lambda@Edge → Update") could be anything, so fail closed.
-		if (!state?.authLambdaEdgeArn || state.authLambdaEdgeArn !== c.edgeFunctionVersionArn) {
+		if (c.edgePublicReads) {
+			// A public-reads build on a whole-site gate would silently open the site.
+			return { ok: false, reason: 'the Cognito edge function was built for a public site (re-run "Upgrade Cognito gate")' };
+		}
+		if (!runsCurrentEdge) {
 			return { ok: false, reason: 'the site is not using the Cognito gate\'s current edge function (re-run "Upgrade Cognito gate")' };
+		}
+		return { ok: true };
+	}
+	if (mode === 'none') {
+		if (!profile.publicSiteAccessGroups) {
+			return { ok: false, reason: 'access groups are not turned on for this public site (Access groups → Gate notes on this public site)' };
+		}
+		if (!c?.stackName) {
+			return { ok: false, reason: 'access groups need the Cognito sign-in pool; re-run the deployment wizard with "Gate individual notes with access groups" on' };
+		}
+		if (!c.edgeStackName || !c.accessGroupsKey || c.edgePublicReads !== true) {
+			return { ok: false, reason: 'the access-groups edge function is not deployed (Settings → Infrastructure → Deploy access-groups edge function)' };
+		}
+		if (!runsCurrentEdge) {
+			return { ok: false, reason: 'the site is not using the access-groups edge function (Settings → Infrastructure → Deploy access-groups edge function)' };
 		}
 		return { ok: true };
 	}
@@ -154,6 +178,19 @@ export function canPublishGated(profile: PublishingProfile): GatedPublishCheck {
 			: { ok: false, reason: 'the custom edge function has not been marked as enforcing /restricted/<group>/ paths' };
 	}
 	return { ok: false, reason: `the site's read gate is "${mode}"; access groups need Cognito sign-in` };
+}
+
+/**
+ * Whether the viewer-request function `arn` would enforce `/restricted/<group>/*`
+ * for this profile: the upgraded Cognito edge fn (either mode), or a BYO fn the
+ * author vouched for. Used to refuse attaching anything else (including '' =
+ * no edge fn) while gated notes exist, which would make them world-readable.
+ */
+export function edgeEnforcesGroups(profile: PublishingProfile, arn: string | undefined): boolean {
+	if (!arn) return false;
+	const c = profile.infrastructureState?.cognitoAuth;
+	if (c?.edgeStackName && c.edgeFunctionVersionArn && arn === c.edgeFunctionVersionArn) return true;
+	return profile.infrastructureState?.readGateMode === 'byo' && !!profile.byoEnforcesAccessGroups;
 }
 
 /**

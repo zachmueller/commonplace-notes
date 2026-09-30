@@ -110,6 +110,25 @@ function emitThemeVars(colors: ThemeColors | undefined): Record<string, string> 
 	return vars;
 }
 
+/**
+ * Cognito Hosted UI authorize URL (Google IdP) with the site's `/auth/callback`
+ * as redirect_uri, or undefined when the pool outputs or base URL are missing.
+ * The client appends `state` (where to return after sign-in).
+ */
+function buildAuthLoginUrl(profile: PublishingProfile): string | undefined {
+	const auth = profile.infrastructureState?.cognitoAuth;
+	if (!auth?.hostedUiDomain || !auth.userPoolClientId || !profile.baseUrl) return undefined;
+	const redirectUri = profile.baseUrl.replace(/\/+$/, '') + '/auth/callback';
+	const params = new URLSearchParams({
+		client_id: auth.userPoolClientId,
+		response_type: 'code',
+		scope: 'openid email profile',
+		identity_provider: 'Google',
+		redirect_uri: redirectUri,
+	});
+	return `${auth.hostedUiDomain}/oauth2/authorize?${params.toString()}`;
+}
+
 export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: string): string {
 	const custom = getCustomization(profile);
 
@@ -155,37 +174,39 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 		if (Object.keys(styles).length) config.styles = styles;
 	}
 
+	// Per-note access groups (consumed by the note loader via window.__CPN_CONFIG__).
+	// Emitted only when the site's edge fn actually enforces `/restricted/<group>/*`
+	// and at least one group exists. Group NAMES are deliberately not listed here
+	// (config.json is readable by every reader): the SPA asks the edge
+	// `GET <accessWhoamiPath>` for the viewer's own groups instead.
+	const accessGating = !!profile.accessGroups
+		&& Object.keys(profile.accessGroups).length > 0
+		&& canPublishGated(profile).ok;
+
 	// Commenting + built-in auth (consumed by the comment client via
 	// window.__CPN_CONFIG__). Only emitted when commenting is enabled and the
 	// Cognito auth stack has been deployed (its outputs supply the login URL).
 	const auth = profile.infrastructureState?.cognitoAuth;
-	if (profile.commenting?.enabled && auth?.commentIdentity) {
+	const commentsOn = !!(profile.commenting?.enabled && auth?.commentIdentity);
+	if (commentsOn) {
 		config.commentsEnabled = true;
 		config.commentReadPath = '/comments/';
 		config.commentWritePath = '/api/comments';
 		config.commentMePath = '/api/me';
-		if (auth.hostedUiDomain && auth.userPoolClientId && profile.baseUrl) {
-			const redirectUri = profile.baseUrl.replace(/\/+$/, '') + '/auth/callback';
-			const params = new URLSearchParams({
-				client_id: auth.userPoolClientId,
-				response_type: 'code',
-				scope: 'openid email profile',
-				identity_provider: 'Google',
-				redirect_uri: redirectUri,
-			});
-			config.authLoginUrl = `${auth.hostedUiDomain}/oauth2/authorize?${params.toString()}`;
+	}
+	// The Hosted UI sign-in URL: for the comment box, and for readers of a public
+	// site who need to sign in to see notes gated to their groups.
+	const loginUrl = (commentsOn || accessGating) ? buildAuthLoginUrl(profile) : undefined;
+	if (loginUrl) {
+		config.authLoginUrl = loginUrl;
+		if (commentsOn) {
 			// True when the whole site (and thus comment reads) requires login —
 			// i.e. the Cognito edge fn gates reads. Password/BYO/public reads do not.
 			config.readGating = profile.infrastructureState?.readGateMode === 'cognito';
 		}
 	}
 
-	// Per-note access groups (consumed by the note loader via window.__CPN_CONFIG__).
-	// Emitted only when the site's edge fn actually enforces `/restricted/<group>/*`
-	// and at least one group exists. Group NAMES are deliberately not listed here
-	// (config.json is readable by every reader): the SPA asks the edge
-	// `GET <accessWhoamiPath>` for the viewer's own groups instead.
-	if (profile.accessGroups && Object.keys(profile.accessGroups).length > 0 && canPublishGated(profile).ok) {
+	if (accessGating) {
 		config.accessGating = true;
 		config.accessWhoamiPath = WHOAMI_PATH;
 	}
