@@ -51,6 +51,14 @@ How read access to a published site is controlled: `none` (fully public),
 (bring-your-own viewer-request Lambda@Edge). Set in the deployment wizard. See
 [authentication & access](auth-and-access.md#read-gating-modes).
 
+### Access group (`cpn-access-groups`)
+
+A named set of reader emails, defined per profile, that a note can list in its
+`cpn-access-groups` frontmatter. A gated note is readable only by members of one
+of its groups and is kept out of search, chat, and public links. Requires the
+`cognito` read gate. See
+[authentication & access](auth-and-access.md#per-note-access-groups).
+
 ### Cognito and Google sign-in
 
 An optional AWS Cognito user pool (with Google as the identity provider) that CPN

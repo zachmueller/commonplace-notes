@@ -43,6 +43,9 @@ The easiest way to set this is the per-profile **Toggle publishing context:
   so a note with no publish context has no UID. Don't edit it by hand; changing
   it changes the note's URL and breaks existing links. (Adjust the length for
   *new* UIDs via the UID length setting; existing notes are untouched.)
+- **`cpn-access-groups`** — optional list of access groups that may read the
+  note. Absent or empty means the note uses the site-wide read access. See
+  [per-note access groups](auth-and-access.md#per-note-access-groups).
 - **`cpn-title`** — optional; overrides the filename as the note's display title
   on the site.
 

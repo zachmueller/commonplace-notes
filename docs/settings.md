@@ -129,6 +129,19 @@ This pairs with [custom parser stages](parser-extensions.md): a stage can read
 A note referencing an undefined style name falls back to default styling. Editing
 a style ships on the next publish (or **Push site assets**).
 
+### Access groups *(AWS only)*
+Groups a note can list in its `cpn-access-groups` frontmatter to restrict who can
+read it. See [per-note access groups](auth-and-access.md#per-note-access-groups).
+
+- **Status** — whether this profile can publish gated notes, and why not if it
+  can't.
+- **Group name**, **Description**, **Members** (one email per line). Renaming a
+  group doesn't edit notes; notes still listing the old name stop publishing.
+- **Remove** — deletes the group's published files from the site.
+- **Sync membership now** — upload member lists immediately (also done on every
+  publish).
+- **My edge function enforces access groups** — `byo` read gate only.
+
 ### Danger Zone
 - **Destroy infrastructure** — tear down the profile's stacks (bucket retained).
 - **Force-clean leftover infrastructure** — appears after a failed/interrupted

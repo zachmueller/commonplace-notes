@@ -118,6 +118,9 @@ Click **Done** to close the wizard. Your profile is now ready to publish.
 | S3 Bucket | `published-notes-{accountId}-cpn-{variantName}` | Retained on stack deletion |
 | CloudFront Distribution | Auto-generated ID | PriceClass_100 (NA/EU edges) |
 | Certificate Stack | `cpn-cert-{variantName}` | Only if custom domain; always in us-east-1 |
+| Cognito Stack | `cpn-cognito-{variantName}` | Only with Cognito sign-in; user pool, callback API, access-group trigger |
+| Cognito Edge Stack | `cpn-authedge-{variantName}` | Only with the `cognito` read gate; the viewer-request Lambda@Edge |
+| Bootstrap Stack | `cpn-bootstrap` | One per account, us-east-1; bucket for edge/trigger code and access-group membership |
 
 ---
 
