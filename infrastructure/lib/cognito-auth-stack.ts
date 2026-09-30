@@ -1,27 +1,29 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { readInlineLambda, readInlineLambdaBundle } from './inline-code';
+import { readInlineLambda } from './inline-code';
 
 /**
  * Built-in Cognito + Google identity sub-stack.
  *
- * Deployed FIRST (like the certificate sub-stack), pinned to us-east-1 because
- * it owns a viewer-request Lambda@Edge function whose *versioned* ARN is fed
- * into the existing `AuthLambdaEdgeArn` parameter of the full-site stack. The
- * full-site stack's gating mechanism is untouched — this stack just produces
- * the ARN an author would otherwise have to bring themselves.
+ * Deployed FIRST (like the certificate sub-stack), pinned to us-east-1. It owns
+ * the user pool, Google IdP, Hosted UI domain, app client, the OAuth callback
+ * API, and (when the plugin supplies the bootstrap bucket + artifact) the
+ * pre-token-generation trigger that carries per-note access groups into tokens.
  *
- * Two-phase deploy (see the idea note's Q8): the `UserPoolClient` callback URL
- * is a stack PARAMETER (`CallbackURL`) so a default-CloudFront-domain site can
- * deploy this stack with a placeholder, deploy the site stack to learn its
- * domain, then `update-stack` here with the real callback URL — a pure
- * parameter update, no resource replacement. The edge function itself derives
- * its redirect_uri host-relative, so it never needs phase-2 rewriting.
+ * The viewer-request Lambda@Edge read gate is NOT in this stack any more. It is
+ * deployed separately (cognito-edge-stack.ts) as an S3 asset, after this stack,
+ * because its baked config needs this stack's outputs.
+ *
+ * Two-phase deploy: the `UserPoolClient` callback URL is a stack PARAMETER
+ * (`CallbackURL`) so a default-CloudFront-domain site can deploy this stack with
+ * a placeholder, deploy the site stack to learn its domain, then `update-stack`
+ * here with the real callback URL — a pure parameter update, no resource
+ * replacement.
  *
  * All resources are L1 (`Cfn*`) constructs so `bin/synth.ts` can serialize the
- * stack to a self-contained JSON TemplateBody with no asset staging. Lambda
- * code is inlined (`ZipFile`) and therefore must stay under 4096 bytes after
- * compaction (enforced by readInlineLambda).
+ * stack to a self-contained JSON TemplateBody with no asset staging. The OAuth
+ * callback Lambda is still inlined (`ZipFile`, 4096-byte cap enforced by
+ * readInlineLambda); the trigger is an S3 asset.
  */
 export class CognitoAuthStack extends cdk.Stack {
 	constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -57,6 +59,20 @@ export class CognitoAuthStack extends cdk.Stack {
 			type: 'String',
 			description:
 				'Hosted UI domain prefix; yields <prefix>.auth.<region>.amazoncognito.com',
+		});
+
+		const assetsBucket = new cdk.CfnParameter(this, 'AssetsBucket', {
+			type: 'String',
+			default: '',
+			description:
+				'Per-account bootstrap bucket (us-east-1). Holds the pre-token trigger code ' +
+				'and the access-group membership file. Empty disables access groups.',
+		});
+
+		const triggerAssetsKey = new cdk.CfnParameter(this, 'TriggerAssetsKey', {
+			type: 'String',
+			default: '',
+			description: 'S3 key of the pre-token-generation trigger code zip in AssetsBucket',
 		});
 
 		// ---- User pool + Google IdP ------------------------------------------
@@ -109,35 +125,28 @@ export class CognitoAuthStack extends cdk.Stack {
 			'.amazoncognito.com',
 		]);
 
-		// ---- Viewer-request Lambda@Edge --------------------------------------
-		// Config is injected as a leading `const CFG = {...};` line via Fn::Sub,
-		// then concatenated with the verbatim (comment-stripped) function body.
-		// The body contains no `${...}` or backticks after stripping, so it is
-		// safe to carry through Fn::Join without Sub-token collisions.
-		// Bundle: CFG (injected) + shared JWT verifier + edge handler. The shared
-		// verifier reads JWKS_URI/TOKEN_ISS/TOKEN_AUD, which auth-edge.js derives
-		// from CFG; ordering is CFG -> verifier -> handler.
-		const edgeBody = readInlineLambdaBundle('lib-jwt-verify.js', 'auth-edge.js');
-		const cfgLine = cdk.Fn.sub(
-			'const CFG = { domain: "${Domain}", clientId: "${ClientId}", region: "${Region}", userPoolId: "${PoolId}" };\n',
-			{
-				Domain: hostedUiDomain,
-				ClientId: userPoolClient.ref,
-				Region: cdk.Aws.REGION,
-				PoolId: userPool.ref,
-			},
-		);
-		const edgeZipFile = cdk.Fn.join('', [cfgLine, edgeBody]);
+		// ---- Pre-token-generation trigger (per-note access groups) ----------
+		// Regional Lambda (same region as the pool) packaged as an S3 asset in the
+		// per-account bootstrap bucket, like the edge functions. It reads the
+		// plugin-managed membership file from the same bucket and injects
+		// `cognito:groups` into issued id tokens. Omitted entirely when the plugin
+		// hasn't supplied the bucket + artifact (older deploy paths), so the pool
+		// still works; it just carries no groups.
+		const hasAccessGroups = new cdk.CfnCondition(this, 'HasAccessGroups', {
+			expression: cdk.Fn.conditionAnd(
+				cdk.Fn.conditionNot(cdk.Fn.conditionEquals(assetsBucket.valueAsString, '')),
+				cdk.Fn.conditionNot(cdk.Fn.conditionEquals(triggerAssetsKey.valueAsString, '')),
+			),
+		});
+		const groupsKey = cdk.Fn.join('', ['access/', cdk.Aws.STACK_NAME, '/groups.json']);
 
-		const edgeRole = new cdk.aws_iam.CfnRole(this, 'EdgeFnRole', {
+		const triggerRole = new cdk.aws_iam.CfnRole(this, 'PreTokenGroupsFnRole', {
 			assumeRolePolicyDocument: {
 				Version: '2012-10-17',
 				Statement: [
 					{
 						Effect: 'Allow',
-						Principal: {
-							Service: ['lambda.amazonaws.com', 'edgelambda.amazonaws.com'],
-						},
+						Principal: { Service: 'lambda.amazonaws.com' },
 						Action: 'sts:AssumeRole',
 					},
 				],
@@ -145,20 +154,66 @@ export class CognitoAuthStack extends cdk.Stack {
 			managedPolicyArns: [
 				'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole',
 			],
+			policies: [
+				{
+					policyName: 'ReadAccessGroups',
+					policyDocument: {
+						Version: '2012-10-17',
+						Statement: [
+							{
+								Effect: 'Allow',
+								Action: 's3:GetObject',
+								Resource: cdk.Fn.join('', [
+									'arn:aws:s3:::', assetsBucket.valueAsString, '/', groupsKey,
+								]),
+							},
+							{
+								// Lets a missing file surface as NoSuchKey (not AccessDenied).
+								Effect: 'Allow',
+								Action: 's3:ListBucket',
+								Resource: cdk.Fn.join('', ['arn:aws:s3:::', assetsBucket.valueAsString]),
+								Condition: { StringLike: { 's3:prefix': [groupsKey] } },
+							},
+						],
+					},
+				},
+			],
 		});
+		triggerRole.cfnOptions.condition = hasAccessGroups;
 
-		const edgeFn = new cdk.aws_lambda.CfnFunction(this, 'AuthEdgeFn', {
+		const triggerFn = new cdk.aws_lambda.CfnFunction(this, 'PreTokenGroupsFn', {
 			runtime: 'nodejs20.x',
 			handler: 'index.handler',
-			role: edgeRole.attrArn,
-			// Lambda@Edge forbids env vars — config is baked into the code above.
-			code: { zipFile: edgeZipFile },
+			role: triggerRole.attrArn,
+			timeout: 5,
+			code: {
+				s3Bucket: assetsBucket.valueAsString,
+				s3Key: triggerAssetsKey.valueAsString,
+			},
+			environment: {
+				variables: {
+					GROUPS_BUCKET: assetsBucket.valueAsString,
+					GROUPS_KEY: groupsKey,
+				},
+			},
 		});
+		triggerFn.cfnOptions.condition = hasAccessGroups;
 
-		// Lambda@Edge requires a *versioned* ARN; CloudFront rejects $LATEST.
-		const edgeVersion = new cdk.aws_lambda.CfnVersion(this, 'AuthEdgeFnVersion', {
-			functionName: edgeFn.ref,
+		const triggerPermission = new cdk.aws_lambda.CfnPermission(this, 'PreTokenGroupsInvokePermission', {
+			action: 'lambda:InvokeFunction',
+			functionName: triggerFn.ref,
+			principal: 'cognito-idp.amazonaws.com',
+			sourceArn: userPool.attrArn,
 		});
+		triggerPermission.cfnOptions.condition = hasAccessGroups;
+
+		// Pool -> trigger (lambdaConfig). The trigger itself never references the
+		// pool, so there is no cycle; the permission references both.
+		userPool.lambdaConfig = cdk.Fn.conditionIf(
+			hasAccessGroups.logicalId,
+			{ PreTokenGeneration: triggerFn.attrArn },
+			cdk.Aws.NO_VALUE,
+		) as unknown as cdk.aws_cognito.CfnUserPool.LambdaConfigProperty;
 
 		// ---- Callback API (regional API Gateway v2 HTTP API + Lambda) --------
 		const callbackRole = new cdk.aws_iam.CfnRole(this, 'CallbackFnRole', {
@@ -241,10 +296,18 @@ export class CognitoAuthStack extends cdk.Stack {
 		]);
 
 		// ---- Outputs ----------------------------------------------------------
-		new cdk.CfnOutput(this, 'EdgeFunctionVersionArn', {
-			value: edgeVersion.ref,
-			description: 'Versioned ARN of the viewer-request Lambda@Edge function (feed AuthLambdaEdgeArn)',
+		// The viewer-request edge fn now lives in its own stack (cognito-edge-stack.ts),
+		// so this pool stack no longer emits EdgeFunctionVersionArn.
+		const accessGroupsBucketOut = new cdk.CfnOutput(this, 'AccessGroupsBucket', {
+			value: assetsBucket.valueAsString,
+			description: 'Bucket holding the access-group membership file',
 		});
+		accessGroupsBucketOut.condition = hasAccessGroups;
+		const accessGroupsKeyOut = new cdk.CfnOutput(this, 'AccessGroupsKey', {
+			value: groupsKey,
+			description: 'Object key of the access-group membership file (read by the pre-token trigger)',
+		});
+		accessGroupsKeyOut.condition = hasAccessGroups;
 		new cdk.CfnOutput(this, 'UserPoolId', {
 			value: userPool.ref,
 			description: 'Cognito user pool ID',
