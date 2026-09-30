@@ -163,7 +163,7 @@ function teardown(): void {
 			// Usually a replicated Lambda@Edge fn: retain it and finish the stack.
 			const res = aws(['cloudformation', 'list-stack-resources', '--stack-name', stack]);
 			const stuck = (res.StackResourceSummaries || [])
-				.filter((r: any) => r.ResourceStatus === 'DELETE_FAILED').map((r: any) => r.LogicalResourceId);
+				.filter((r: any) => r.ResourceStatus !== 'DELETE_COMPLETE').map((r: any) => r.LogicalResourceId);
 			console.log(`  ${stack} DELETE_FAILED; retaining ${stuck.join(', ')}`);
 			aws(['cloudformation', 'delete-stack', '--stack-name', stack, '--retain-resources', ...stuck], { json: false });
 			aws(['cloudformation', 'wait', 'stack-delete-complete', '--stack-name', stack], { json: false, allowFail: true });
