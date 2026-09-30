@@ -6,6 +6,25 @@ import { Logger } from './logging';
 import { UrlScheme } from './urlScheme';
 import type { ParserContext } from './parser/types';
 import { scrubRawWikilinks } from './rewriteRawWikilinks';
+import type { PublishingProfile } from '../types';
+import { linkVisibleFrom, partitionsFor, validateNoteAccess, visibleInPartition } from './access';
+import { NoticeManager } from './notice';
+
+/** A note's resolved access: its groups, and whether it may publish with them. */
+export interface NoteAccess {
+	groups: string[];
+	ok: boolean;
+	/** Why the note can't publish (when !ok). */
+	reason?: string;
+}
+
+/** A note skipped this publish because its access groups can't be honored. */
+interface BlockedNote {
+	file: TFile;
+	uid: string;
+	reason: string;
+	isHome: boolean;
+}
 
 interface NoteState {
 	file: TFile;
@@ -18,16 +37,21 @@ interface NoteState {
 	raw: string;	  // Raw Markdown
 	lastModified: number;
 	style: string | null;  // `cpn-style` frontmatter value, resolved client-side per profile
+	access: string[];      // `cpn-access-groups` ([] = public; else only restricted/<group>/ partitions)
 }
 
 interface BacklinkInfo {
 	uid: string;
 	slug: string;
 	title: string;
+	/** The backlinking note's access groups (used to filter per partition; not published). */
+	access: string[];
 }
 
 export class NoteManager {
 	private pendingNotes: Map<string, NoteState>;
+	/** `${profileId}:${uid}` → notes skipped for access reasons in the current batch. */
+	private blockedNotes: Map<string, BlockedNote> = new Map();
 	private publishHistory: Map<string, Record<string, string[]>>;
 	private plugin: CommonplaceNotesPlugin;
 
@@ -114,12 +138,28 @@ export class NoteManager {
 			.map(connection => ({
 				uid: connection.uid,
 				slug: connection.slug,
-				title: connection.title
+				title: connection.title,
+				access: connection.access,
 			}));
 	}
 
-	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string): Promise<string> {
+	/**
+	 * Resolve a note's access groups for a profile and whether it can publish
+	 * with them (fail closed: undefined groups, a non-group-aware read gate, the
+	 * home note, or a malformed value all block publishing). See src/utils/access.ts.
+	 */
+	resolveNoteAccess(file: TFile, profile: PublishingProfile): NoteAccess {
+		const normalized = this.plugin.frontmatterManager.getNoteAccessGroups(file);
+		const isHome = !!profile.homeNotePath && profile.homeNotePath === file.path;
+		const check = validateNoteAccess(profile, normalized, isHome);
+		return check.ok
+			? { groups: normalized.groups, ok: true }
+			: { groups: normalized.groups, ok: false, reason: check.reason };
+	}
+
+	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string, sourceGroups: string[] = []): Promise<string> {
 		const urlScheme: UrlScheme = this.plugin.settings.urlScheme || 'current';
+		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
 		// Per-note context handed to every parser stage. The resolveInternalLinks
 		// closure (formerly inline in this method) is lifted here so the built-in
@@ -141,6 +181,16 @@ export class NoteManager {
 						const contexts = await this.plugin.publisher.getPublishContextsForFile(targetFile);
 
 						if (contexts.includes(profileId)) {
+							// Per-note access: this HTML is shared by every partition copy
+							// of the current note, so only resolve the link when the target
+							// is visible in all of them. Otherwise it renders like a link to
+							// an unpublished note (no uid, no title leak).
+							if (profile) {
+								const targetAccess = this.resolveNoteAccess(targetFile, profile);
+								if (!targetAccess.ok || !linkVisibleFrom(sourceGroups, targetAccess.groups)) {
+									return null;
+								}
+							}
 							return {
 								uid,
 								title: this.plugin.frontmatterManager.getNoteTitle(targetFile),
@@ -213,6 +263,26 @@ export class NoteManager {
 			const uid = this.plugin.frontmatterManager.getNoteUID(file);
 			if (!uid) return;
 
+			// Per-note access groups. A note that can't publish with its groups is
+			// skipped AND unpublished from wherever it was (fail closed), rather
+			// than left live in the public partition.
+			const queueProfile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
+			const access: NoteAccess = queueProfile
+				? this.resolveNoteAccess(file, queueProfile)
+				: { groups: [], ok: true };
+			const key = `${profileId}:${uid}`;
+			if (!access.ok) {
+				this.pendingNotes.delete(key);
+				this.blockedNotes.set(key, {
+					file,
+					uid,
+					reason: access.reason || 'access groups cannot be honored',
+					isHome: !!queueProfile && queueProfile.homeNotePath === file.path,
+				});
+				return;
+			}
+			this.blockedNotes.delete(key);
+
 			// Optionally scrub wikilink note-paths down to UIDs in the published
 			// raw Markdown (per-profile, default on). This scrubbed text feeds the
 			// content hash and the stored `raw`/content-index — but NOT the HTML
@@ -230,8 +300,11 @@ export class NoteManager {
 			// changing/setting a style still re-stages that note.
 			const title = this.plugin.frontmatterManager.getNoteTitle(file);
 			const style = this.plugin.frontmatterManager.getNoteStyle(file);
+			// Access groups likewise join the hash only when present, so an
+			// access-only edit is recorded as a new revision.
 			const currentHash = await this.getSHA1Hash(
 				`${uid}::${title}::${scrubbedRaw}${style ? `::style=${style}` : ''}`
+				+ (access.groups.length ? `::access=${access.groups.join(',')}` : '')
 			);
 
 			// Load publish history to determine prior hash
@@ -247,13 +320,13 @@ export class NoteManager {
 				title: title,
 				// HTML is rendered from the ORIGINAL raw (path-form wikilinks) so
 				// resolveInternalLinks can resolve them; see rewriteRawWikilinks.
-				content: await this.markdownToHtml(raw, file, profileId),
+				content: await this.markdownToHtml(raw, file, profileId, access.groups),
 				raw: scrubbedRaw,
 				lastModified: file.stat.mtime,
-				style
+				style,
+				access: access.groups,
 			};
 
-			const key = `${profileId}:${uid}`;
 			this.pendingNotes.set(key, noteState);
 		} catch (error) {
 			Logger.error(`Error queuing note ${file.path}:`, error);
@@ -280,6 +353,12 @@ export class NoteManager {
 					Logger.debug(`Skipped adding duplicate hash ${noteState.currentHash} for ${noteState.uid}`);
 				}
 
+				// Record the note's access partitions (before updateMappings, so
+				// "was it already live?" reflects the prior publish).
+				const wasPublished = this.plugin.mappingManager.getPriorHash(profileId, noteState.uid) !== null;
+				this.plugin.accessManager.set(profileId, noteState.uid, noteState.access, wasPublished);
+				const gated = noteState.access.length > 0;
+
 				// Update mappings
 				this.plugin.mappingManager.updateMappings(
 					profileId,
@@ -290,7 +369,12 @@ export class NoteManager {
 
 				// Update content index if enabled
 				const commitProfile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
-				if (commitProfile?.publishContentIndex) {
+				// Gated notes never enter the search index or chat corpus (v1): both
+				// are site-wide and readable by every reader.
+				if (gated) {
+					await this.plugin.contentIndexManager.removeEntry(profileId, noteState.uid);
+					await this.plugin.kbCorpusManager.removeEntry(profileId, noteState.uid);
+				} else if (commitProfile?.publishContentIndex) {
 					Logger.debug(`Queuing contentIndex update for file ${noteState.file.basename} (${noteState.uid}) under profile ${profileId}`);
 					await this.plugin.contentIndexManager.queueUpdate(
 						profileId,
@@ -302,7 +386,7 @@ export class NoteManager {
 
 				// Stage the per-UID chat corpus artifact when chat is enabled. Reuses
 				// the same scrubbed `raw` as the content index so freshness matches.
-				if (commitProfile?.chat?.enabled) {
+				if (!gated && commitProfile?.chat?.enabled) {
 					Logger.debug(`Queuing KB corpus update for file ${noteState.file.basename} (${noteState.uid}) under profile ${profileId}`);
 					await this.plugin.kbCorpusManager.queueUpdate(
 						profileId,
@@ -319,6 +403,8 @@ export class NoteManager {
 				this.pendingNotes.delete(key);
 			}
 
+			await this.commitBlockedNotes(profileId);
+
 			// Save all changes
 			await this.savePublishHistory(profileId);
 			await this.plugin.mappingManager.saveMappings();
@@ -333,43 +419,82 @@ export class NoteManager {
 		}
 	}
 
+	/**
+	 * Unpublish notes skipped for access reasons: drop them from the local
+	 * mappings / search index / chat corpus and record a transition so the
+	 * uploader deletes their live copies. Notifies the author once per batch.
+	 */
+	private async commitBlockedNotes(profileId: string): Promise<void> {
+		const blocked = [...this.blockedNotes.entries()].filter(([key]) => key.startsWith(`${profileId}:`));
+		if (blocked.length === 0) return;
+		for (const [key, note] of blocked) {
+			const wasPublished = this.plugin.mappingManager.getPriorHash(profileId, note.uid) !== null;
+			this.plugin.accessManager.markUnpublished(profileId, note.uid, wasPublished);
+			if (note.isHome) this.plugin.accessManager.markHomeRemoved(profileId);
+			this.plugin.mappingManager.removeUidFromMappings(profileId, note.uid);
+			await this.plugin.contentIndexManager.removeEntry(profileId, note.uid);
+			await this.plugin.kbCorpusManager.removeEntry(profileId, note.uid);
+			Logger.warn(`Not publishing ${note.file.path}: ${note.reason}`);
+			this.blockedNotes.delete(key);
+		}
+		const names = blocked.map(([, n]) => `• ${n.file.basename}: ${n.reason}`).slice(0, 5).join('\n');
+		const more = blocked.length > 5 ? `\n…and ${blocked.length - 5} more (see console)` : '';
+		NoticeManager.showNotice(
+			`${blocked.length} note(s) with access groups were not published (and removed from the site if they were live):\n${names}${more}`,
+			15000,
+		);
+	}
+
 	private async writeNoteToStaging(profileId: string, noteState: NoteState) {
 		// Ensure directory exists before writing
 		const stagedNotesDir = this.plugin.profileManager.getStagedNotesDir(profileId);
 		await PathUtils.ensureDirectory(this.plugin, stagedNotesDir);
-		
-		// Get backlinks
-		const backlinks = await this.getBacklinks(noteState.file, profileId);
 
-		// Prepare note JSON
-		const noteJson = {
-			uid: noteState.uid,
-			slug: noteState.slug,
-			title: noteState.title,
-			content: noteState.content,
-			raw: noteState.raw,
-			backlinks,
-			hash: noteState.currentHash,
-			priorHash: noteState.priorHash,
-			lastUpdated: noteState.lastModified,
-			style: noteState.style
-		};
+		// Backlinks carry each source note's access groups so every partition copy
+		// lists only backlinks visible inside that partition.
+		const allBacklinks = await this.getBacklinks(noteState.file, profileId);
+		const gated = noteState.access.length > 0;
 
-		// Write to staging directory
-		const outputPath = `${stagedNotesDir}/${noteState.currentHash}.json`;
-		await this.plugin.app.vault.adapter.write(
-			outputPath,
-			JSON.stringify(noteJson)
-		);
+		for (const partition of partitionsFor(noteState.access)) {
+			const backlinks = allBacklinks
+				.filter(b => visibleInPartition(partition, b.access))
+				.map(({ uid, slug, title }) => ({ uid, slug, title }));
 
-		// If this is the home page for the profile, also write as index.json
-		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
-		if (profile && profile.homeNotePath === noteState.file.path) {
-			const indexPath = `${stagedNotesDir}/index.json`;
+			const noteJson: Record<string, unknown> = {
+				uid: noteState.uid,
+				slug: noteState.slug,
+				title: noteState.title,
+				content: noteState.content,
+				raw: noteState.raw,
+				backlinks,
+				hash: noteState.currentHash,
+				priorHash: noteState.priorHash,
+				lastUpdated: noteState.lastModified,
+				style: noteState.style
+			};
+			// Tells the SPA to show a lock badge and skip comments. Deliberately a
+			// boolean, not the group list, so members of one group don't learn the
+			// names of the note's other groups.
+			if (gated) noteJson.gated = true;
+
+			const dir = partition === null
+				? stagedNotesDir
+				: this.plugin.profileManager.getStagedRestrictedDir(profileId, partition);
+			if (partition !== null) await PathUtils.ensureDirectory(this.plugin, dir);
 			await this.plugin.app.vault.adapter.write(
-				indexPath,
+				`${dir}/${noteState.currentHash}.json`,
 				JSON.stringify(noteJson)
 			);
+
+			// If this is the home page for the profile, also write as index.json
+			// (public partition only; a gated home note is blocked in queueNote).
+			const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
+			if (partition === null && profile && profile.homeNotePath === noteState.file.path) {
+				await this.plugin.app.vault.adapter.write(
+					`${stagedNotesDir}/index.json`,
+					JSON.stringify(noteJson)
+				);
+			}
 		}
 	}
 }

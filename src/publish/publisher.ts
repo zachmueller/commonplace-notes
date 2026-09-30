@@ -6,6 +6,7 @@ import { publishLocalNotes } from './local';
 import { PathUtils } from '../utils/path';
 import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
+import { restrictedPrefix } from '../utils/access';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	profiles: PublishingProfile[];
@@ -156,13 +157,18 @@ export class Publisher {
 				if (contexts.includes(profileId)) {
 					const uid = this.plugin.frontmatterManager.getNoteUID(connectedFile);
 					if (uid === null) continue;
+					// A note that can't publish (e.g. undefined access group) is not
+					// on the site, so it's not a connection either.
+					const access = this.plugin.noteManager.resolveNoteAccess(connectedFile, profile);
+					if (!access.ok) continue;
 					connections.set(path, {
 						file: connectedFile,
 						isBacklink: false,
 						isOutgoingLink: true,
 						uid,
 						slug: PathUtils.slugifyFilePath(connectedFile.path),
-						title: this.plugin.frontmatterManager.getNoteTitle(connectedFile)
+						title: this.plugin.frontmatterManager.getNoteTitle(connectedFile),
+						access: access.groups,
 					});
 				}
 			}
@@ -177,6 +183,8 @@ export class Publisher {
 					if (contexts.includes(profileId)) {
 						const uid = this.plugin.frontmatterManager.getNoteUID(connectedFile);
 						if (uid === null) continue;
+						const access = this.plugin.noteManager.resolveNoteAccess(connectedFile, profile);
+						if (!access.ok) continue;
 						if (connections.has(sourcePath)) {
 							// Update existing connection to mark it as both incoming and outgoing
 							connections.get(sourcePath)!.isBacklink = true;
@@ -187,7 +195,8 @@ export class Publisher {
 								isOutgoingLink: false,
 								uid,
 								slug: PathUtils.slugifyFilePath(connectedFile.path),
-								title: this.plugin.frontmatterManager.getNoteTitle(connectedFile)
+								title: this.plugin.frontmatterManager.getNoteTitle(connectedFile),
+								access: access.groups,
 							});
 						}
 					}
@@ -214,6 +223,9 @@ export class Publisher {
 					// Load existing mappings and content index for profile
 					await this.plugin.mappingManager.loadProfileMappings(profile.id);
 					await this.plugin.contentIndexManager.loadIndex(profile.id);
+					// Last-published access groups (re-read from disk, so a failed
+					// earlier run's unsaved transitions are recomputed).
+					await this.plugin.accessManager.load(profile.id);
 
 					// Discover + compile parser stages once per batch (vault overrides
 					// + built-in scaffolds). markdownToHtml then assembles a per-note
@@ -256,6 +268,13 @@ export class Publisher {
 				uploadSuccess = await pushLocalJsonsToS3(this.plugin, profile.id, triggerCloudFrontInvalidation);
 			} else if (profile.publishMechanism === 'Local') {
 				uploadSuccess = await publishLocalNotes(this.plugin, profile.id);
+				// Local has no partitions (gated notes can't publish there); just
+				// persist the access map.
+				if (uploadSuccess) {
+					this.plugin.accessManager.consumeTransitions(profile.id);
+					this.plugin.accessManager.consumeHomeRemoved(profile.id);
+					await this.plugin.accessManager.save(profile.id);
+				}
 			}
 
 			// TODO::instead should prompt user whether to delete local copies of processed notes::
@@ -307,6 +326,11 @@ export class Publisher {
 	private async cleanupStagedFiles(profileId: string) {
 		const stagedDir = this.plugin.profileManager.getStagedNotesDir(profileId);
 		await new PathUtils().deleteFilesInDirectory(this.plugin, stagedDir);
+		// Gated copies live in staged-notes/restricted/<group>/.
+		const restrictedDir = `${stagedDir}/restricted`;
+		if (await this.plugin.app.vault.adapter.exists(restrictedDir)) {
+			await this.plugin.app.vault.adapter.rmdir(restrictedDir, true);
+		}
 	}
 
 	private async handlePublishError(profileId: string, error: Error) {
@@ -321,15 +345,21 @@ export class Publisher {
 			// Ensure error session directory exists
 			await PathUtils.ensureDirectory(this.plugin, errorSessionDir);
 
-			// Move staged files to error directory
-			const stagedFiles = await this.plugin.app.vault.adapter.list(stagedDir);
-			for (const file of stagedFiles.files) {
-				const fileName = file.split('/').pop();
-				await this.plugin.app.vault.adapter.copy(
-					file,
-					`${errorSessionDir}/${fileName}`
-				);
-			}
+			// Move staged files to error directory (gated copies keep their
+			// restricted/<group>/ subpath)
+			const adapter = this.plugin.app.vault.adapter;
+			const copyDir = async (from: string, to: string) => {
+				const listing = await adapter.list(from);
+				for (const file of listing.files) {
+					await adapter.copy(file, `${to}/${file.split('/').pop()}`);
+				}
+				for (const folder of listing.folders) {
+					const sub = `${to}/${folder.split('/').pop()}`;
+					await PathUtils.ensureDirectory(this.plugin, sub);
+					await copyDir(folder, sub);
+				}
+			};
+			await copyDir(stagedDir, errorSessionDir);
 
 			// Write error details
 			await this.plugin.app.vault.adapter.write(
@@ -533,23 +563,35 @@ export class Publisher {
 			if (hashSet.size === 0) {
 				Logger.warn(`No hashes found for UID ${selectedNote.uid}, skipping S3 deletes`);
 			} else {
-				// Step 5: Delete from S3 (stop on permission error)
-				const deleteSuccess = await NoticeManager.showProgress(
-					`Deleting ${hashSet.size} note version(s) from S3`,
-					deleteNoteHashesFromS3(this.plugin, profile.id, [...hashSet]),
-					`Note versions deleted from S3`,
-					`Failed to delete note versions from S3`
-				);
+				// Step 5: Delete from S3 (stop on permission error): the public
+				// partition plus every access-group partition the note may be in
+				// (deleting a missing key is a no-op).
+				await this.plugin.accessManager.load(profile.id);
+				const partitions = [...new Set([
+					'',
+					...this.plugin.accessManager.getGroups(profile.id, selectedNote.uid).map(g => restrictedPrefix(g)),
+					...Object.keys(profile.accessGroups || {}).map(g => restrictedPrefix(g)),
+				])];
+				for (const prefix of partitions) {
+					const deleteSuccess = await NoticeManager.showProgress(
+						`Deleting ${hashSet.size} note version(s) from ${prefix || 'notes/'}`,
+						deleteNoteHashesFromS3(this.plugin, profile.id, [...hashSet], prefix),
+						`Note versions deleted from ${prefix || 'notes/'}`,
+						`Failed to delete note versions from S3`
+					);
 
-				if (!deleteSuccess.success || !deleteSuccess.result) {
-					// Permission error or failure — stop without modifying local files
-					return;
+					if (!deleteSuccess.success || !deleteSuccess.result) {
+						// Permission error or failure — stop without modifying local files
+						return;
+					}
 				}
 			}
 
 			// Step 6: Update local mapping files (keep publish-history.json intact)
 			this.plugin.mappingManager.removeUidFromMappings(profile.id, selectedNote.uid);
 			await this.plugin.mappingManager.saveMappings();
+			this.plugin.accessManager.remove(profile.id, selectedNote.uid);
+			await this.plugin.accessManager.save(profile.id);
 
 			// Step 7: Update content index
 			await this.plugin.contentIndexManager.removeEntry(profile.id, selectedNote.uid);

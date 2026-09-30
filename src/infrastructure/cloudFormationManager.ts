@@ -9,6 +9,7 @@ import {
 	DescribeStacksCommand,
 	DescribeStackEventsCommand,
 	ListStackResourcesCommand,
+	GetTemplateCommand,
 	Stack,
 } from '@aws-sdk/client-cloudformation';
 import {
@@ -39,6 +40,9 @@ import {
 	BOOTSTRAP_TEMPLATE,
 	CERTIFICATE_TEMPLATE,
 	COGNITO_AUTH_TEMPLATE,
+	COGNITO_EDGE_TEMPLATE,
+	AUTH_EDGE_BODY,
+	PRE_TOKEN_GROUPS_BODY,
 	COMMENT_STACK_TEMPLATE,
 	CHAT_STACK_TEMPLATE,
 	CHAT_HANDLER_BODY,
@@ -47,7 +51,7 @@ import {
 	PASSWORD_AUTH_TEMPLATE,
 	PASSWORD_EDGE_BODY,
 } from './templates';
-import { buildLambdaZip, sha256HexBytes } from './lambdaZip';
+import { buildLambdaZip, sha256HexBytes, sha256Base64Bytes } from './lambdaZip';
 import type {
 	CertificateMatch,
 	CognitoAuthOutputs,
@@ -143,7 +147,14 @@ export function mapCognitoOutputs(o: Record<string, string>): CognitoAuthOutputs
 		jwksUri: o['JwksUri'] || '',
 		issuer: o['Issuer'] || '',
 		callbackApiDomain: o['CallbackApiDomain'] || '',
+		accessGroupsBucket: o['AccessGroupsBucket'] || '',
+		accessGroupsKey: o['AccessGroupsKey'] || '',
 	};
+}
+
+/** Map any S3-asset edge stack's outputs (password or Cognito): the version ARN. */
+export function mapEdgeOutputs(o: Record<string, string>): { edgeFunctionVersionArn: string } {
+	return { edgeFunctionVersionArn: o['EdgeFunctionVersionArn'] || '' };
 }
 
 /** Map a password auth stack's outputs (just the edge fn version ARN). */
@@ -185,6 +196,7 @@ export function mapChatOutputs(o: Record<string, string>): ChatStackOutputs {
 export function detectStackRole(stackName: string, outputs: Record<string, string>): StackRole {
 	if ('CommentBucketName' in outputs || 'CommentTableName' in outputs) return 'comment';
 	if ('KnowledgeBaseId' in outputs) return 'chat';
+	if (outputs['EdgeGateKind'] === 'cognito') return 'authedge';
 	if ('UserPoolId' in outputs) return 'cognito';
 	if ('BucketName' in outputs && 'DistributionID' in outputs) return 'full';
 	if ('EdgeFunctionVersionArn' in outputs) return 'password';
@@ -192,6 +204,7 @@ export function detectStackRole(stackName: string, outputs: Record<string, strin
 
 	// Fallback: infer from the naming convention when outputs are absent/ambiguous.
 	if (stackName.startsWith('cpn-cert-')) return 'cert';
+	if (stackName.startsWith('cpn-authedge-')) return 'authedge';
 	if (stackName.startsWith('cpn-cognito-')) return 'cognito';
 	if (stackName.startsWith('cpn-password-')) return 'password';
 	if (stackName.startsWith('cpn-comment-')) return 'comment';
@@ -214,7 +227,7 @@ export function deriveVariantSuffix(stackName: string, role: StackRole): string 
 	// The 'full' prefix (cpn-) is a prefix of every other role's name, so guard
 	// against e.g. 'cpn-cert-default' being read as a full stack with suffix
 	// 'cert-default'. A valid full suffix never begins with a known role segment.
-	if (role === 'full' && /^(cert|cognito|password|comment|chat)-/.test(suffix)) return undefined;
+	if (role === 'full' && /^(cert|cognito|authedge|password|comment|chat)-/.test(suffix)) return undefined;
 	return suffix || 'default';
 }
 
@@ -411,6 +424,8 @@ export class CloudFormationManager {
 			{ ParameterKey: 'GoogleClientSecret', ParameterValue: config.googleClientSecret || '' },
 			{ ParameterKey: 'CallbackURL', ParameterValue: config.callbackUrl || 'https://placeholder.invalid/auth/callback' },
 			{ ParameterKey: 'AuthDomainPrefix', ParameterValue: config.authDomainPrefix || '' },
+			{ ParameterKey: 'AssetsBucket', ParameterValue: config.assetsBucket || '' },
+			{ ParameterKey: 'TriggerAssetsKey', ParameterValue: config.preTokenAssetsKey || '' },
 		];
 	}
 
@@ -421,6 +436,7 @@ export class CloudFormationManager {
 	 */
 	private static readonly COGNITO_AUTH_PARAM_KEYS = [
 		'VariantName', 'GoogleClientId', 'GoogleClientSecret', 'CallbackURL', 'AuthDomainPrefix',
+		'AssetsBucket', 'TriggerAssetsKey',
 	] as const;
 
 	/**
@@ -432,12 +448,23 @@ export class CloudFormationManager {
 	 * GoogleClientSecret to '' and wipe the Google IdP secret. ParameterValue and
 	 * UsePreviousValue are mutually exclusive per key.
 	 */
-	private buildCognitoAuthUpdateParameters(overrides: Partial<Record<string, string>>) {
-		return CloudFormationManager.COGNITO_AUTH_PARAM_KEYS.map((key) =>
-			key in overrides
-				? { ParameterKey: key, ParameterValue: overrides[key] }
-				: { ParameterKey: key, UsePreviousValue: true },
-		);
+	private buildCognitoAuthUpdateParameters(
+		overrides: Partial<Record<string, string>>,
+		deployedKeys?: Set<string>,
+	) {
+		// A key the live stack was never deployed with (e.g. AssetsBucket on a
+		// pre-access-groups pool) can't use UsePreviousValue: CloudFormation rejects
+		// it. Omit such keys so the template default applies. With
+		// UsePreviousTemplate the old template may not declare them at all.
+		const out: Array<{ ParameterKey: string; ParameterValue?: string; UsePreviousValue?: boolean }> = [];
+		for (const key of CloudFormationManager.COGNITO_AUTH_PARAM_KEYS) {
+			if (key in overrides) {
+				out.push({ ParameterKey: key, ParameterValue: overrides[key] });
+			} else if (!deployedKeys || deployedKeys.has(key)) {
+				out.push({ ParameterKey: key, UsePreviousValue: true });
+			}
+		}
+		return out;
 	}
 
 	/**
@@ -459,13 +486,16 @@ export class CloudFormationManager {
 			GoogleClientId: config.googleClientId || '',
 			CallbackURL: config.callbackUrl || 'https://placeholder.invalid/auth/callback',
 			AuthDomainPrefix: config.authDomainPrefix || '',
+			AssetsBucket: config.assetsBucket || '',
+			TriggerAssetsKey: config.preTokenAssetsKey || '',
 		};
 		if (config.googleClientSecret) updateOverrides.GoogleClientSecret = config.googleClientSecret;
+		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
 
 		return this.createOrUpdateStack(client, stackName, {
 			templateBody: COGNITO_AUTH_TEMPLATE,
 			createParameters: this.buildCognitoAuthParameters(config),
-			updateParameters: this.buildCognitoAuthUpdateParameters(updateOverrides),
+			updateParameters: this.buildCognitoAuthUpdateParameters(updateOverrides, deployedKeys),
 			capabilities: ['CAPABILITY_IAM'],
 			profileId: config.profileId,
 		});
@@ -570,29 +600,24 @@ export class CloudFormationManager {
 	}
 
 	/**
-	 * Compose the password edge fn source (baking a `const CFG = { hash, realm }`
-	 * line ahead of the shipped body — the same shape the old inline Fn::Sub used),
-	 * zip it, and upload to the bootstrap bucket at a content-addressed key. Returns
-	 * the bucket + key for the stack's AssetsBucket/AssetsKey params. The key embeds
-	 * the zip's sha256 so any code/config change yields a new key -> a new Lambda
-	 * version on the next stack update. Upload is skipped if the object already
-	 * exists (identical content), keeping re-deploys cheap.
+	 * Zip a single-file Lambda source and upload it to the bootstrap bucket at a
+	 * content-addressed key (`<keyPrefix>/<sha256hex>.zip`). Returns the location
+	 * plus Lambda's base64 CodeSha256 of the zip, which the edge stacks pass to
+	 * their Version resource so every artifact change publishes a new version.
+	 * Upload is skipped if the identical object already exists.
 	 */
-	async packagePasswordEdge(
+	async packageLambdaAsset(
 		profile: PublishingProfile,
 		bucketName: string,
-		passwordHash: string,
-		realm: string,
-	): Promise<{ bucket: string; key: string }> {
-		// JSON.stringify escapes the values safely into the CFG object literal.
-		const cfgLine = `const CFG = { hash: ${JSON.stringify(passwordHash)}, realm: ${JSON.stringify(realm)} };\n`;
-		const source = cfgLine + PASSWORD_EDGE_BODY;
+		keyPrefix: string,
+		source: string,
+	): Promise<{ bucket: string; key: string; codeSha256: string }> {
 		const zip = buildLambdaZip(source);
 		const hash = await sha256HexBytes(zip);
-		const key = `lambda/password-edge/${hash}.zip`;
+		const codeSha256 = await sha256Base64Bytes(zip);
+		const key = `${keyPrefix}/${hash}.zip`;
 
 		const s3 = this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
-		// Skip the upload when the identical artifact is already present.
 		let exists = false;
 		try {
 			await s3.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
@@ -608,7 +633,101 @@ export class CloudFormationManager {
 				ContentType: 'application/zip',
 			}));
 		}
-		return { bucket: bucketName, key };
+		return { bucket: bucketName, key, codeSha256 };
+	}
+
+	/**
+	 * Compose the password edge fn source (baking a `const CFG = { hash, realm }`
+	 * line ahead of the shipped body), zip it, and upload it to the bootstrap
+	 * bucket. Only the sha256 hash is baked in; the plaintext never leaves the plugin.
+	 */
+	async packagePasswordEdge(
+		profile: PublishingProfile,
+		bucketName: string,
+		passwordHash: string,
+		realm: string,
+	): Promise<{ bucket: string; key: string; codeSha256: string }> {
+		// JSON.stringify escapes the values safely into the CFG object literal.
+		const cfgLine = `const CFG = { hash: ${JSON.stringify(passwordHash)}, realm: ${JSON.stringify(realm)} };\n`;
+		return this.packageLambdaAsset(profile, bucketName, 'lambda/password-edge', cfgLine + PASSWORD_EDGE_BODY);
+	}
+
+	/**
+	 * Compose the Cognito viewer-request edge fn (baked CFG + shared JWT verifier +
+	 * handler) from a deployed pool's outputs and upload it to the bootstrap bucket.
+	 */
+	async packageCognitoEdge(
+		profile: PublishingProfile,
+		bucketName: string,
+		pool: Pick<CognitoAuthOutputs, 'hostedUiDomain' | 'userPoolClientId' | 'userPoolId'>,
+	): Promise<{ bucket: string; key: string; codeSha256: string }> {
+		// Pool ids are `<region>_<id>`; the pool always lives in us-east-1 today,
+		// but derive it so the JWKS/issuer URLs can never disagree with the pool.
+		const region = pool.userPoolId.split('_')[0] || 'us-east-1';
+		const cfg = {
+			domain: pool.hostedUiDomain,
+			clientId: pool.userPoolClientId,
+			region,
+			userPoolId: pool.userPoolId,
+		};
+		const cfgLine = `const CFG = ${JSON.stringify(cfg)};\n`;
+		return this.packageLambdaAsset(profile, bucketName, 'lambda/auth-edge', cfgLine + AUTH_EDGE_BODY);
+	}
+
+	/**
+	 * Ensure the bootstrap bucket and upload the pre-token-generation trigger,
+	 * stamping the location onto `config` so the Cognito pool deploy (and its
+	 * phase-2 update) pass AssetsBucket/TriggerAssetsKey. Call before
+	 * deployCognitoAuthStack.
+	 */
+	async prepareCognitoAssets(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<void> {
+		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
+		const { key } = await this.packageLambdaAsset(profile, bucketName, 'lambda/pre-token-groups', PRE_TOKEN_GROUPS_BODY);
+		config.assetsBucket = bucketName;
+		config.preTokenAssetsKey = key;
+	}
+
+	/**
+	 * Deploy (or update) the Cognito viewer-request edge stack
+	 * (`cpn-authedge-<variant>`) from a deployed pool's outputs. Pinned to
+	 * us-east-1 (Lambda@Edge). Returns the stack name; read the ARN with
+	 * getEdgeStackOutputs after polling.
+	 */
+	async deployCognitoEdgeStack(
+		config: DeploymentConfig,
+		profile: PublishingProfile,
+		pool: Pick<CognitoAuthOutputs, 'hostedUiDomain' | 'userPoolClientId' | 'userPoolId'>,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<string> {
+		const stackName = this.getStackName(config.variantName, 'authedge');
+		const client = this.getCloudFormationClient(config, 'us-east-1');
+
+		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
+		const { bucket, key, codeSha256 } = await this.packageCognitoEdge(profile, bucketName, pool);
+
+		return this.createOrUpdateStack(client, stackName, {
+			templateBody: COGNITO_EDGE_TEMPLATE,
+			createParameters: [
+				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
+				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+				{ ParameterKey: 'CodeSha256', ParameterValue: codeSha256 },
+			],
+			capabilities: ['CAPABILITY_IAM'],
+			profileId: config.profileId,
+		});
+	}
+
+	/** Versioned edge fn ARN from any S3-asset edge stack (password or Cognito). */
+	async getEdgeStackOutputs(stackName: string, profile: PublishingProfile): Promise<{ edgeFunctionVersionArn: string }> {
+		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		const stack = response.Stacks?.[0];
+		if (!stack) throw new Error(`Edge stack ${stackName} not found`);
+		return mapEdgeOutputs(outputsToRecord(stack.Outputs));
 	}
 
 	/**
@@ -627,7 +746,7 @@ export class CloudFormationManager {
 		const client = this.getCloudFormationClient(config, 'us-east-1');
 
 		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
-		const { bucket, key } = await this.packagePasswordEdge(
+		const { bucket, key, codeSha256 } = await this.packagePasswordEdge(
 			profile, bucketName, config.passwordHash || '', config.variantName || 'Protected',
 		);
 
@@ -636,6 +755,7 @@ export class CloudFormationManager {
 			createParameters: [
 				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+				{ ParameterKey: 'CodeSha256', ParameterValue: codeSha256 },
 			],
 			capabilities: ['CAPABILITY_IAM'],
 			profileId: config.profileId,
@@ -658,7 +778,7 @@ export class CloudFormationManager {
 		const client = this.getCloudFormationClient(config, 'us-east-1');
 
 		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
-		const { bucket, key } = await this.packagePasswordEdge(
+		const { bucket, key, codeSha256 } = await this.packagePasswordEdge(
 			profile, bucketName, config.passwordHash || '', config.variantName || 'Protected',
 		);
 
@@ -668,6 +788,7 @@ export class CloudFormationManager {
 			Parameters: [
 				{ ParameterKey: 'AssetsBucket', ParameterValue: bucket },
 				{ ParameterKey: 'AssetsKey', ParameterValue: key },
+				{ ParameterKey: 'CodeSha256', ParameterValue: codeSha256 },
 			],
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
@@ -1097,11 +1218,12 @@ export class CloudFormationManager {
 		profile: PublishingProfile,
 	): Promise<string> {
 		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
 
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			UsePreviousTemplate: true,
-			Parameters: this.buildCognitoAuthUpdateParameters({ CallbackURL: callbackUrl }),
+			Parameters: this.buildCognitoAuthUpdateParameters({ CallbackURL: callbackUrl }, deployedKeys),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -1110,6 +1232,181 @@ export class CloudFormationManager {
 		});
 
 		return stackName;
+	}
+
+	/** A minimal DeploymentConfig for post-deploy maintenance actions on a profile. */
+	private configForProfile(profile: PublishingProfile): DeploymentConfig {
+		const state = profile.infrastructureState;
+		return {
+			profileId: profile.id,
+			variantName: state?.variantName || '',
+			awsProfile: profile.awsSettings?.awsProfile || '',
+			region: state?.region || profile.awsSettings?.region || 'us-east-1',
+			originAccessMethod: state?.originAccessMethod || 'oac',
+			s3Prefix: profile.awsSettings?.s3Prefix || '',
+			customDomain: state?.customDomain || '',
+			useRoute53: state?.useRoute53 || false,
+			hostedZoneId: state?.hostedZoneId || '',
+			hostedZoneName: state?.hostedZoneName || '',
+		};
+	}
+
+	/** Logical IDs of the edge fn resources older pool stacks carried inline. */
+	private static readonly LEGACY_POOL_EDGE_IDS = ['AuthEdgeFn', 'AuthEdgeFnVersion', 'EdgeFnRole'] as const;
+
+	/**
+	 * Bring a deployed Cognito setup up to the current layout, idempotently:
+	 *   1. Ensure the bootstrap bucket and upload the pre-token trigger.
+	 *   2. Legacy pools only: mark the inline edge fn resources DeletionPolicy
+	 *      Retain (an update of the deployed template), so step 3 can drop them
+	 *      from the stack without deleting a function CloudFront may still use.
+	 *   3. Update the pool stack to the current template (adds the trigger).
+	 *   4. When reads are Cognito-gated: deploy/update the separate edge stack and
+	 *      re-point the site distribution at its version ARN.
+	 *   5. Persist the new state; park the legacy edge fn + role in
+	 *      `pendingEdgeCleanup` for deletion once CloudFront drops the replicas.
+	 * Safe to re-run: on a current deployment it just refreshes the trigger and
+	 * edge fn code (a new version is published only if the code changed). The
+	 * site keeps serving through the old edge version until step 4 re-points it.
+	 */
+	async upgradeCognitoGate(
+		profile: PublishingProfile,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<{ edgeFunctionVersionArn: string; legacyOrphaned: boolean }> {
+		const state = profile.infrastructureState;
+		const cognito = state?.cognitoAuth;
+		if (!state || !cognito?.stackName) throw new Error('This profile has no deployed Cognito stack.');
+		if (state.imported) throw new Error('Imported stacks are managed externally; upgrade them via CDK.');
+
+		const config = this.configForProfile(profile);
+		const client = this.getCfClient(config.awsProfile, 'us-east-1');
+		const poolStack = cognito.stackName;
+		const expectComplete = async (stackName: string, region: string, what: string) => {
+			const status = await this.pollStackUntilComplete(stackName, profile, onEvent || (() => {}), region);
+			if (status !== 'UPDATE_COMPLETE' && status !== 'CREATE_COMPLETE') {
+				throw new Error(`${what} ended with status ${status}`);
+			}
+		};
+		const sendUpdate = async (input: UpdateStackCommandInput, what: string) => {
+			try {
+				await client.send(new UpdateStackCommand(input));
+			} catch (err) {
+				if (this.isNoUpdatesError(err)) return;
+				throw err;
+			}
+			await expectComplete(input.StackName!, 'us-east-1', what);
+		};
+		const tags = [
+			{ Key: 'cpn:managed', Value: 'true' },
+			{ Key: 'cpn:profile', Value: profile.id },
+		];
+
+		// 1) Assets.
+		await this.prepareCognitoAssets(config, profile, onEvent);
+
+		// 2) Legacy inline edge fn: retain before removal.
+		const deployedTpl = await client.send(new GetTemplateCommand({ StackName: poolStack, TemplateStage: 'Original' }));
+		let tpl: { Resources?: Record<string, Record<string, unknown>>; Outputs?: Record<string, unknown> };
+		try {
+			tpl = JSON.parse(deployedTpl.TemplateBody || '{}');
+		} catch {
+			throw new Error(`Could not parse the deployed template of ${poolStack} (expected JSON).`);
+		}
+		const legacyIds = CloudFormationManager.LEGACY_POOL_EDGE_IDS.filter((id) => tpl.Resources?.[id]);
+		let orphan: OrphanedEdgeResource | undefined;
+		if (legacyIds.length > 0) {
+			const resources = await this.listStackResourcesByClient(client, poolStack);
+			const physical = (id: string) => resources.find((r) => r.logicalId === id)?.physicalId;
+			orphan = {
+				stackName: poolStack,
+				region: 'us-east-1',
+				functionName: physical('AuthEdgeFn'),
+				roleName: physical('EdgeFnRole'),
+				orphanedAt: Date.now(),
+			};
+			for (const id of legacyIds) {
+				tpl.Resources![id].DeletionPolicy = 'Retain';
+				tpl.Resources![id].UpdateReplacePolicy = 'Retain';
+			}
+			// A real (non-attribute) change so CloudFormation applies the update.
+			tpl.Outputs = {
+				...(tpl.Outputs || {}),
+				LegacyEdgeRetained: { Value: 'true', Description: 'Inline edge fn retained ahead of removal' },
+			};
+			const keys = await this.getDeployedParameterKeys(client, poolStack);
+			await sendUpdate({
+				StackName: poolStack,
+				TemplateBody: JSON.stringify(tpl),
+				Parameters: [...keys].map((k) => ({ ParameterKey: k, UsePreviousValue: true })),
+				Capabilities: ['CAPABILITY_IAM'],
+				Tags: tags,
+			}, 'Retaining the legacy edge function');
+		}
+
+		// 3) Pool stack -> current template (adds the pre-token trigger).
+		const deployedKeys = await this.getDeployedParameterKeys(client, poolStack);
+		await sendUpdate({
+			StackName: poolStack,
+			TemplateBody: COGNITO_AUTH_TEMPLATE,
+			Parameters: this.buildCognitoAuthUpdateParameters({
+				AssetsBucket: config.assetsBucket || '',
+				TriggerAssetsKey: config.preTokenAssetsKey || '',
+			}, deployedKeys),
+			Capabilities: ['CAPABILITY_IAM'],
+			Tags: tags,
+		}, 'Cognito pool stack update');
+		const pool = await this.getCognitoAuthOutputs(poolStack, profile);
+
+		// 4) Edge stack + re-point the site (only when reads are Cognito-gated).
+		let edgeArn = '';
+		let edgeStackName: string | undefined;
+		if (state.readGateMode === 'cognito') {
+			edgeStackName = await this.deployCognitoEdgeStack(config, profile, pool, onEvent);
+			await expectComplete(edgeStackName, 'us-east-1', 'Cognito edge stack deploy');
+			edgeArn = (await this.getEdgeStackOutputs(edgeStackName, profile)).edgeFunctionVersionArn;
+			if (!edgeArn) throw new Error('The Cognito edge stack did not report a version ARN.');
+			if (state.fullStackName && state.authLambdaEdgeArn !== edgeArn) {
+				await this.updateFullStackAuthLambda(state.fullStackName, state.originAccessMethod, edgeArn, profile, state.region);
+				await expectComplete(state.fullStackName, state.region || profile.awsSettings?.region || 'us-east-1', 'Site stack re-point');
+			}
+			state.authLambdaEdgeArn = edgeArn;
+		}
+
+		// 5) Persist.
+		state.cognitoAuth = {
+			...cognito,
+			edgeStackName: edgeStackName ?? cognito.edgeStackName,
+			edgeFunctionVersionArn: edgeArn || (legacyIds.length > 0 ? '' : cognito.edgeFunctionVersionArn),
+			accessGroupsBucket: pool.accessGroupsBucket || undefined,
+			accessGroupsKey: pool.accessGroupsKey || undefined,
+			// Force a membership re-upload on the next sync.
+			accessGroupsSyncedHash: undefined,
+		};
+		if (orphan && (orphan.functionName || orphan.roleName)) {
+			profile.pendingEdgeCleanup = [...(profile.pendingEdgeCleanup || []), orphan];
+		}
+		await this.plugin.saveSettings();
+		return { edgeFunctionVersionArn: edgeArn, legacyOrphaned: !!orphan };
+	}
+
+	/**
+	 * Upload the access-group membership file the pre-token trigger reads.
+	 * `body` is the serialized `{ version, groups }` JSON. Throws when the pool
+	 * was deployed without access-group support (run the Cognito upgrade first).
+	 */
+	async putAccessGroups(profile: PublishingProfile, body: string): Promise<void> {
+		const cognito = profile.infrastructureState?.cognitoAuth;
+		if (!cognito?.accessGroupsBucket || !cognito.accessGroupsKey) {
+			throw new Error('This profile\'s Cognito pool has no access-group support yet. Run "Upgrade Cognito gate" first.');
+		}
+		const s3 = this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
+		await s3.send(new PutObjectCommand({
+			Bucket: cognito.accessGroupsBucket,
+			Key: cognito.accessGroupsKey,
+			Body: body,
+			ContentType: 'application/json',
+			CacheControl: 'no-store',
+		}));
 	}
 
 	/**
@@ -1690,7 +1987,7 @@ export class CloudFormationManager {
 		};
 	}
 
-	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'password' | 'comment' | 'chat' | 'bootstrap'): string {
+	getStackName(variantName: string, type: 'cert' | 'full' | 'cognito' | 'authedge' | 'password' | 'comment' | 'chat' | 'bootstrap'): string {
 		// The bootstrap (Lambda@Edge assets) stack is one-per-account, not
 		// per-variant, so it takes no suffix.
 		if (type === 'bootstrap') return 'cpn-bootstrap';
@@ -1698,6 +1995,9 @@ export class CloudFormationManager {
 		switch (type) {
 			case 'cert': return `cpn-cert-${suffix}`;
 			case 'cognito': return `cpn-cognito-${suffix}`;
+			// Not `cpn-cognito-edge-*`: that would parse as a cognito stack with a
+			// variant of `edge-<suffix>` in stack discovery.
+			case 'authedge': return `cpn-authedge-${suffix}`;
 			case 'password': return `cpn-password-${suffix}`;
 			case 'comment': return `cpn-comment-${suffix}`;
 			case 'chat': return `cpn-chat-${suffix}`;

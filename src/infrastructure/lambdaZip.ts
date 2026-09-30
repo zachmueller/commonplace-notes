@@ -126,3 +126,14 @@ export async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
 		.map((b) => b.toString(16).padStart(2, '0'))
 		.join('');
 }
+
+/**
+ * Base64 sha256 of bytes: the format Lambda reports as a function's CodeSha256
+ * and that `AWS::Lambda::Version.CodeSha256` expects.
+ */
+export async function sha256Base64Bytes(bytes: Uint8Array): Promise<string> {
+	const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes));
+	let bin = '';
+	for (const b of digest) bin += String.fromCharCode(b);
+	return btoa(bin);
+}

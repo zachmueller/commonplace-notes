@@ -5,6 +5,7 @@ import {
 	CloudFormationManager,
 	mapCognitoOutputs,
 	mapCommentOutputs,
+	mapEdgeOutputs,
 	mapPasswordOutputs,
 	mapSiteOutputs,
 } from './cloudFormationManager';
@@ -23,12 +24,13 @@ import { Logger, errorMessage } from '../utils/logging';
 const EDGE_REGION = 'us-east-1';
 
 /** The importable roles (excludes 'unknown') in the order slots are populated. */
-const ROLE_ORDER: StackRole[] = ['full', 'cert', 'cognito', 'password', 'comment', 'chat'];
+const ROLE_ORDER: StackRole[] = ['full', 'cert', 'cognito', 'authedge', 'password', 'comment', 'chat'];
 
 const ROLE_LABELS: Record<StackRole, string> = {
 	full: 'Site',
 	cert: 'Certificate',
-	cognito: 'Read-gate: Cognito',
+	cognito: 'Cognito user pool',
+	authedge: 'Read-gate: Cognito edge fn',
 	password: 'Read-gate: Password',
 	comment: 'Comments',
 	chat: 'LLM chat',
@@ -203,11 +205,12 @@ export class ImportStackModal extends Modal {
 		// AuthLambdaEdgeArn parameter vs. each auth stack's edge fn ARN.
 		const full = this.discovered.find(s => s.role === 'full');
 		const cognito = this.discovered.find(s => s.role === 'cognito');
+		const authedge = this.discovered.find(s => s.role === 'authedge');
 		const password = this.discovered.find(s => s.role === 'password');
 		const arn = full?.parameters['AuthLambdaEdgeArn'] || '';
 		if (arn && password && arn === mapPasswordOutputs(password.outputs).edgeFunctionVersionArn) {
 			this.readGateChoice = 'password';
-		} else if (arn && cognito && arn === mapCognitoOutputs(cognito.outputs).edgeFunctionVersionArn) {
+		} else if (arn && cognito && arn === cognitoEdgeArn(cognito, authedge)) {
 			this.readGateChoice = 'cognito';
 		}
 	}
@@ -446,6 +449,7 @@ export class ImportStackModal extends Modal {
 		const full = selected.full;
 		const cert = selected.cert;
 		const cognito = selected.cognito;
+		const authedge = selected.authedge;
 		const password = selected.password;
 		const comment = selected.comment;
 
@@ -460,7 +464,7 @@ export class ImportStackModal extends Modal {
 
 		// Determine which read-gate is active. When both are present the user's
 		// selector wins; otherwise infer from the full stack's AuthLambdaEdgeArn.
-		const readGateMode = this.resolveReadGateMode(authLambdaEdgeArn, cognito, password);
+		const readGateMode = this.resolveReadGateMode(authLambdaEdgeArn, cognito, password, authedge);
 
 		const commentPresent = !!comment;
 
@@ -477,10 +481,13 @@ export class ImportStackModal extends Modal {
 				hostedUiDomain: o.hostedUiDomain,
 				jwksUri: o.jwksUri,
 				issuer: o.issuer,
-				edgeFunctionVersionArn: o.edgeFunctionVersionArn,
+				edgeFunctionVersionArn: cognitoEdgeArn(cognito, authedge),
 				callbackApiDomain: o.callbackApiDomain,
 				googleClientId: cognito.parameters['GoogleClientId'] || undefined,
 				authDomainPrefix: cognito.parameters['AuthDomainPrefix'] || undefined,
+				edgeStackName: authedge?.stackName,
+				accessGroupsBucket: o.accessGroupsBucket || undefined,
+				accessGroupsKey: o.accessGroupsKey || undefined,
 			};
 		}
 
@@ -563,6 +570,7 @@ export class ImportStackModal extends Modal {
 		authArn: string | undefined,
 		cognito?: DiscoveredStack,
 		password?: DiscoveredStack,
+		authedge?: DiscoveredStack,
 	): ReadGateMode {
 		if (cognito && password) return this.readGateChoice;
 		if (!authArn) {
@@ -572,8 +580,17 @@ export class ImportStackModal extends Modal {
 			if (password) return 'password';
 			return 'none';
 		}
-		if (cognito && authArn === mapCognitoOutputs(cognito.outputs).edgeFunctionVersionArn) return 'cognito';
+		if (cognito && authArn === cognitoEdgeArn(cognito, authedge)) return 'cognito';
 		if (password && authArn === mapPasswordOutputs(password.outputs).edgeFunctionVersionArn) return 'password';
 		return 'byo';
 	}
+}
+
+/**
+ * The Cognito read-gate edge ARN for an imported pool: the separate edge stack's
+ * output on current deployments, else the legacy pool stack's own output.
+ */
+function cognitoEdgeArn(cognito: DiscoveredStack, authedge?: DiscoveredStack): string {
+	if (authedge) return mapEdgeOutputs(authedge.outputs).edgeFunctionVersionArn;
+	return mapCognitoOutputs(cognito.outputs).edgeFunctionVersionArn;
 }

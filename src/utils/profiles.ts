@@ -63,6 +63,19 @@ export class ProfileManager {
 		return `${this.getProfileDir(profileId)}/contentIndex.json`;
 	}
 
+	/**
+	 * uid → access groups each note was last published with (per-note access
+	 * gating). Kept OUT of the mapping dir, which mirrors to the public site.
+	 */
+	getAccessMapPath(profileId: string): string {
+		return `${this.getProfileDir(profileId)}/access.json`;
+	}
+
+	/** Staging subdir for a group partition's note JSONs (`staged-notes/restricted/<group>`). */
+	getStagedRestrictedDir(profileId: string, group: string): string {
+		return `${this.getStagedNotesDir(profileId)}/restricted/${group}`;
+	}
+
 	/** Local staging dir for the per-UID `kb/{uid}.md` chat corpus artifacts. */
 	getKbCorpusDir(profileId: string): string {
 		return `${this.getProfileDir(profileId)}/kb`;

@@ -2,6 +2,7 @@ import { PublishingProfile, HeaderLink, SiteCustomization, ThemeColors } from '.
 import { SITE_INDEX_TEMPLATE, SITE_STYLES_CSS, SITE_APP_JS, SITE_CHAT_HTML, FLEXSEARCH_MIN_JS, VENDOR_JS } from './siteAssets';
 import { applyIndexHtmlSlots, applyStylesCssSlots } from './assetCustomizations/parse';
 import type { AssetCustomization } from './assetCustomizations/types';
+import { canPublishGated, WHOAMI_PATH } from '../utils/access';
 
 const DEFAULT_SITE_TITLE = 'Notes';
 const DEFAULT_PANEL_WIDTH = 600;
@@ -177,6 +178,16 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 			// i.e. the Cognito edge fn gates reads. Password/BYO/public reads do not.
 			config.readGating = profile.infrastructureState?.readGateMode === 'cognito';
 		}
+	}
+
+	// Per-note access groups (consumed by the note loader via window.__CPN_CONFIG__).
+	// Emitted only when the site's edge fn actually enforces `/restricted/<group>/*`
+	// and at least one group exists. Group NAMES are deliberately not listed here
+	// (config.json is readable by every reader): the SPA asks the edge
+	// `GET <accessWhoamiPath>` for the viewer's own groups instead.
+	if (profile.accessGroups && Object.keys(profile.accessGroups).length > 0 && canPublishGated(profile).ok) {
+		config.accessGating = true;
+		config.accessWhoamiPath = WHOAMI_PATH;
 	}
 
 	// LLM chat (consumed by the chat client via window.__CPN_CONFIG__). Emitted

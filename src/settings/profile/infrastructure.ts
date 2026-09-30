@@ -79,6 +79,54 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 					}));
 		}
 
+		// Cognito gate: migrate legacy pools (inline edge fn) to the separate
+		// S3-asset edge stack and add the pre-token trigger that per-note access
+		// groups need. Idempotent, so it doubles as "redeploy the latest edge fn".
+		if (state.cognitoAuth?.stackName && !state.imported) {
+			const cognito = state.cognitoAuth;
+			const needsUpgrade = !cognito.accessGroupsKey
+				|| (state.readGateMode === 'cognito' && !cognito.edgeStackName);
+			const eventLog = containerEl.createDiv({ cls: 'cpn-wizard-event-log' });
+			eventLog.hide();
+			new Setting(containerEl)
+				.setName('Cognito gate')
+				.setDesc(needsUpgrade
+					? 'Upgrade required for per-note access groups: moves the sign-in edge function to its own stack and adds the group-membership trigger. The site stays up; takes several minutes.'
+					: 'Up to date. Re-run to redeploy the latest edge function and trigger code.')
+				.addButton(btn => btn
+					.setButtonText(needsUpgrade ? 'Upgrade Cognito gate' : 'Redeploy')
+					.setClass(needsUpgrade ? 'mod-cta' : '')
+					.onClick(async () => {
+						btn.setDisabled(true);
+						btn.setButtonText('Working...');
+						eventLog.empty();
+						eventLog.show();
+						try {
+							const result = await plugin.cloudFormationManager.upgradeCognitoGate(profile, (event) => {
+								const line = eventLog.createDiv({ cls: 'cpn-wizard-event-line' });
+								if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+									line.addClass('cpn-event-error');
+								} else if (event.status.includes('COMPLETE')) {
+									line.addClass('cpn-event-success');
+								}
+								line.setText(`${event.logicalResourceId} - ${event.status}`);
+								eventLog.scrollTop = eventLog.scrollHeight;
+							});
+							new Notice(result.legacyOrphaned
+								? 'Cognito gate upgraded. The old edge function is queued for cleanup once CloudFront releases it.'
+								: 'Cognito gate is up to date.');
+							// Membership and site config depend on the new state.
+							await plugin.syncAccessGroups(profile, { force: true });
+							ctx.rerenderProfile();
+						} catch (err: unknown) {
+							Logger.error('Error upgrading the Cognito gate:', err);
+							new Notice(`Cognito gate upgrade failed: ${errorMessage(err)}`);
+							btn.setDisabled(false);
+							btn.setButtonText(needsUpgrade ? 'Upgrade Cognito gate' : 'Redeploy');
+						}
+					}));
+		}
+
 		// Google sign-in: the Cognito Hosted UI URLs the user must register
 		// in their Google OAuth client. Persisted from the deploy, shown here
 		// (with copy buttons) so they're always retrievable — otherwise the

@@ -59,16 +59,34 @@ export interface CognitoAuthState {
 	hostedUiDomain: string;
 	jwksUri: string;
 	issuer: string;
-	/** Versioned ARN of the viewer-request Lambda@Edge fn (fed to AuthLambdaEdgeArn). */
+	/**
+	 * Versioned ARN of the viewer-request Lambda@Edge fn (fed to AuthLambdaEdgeArn).
+	 * Comes from the separate edge stack (`edgeStackName`) on current deployments,
+	 * or from the pool stack itself on legacy (pre-upgrade) deployments. Empty when
+	 * the pool only serves comment identity.
+	 */
 	edgeFunctionVersionArn: string;
 	/** API Gateway host backing the /auth/* callback origin on the site distribution. */
 	callbackApiDomain: string;
 	googleClientId?: string;
 	authDomainPrefix?: string;
+	/**
+	 * Stack owning the Cognito viewer-request edge fn (`cpn-authedge-<variant>`).
+	 * Absent on legacy deployments whose edge fn is still inline in the pool stack;
+	 * the "Upgrade Cognito gate" action migrates those.
+	 */
+	edgeStackName?: string;
+	/** Bootstrap bucket holding the access-group membership file (pool stack output). */
+	accessGroupsBucket?: string;
+	/** Key of the membership file read by the pre-token trigger (pool stack output). */
+	accessGroupsKey?: string;
+	/** sha256 of the last membership file uploaded, so publishes skip no-op uploads. */
+	accessGroupsSyncedHash?: string;
 }
 
-/** Raw outputs read from a deployed Cognito auth stack. */
+/** Raw outputs read from a deployed Cognito auth stack (plus its edge stack). */
 export interface CognitoAuthOutputs {
+	/** From the edge stack on current deployments; the pool stack only on legacy ones. */
 	edgeFunctionVersionArn: string;
 	userPoolId: string;
 	userPoolClientId: string;
@@ -76,6 +94,9 @@ export interface CognitoAuthOutputs {
 	jwksUri: string;
 	issuer: string;
 	callbackApiDomain: string;
+	/** Empty when the pool was deployed without the access-groups trigger. */
+	accessGroupsBucket: string;
+	accessGroupsKey: string;
 }
 
 /** Deployment bookkeeping for the self-hosted comment stack. */
@@ -171,6 +192,10 @@ export interface DeploymentConfig {
 	callbackUrl?: string;
 	/** API Gateway host for the /auth/* callback origin (from the Cognito auth stack). */
 	callbackApiDomainName?: string;
+	/** Per-account bootstrap bucket (Lambda assets + access-group membership file). */
+	assetsBucket?: string;
+	/** Bootstrap-bucket key of the pre-token-generation trigger code zip. */
+	preTokenAssetsKey?: string;
 	/** Regional domain of the comment S3 bucket for the /comments/* origin (from the comment stack). */
 	commentBucketDomainName?: string;
 	/** API Gateway host for the /api/comments write origin (from the comment stack). */
@@ -214,7 +239,7 @@ export interface StackOutputs {
  * cpn-* (or cpn:managed-tagged) stack whose Outputs match no known role — the
  * import UI leaves it unchecked with a manual role-override dropdown.
  */
-export type StackRole = 'full' | 'cert' | 'cognito' | 'password' | 'comment' | 'chat' | 'unknown';
+export type StackRole = 'full' | 'cert' | 'cognito' | 'authedge' | 'password' | 'comment' | 'chat' | 'unknown';
 
 /**
  * A CloudFormation stack found by scanning an account/region during import.

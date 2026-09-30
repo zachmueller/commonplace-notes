@@ -37,6 +37,8 @@ export class DeploymentWizardModal extends Modal {
 	private selectedCertMatch: CertificateMatch | null = null;
 	private stackOutputs: StackOutputs | null = null;
 	private cognitoOutputs: CognitoAuthOutputs | null = null;
+	/** Stack owning the Cognito read-gate edge fn (set when reads are Cognito-gated). */
+	private cognitoEdgeStackName: string | undefined;
 	private cognitoStackName: string = '';
 	private commentOutputs: CommentStackOutputs | null = null;
 	private commentStackName: string = '';
@@ -1052,7 +1054,7 @@ export class DeploymentWizardModal extends Modal {
 			// 2) Cognito pool (read gating and/or comment identity).
 			if (this.cognitoPoolNeeded()) {
 				container.createEl('p', {
-					text: 'Deploying the Cognito user pool, Google sign-in, and viewer-request function in us-east-1...',
+					text: 'Deploying the Cognito user pool and Google sign-in in us-east-1...',
 					cls: 'cpn-wizard-description',
 				});
 				// Custom-domain sites know their callback URL up front; default-domain
@@ -1061,6 +1063,13 @@ export class DeploymentWizardModal extends Modal {
 					? `https://${this.config.customDomain}/auth/callback`
 					: undefined;
 
+				// The pool's pre-token trigger (per-note access groups) is an S3 asset in
+				// the per-account bootstrap bucket; stage it before the pool deploy.
+				await this.cfManager.prepareCognitoAssets(
+					this.config as DeploymentConfig,
+					this.activeProfile,
+					(e) => this.appendEvent(eventLog, e),
+				);
 				const stackName = await this.cfManager.deployCognitoAuthStack(this.config as DeploymentConfig);
 				await this.updateInfraState({ status: 'cognito-deploying' });
 				const finalStatus = await this.cfManager.pollStackUntilComplete(
@@ -1074,6 +1083,34 @@ export class DeploymentWizardModal extends Modal {
 				}
 				this.cognitoOutputs = await this.cfManager.getCognitoAuthOutputs(stackName, this.activeProfile);
 				this.cognitoStackName = stackName;
+
+				// The read-gate edge fn is its own stack now (S3 asset, no inline size
+				// cap). It bakes the pool's ids, so it deploys after the pool, and only
+				// when reads are Cognito-gated (comment identity alone doesn't need it).
+				if (this.config.readGateMode === 'cognito') {
+					container.createEl('p', {
+						text: 'Deploying the Cognito viewer-request function in us-east-1...',
+						cls: 'cpn-wizard-description',
+					});
+					const edgeStack = await this.cfManager.deployCognitoEdgeStack(
+						this.config as DeploymentConfig,
+						this.activeProfile,
+						this.cognitoOutputs,
+						(e) => this.appendEvent(eventLog, e),
+					);
+					const edgeStatus = await this.cfManager.pollStackUntilComplete(
+						edgeStack, this.activeProfile, (e) => this.appendEvent(eventLog, e), 'us-east-1',
+					);
+					if (this.aborted) return;
+					if (!isDeploySuccess(edgeStatus)) {
+						await this.updateInfraState({ status: 'failed' });
+						this.showError(container, `Cognito edge stack deployment failed: ${edgeStatus}`);
+						return;
+					}
+					const edgeOut = await this.cfManager.getEdgeStackOutputs(edgeStack, this.activeProfile);
+					this.cognitoOutputs = { ...this.cognitoOutputs, edgeFunctionVersionArn: edgeOut.edgeFunctionVersionArn };
+					this.cognitoEdgeStackName = edgeStack;
+				}
 				await this.updateInfraState({ status: 'cognito-deployed' });
 			}
 
@@ -1581,6 +1618,9 @@ export class DeploymentWizardModal extends Modal {
 			callbackApiDomain: this.cognitoOutputs.callbackApiDomain,
 			googleClientId: this.config.googleClientId || undefined,
 			authDomainPrefix: this.config.authDomainPrefix || undefined,
+			edgeStackName: this.cognitoEdgeStackName,
+			accessGroupsBucket: this.cognitoOutputs.accessGroupsBucket || undefined,
+			accessGroupsKey: this.cognitoOutputs.accessGroupsKey || undefined,
 		};
 	}
 

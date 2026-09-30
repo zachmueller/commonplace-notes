@@ -152,6 +152,7 @@ function displayForceCleanLeftovers(ctx: ProfileContext, containerEl: HTMLElemen
 		state.certStackName ||
 		state.comment?.stackName ||
 		state.cognitoAuth?.stackName ||
+		state.cognitoAuth?.edgeStackName ||
 		state.passwordAuth?.stackName
 	);
 	// Leftovers are likely after a failed/interrupted teardown. A clean 'none'

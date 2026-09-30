@@ -67,6 +67,27 @@ export interface PublishingProfile {
 	 * that reset. See CommonplaceNotesPlugin.cleanupOrphanedEdgeResources.
 	 */
 	pendingEdgeCleanup?: OrphanedEdgeResource[];
+	/**
+	 * Per-note access groups for this site: group name → readers. A note whose
+	 * `cpn-access-groups` frontmatter lists a group is published only to that
+	 * group's `restricted/<group>/` partition. Group names match
+	 * `^[a-z0-9-]{1,40}$`. See src/utils/access.ts.
+	 */
+	accessGroups?: Record<string, AccessGroup>;
+	/**
+	 * BYO read gate only: the author confirms their viewer-request edge fn
+	 * enforces `/restricted/<group>/*` (allow only viewers in `<group>`) and
+	 * answers `GET /restricted/whoami` with `{ groups }`. Without this, gated
+	 * notes are not published on BYO sites.
+	 */
+	byoEnforcesAccessGroups?: boolean;
+}
+
+/** One access group: who may read notes gated to it. */
+export interface AccessGroup {
+	/** Reader emails, matched case-insensitively against the verified token email. */
+	members: string[];
+	description?: string;
 }
 
 /**
@@ -174,6 +195,8 @@ export interface NoteConnection {
     uid: string;
     slug: string;
     title: string;
+    /** The connected note's access groups ([] = public). */
+    access: string[];
 }
 
 export interface BulkPublishContextMapping {

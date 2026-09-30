@@ -3,6 +3,7 @@ import { generateUID } from './uid';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';
 import { NoticeManager } from '../utils/notice';
+import { ACCESS_GROUPS_KEY, normalizeGroupList, type NormalizedGroups } from './access';
 
 export class FrontmatterManager {
     private queue: Map<string, Record<string, unknown>> = new Map();
@@ -213,6 +214,16 @@ export class FrontmatterManager {
 	getNoteStyle(file: TFile): string | null {
 		const v = this.getFrontmatterValue(file, 'cpn-style');
 		return typeof v === 'string' && v.trim() ? v.trim() : null;
+	}
+
+	/**
+	 * Access groups from the `cpn-access-groups` frontmatter (per-note access
+	 * gating), normalized. Empty groups = the note inherits the site-wide read
+	 * gate. Invalid entries are reported, never silently dropped, so the caller
+	 * can fail closed.
+	 */
+	getNoteAccessGroups(file: TFile): NormalizedGroups {
+		return normalizeGroupList(this.getFrontmatterValue(file, ACCESS_GROUPS_KEY));
 	}
 
     add(file: TFile, updates: Record<string, unknown>) {

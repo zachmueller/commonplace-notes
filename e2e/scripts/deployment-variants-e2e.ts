@@ -155,6 +155,13 @@ async function installMocks(ctx: TestContext): Promise<void> {
 		cfm.updateCognitoAuthStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("cognito-phase2"); return "cpn-cognito-variants"; };
 		cfm.deployPasswordAuthStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("password"); return "cpn-password-variants"; };
 		cfm.deployCommentStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("comment"); return "cpn-comment-variants"; };
+		// Cognito read gate: the edge fn is its own S3-asset stack now, and the pool's
+		// pre-token trigger is staged in the bootstrap bucket first.
+		cfm.deployCognitoEdgeStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("authedge"); return "cpn-authedge-variants"; };
+		cfm.prepareCognitoAssets = async (config: any) => {
+			config.assetsBucket = "cpn-assets-999888777666-us-east-1";
+			config.preTokenAssetsKey = "lambda/pre-token-groups/abc.zip";
+		};
 
 		// --- polling: emit one event and report success ------------------------
 		cfm.pollStackUntilComplete = async (
@@ -178,6 +185,7 @@ async function installMocks(ctx: TestContext): Promise<void> {
 		cfm.getCognitoAuthOutputs = async () => cognitoOutputs;
 		cfm.getCommentStackOutputs = async () => commentOutputs;
 		cfm.getPasswordAuthOutputs = async () => ({ edgeFunctionVersionArn: "arn:aws:lambda:us-east-1:999888777666:function:cpn-password-edge:1" });
+		cfm.getEdgeStackOutputs = async () => ({ edgeFunctionVersionArn: "arn:aws:lambda:us-east-1:999888777666:function:cpn-authedge:1" });
 
 		// --- misc read paths (unused by these variants, stubbed for safety) ----
 		cfm.listHostedZones = async () => [];
@@ -649,7 +657,7 @@ const MATRIX: MatrixCase[] = [
 		name: "cognito reads / no comments",
 		shape: { readGateMode: "cognito" },
 		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-cognito" },
-		expectStacks: ["cognito", "full", "cognito-phase2"], forbidStacks: ["password", "comment"],
+		expectStacks: ["cognito", "authedge", "full", "cognito-phase2"], forbidStacks: ["password", "comment"],
 		expectReadGate: "cognito", expectCognito: true, expectPassword: false, expectComment: false,
 	},
 	{
@@ -669,21 +677,21 @@ const MATRIX: MatrixCase[] = [
 		name: "public reads / comments on",
 		shape: { readGateMode: "none", commentIdentity: true, commentingEnabled: true },
 		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-comments" },
-		expectStacks: ["cognito", "comment", "full", "full-update", "cognito-phase2"], forbidStacks: ["password"],
+		expectStacks: ["cognito", "comment", "full", "full-update", "cognito-phase2"], forbidStacks: ["password", "authedge"],
 		expectReadGate: "none", expectCognito: true, expectPassword: false, expectComment: true,
 	},
 	{
 		name: "password reads / comments on",
 		shape: { readGateMode: "password", passwordHash: "b".repeat(64), commentIdentity: true, commentingEnabled: true },
 		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-pw-comments" },
-		expectStacks: ["password", "cognito", "comment", "full", "full-update"],
+		expectStacks: ["password", "cognito", "comment", "full", "full-update"], forbidStacks: ["authedge"],
 		expectReadGate: "password", expectCognito: true, expectPassword: true, expectComment: true,
 	},
 	{
 		name: "cognito reads / comment-identity only (no backend)",
 		shape: { readGateMode: "cognito", commentIdentity: true, commentingEnabled: false },
 		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-identity-only" },
-		expectStacks: ["cognito", "full"], forbidStacks: ["comment", "full-update", "password"],
+		expectStacks: ["cognito", "authedge", "full"], forbidStacks: ["comment", "full-update", "password"],
 		expectReadGate: "cognito", expectCognito: true, expectPassword: false, expectComment: false,
 	},
 ];

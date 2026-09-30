@@ -1,4 +1,4 @@
-import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, S3ServiceException } from '@aws-sdk/client-s3';
+import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3ServiceException } from '@aws-sdk/client-s3';
 import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { TFile, parseYaml } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
@@ -7,6 +7,10 @@ import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs, renderVendorJs } from './siteRenderer';
 import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
+import { partitionRecord, partitionSlugMap, restrictedPrefix, type Partition } from '../utils/access';
+
+/** Cache-Control for objects in a `restricted/<group>/` partition: never stored by browsers. */
+const RESTRICTED_CACHE_CONTROL = 'private, no-store';
 
 const MAX_CONCURRENCY = 5;
 
@@ -95,13 +99,24 @@ export async function pushLocalJsonsToS3(
 			throw new Error(`Staged notes directory does not exist: ${stagedNotesDir}`);
 		}
 
-		const listing = await plugin.app.vault.adapter.list(stagedNotesDir);
-		const noteFiles = listing.files.filter(f => f.endsWith('.json'));
+		// Public notes are staged at the top level; gated copies under
+		// restricted/<group>/ (see NoteManager.writeNoteToStaging).
+		const noteFiles = await listStagedNoteUploads(plugin, profileId, s3Prefix);
+		const hasAccessChanges = plugin.accessManager.peekTransitions(profileId).length > 0;
 
-		if (noteFiles.length === 0) {
+		if (noteFiles.length === 0 && !hasAccessChanges) {
 			Logger.debug('No staged note files to upload');
 			NoticeManager.showNotice('No staged notes to upload');
 			return true;
+		}
+
+		// Membership first, so readers of newly gated notes can get in. Best
+		// effort: a stale membership file only ever denies (fail closed).
+		try {
+			await plugin.syncAccessGroups(profile);
+		} catch (err) {
+			Logger.warn('Access-group membership sync failed:', err);
+			NoticeManager.showNotice(`Could not sync access-group membership: ${errorMessage(err)}`, 10000);
 		}
 
 		const { success, error } = await NoticeManager.showProgressWithCounter(
@@ -109,16 +124,15 @@ export async function pushLocalJsonsToS3(
 			noteFiles.length,
 			async (updateProgress) => {
 				let completed = 0;
-				await runWithConcurrency(noteFiles, async (filePath) => {
+				await runWithConcurrency(noteFiles, async ({ path: filePath, key, restricted }) => {
 					const content = await plugin.app.vault.adapter.read(filePath);
-					const fileName = filePath.split('/').pop()!;
-					const key = `${s3Prefix}notes/${fileName}`;
 
 					await s3Client.send(new PutObjectCommand({
 						Bucket: bucket,
 						Key: key,
 						Body: content,
 						ContentType: 'application/json',
+						...(restricted ? { CacheControl: RESTRICTED_CACHE_CONTROL } : {}),
 					}));
 
 					completed++;
@@ -139,7 +153,14 @@ export async function pushLocalJsonsToS3(
 
 		await pushMappingAndIndexToS3(plugin, profileId);
 
-		if (triggerCloudFrontInvalidation) {
+		// Remove copies from partitions notes left (e.g. public -> gated). Runs
+		// after the new mappings are live so no mapping points at a deleted key.
+		const removedAny = await applyAccessTransitions(plugin, profileId);
+		if (removedAny === null) return false; // credential error, already reported
+
+		// An access change must reach the edge cache now, whatever the profile's
+		// invalidation scheme: a formerly public copy may still be cached.
+		if (triggerCloudFrontInvalidation || removedAny) {
 			await createCloudFrontInvalidation(plugin, profileId);
 		}
 
@@ -173,38 +194,60 @@ export async function pushMappingAndIndexToS3(
 		throw new Error(`Mapping directory does not exist: ${mappingDir}`);
 	}
 
-	const listing = await plugin.app.vault.adapter.list(mappingDir);
-	const mappingFiles = listing.files;
+	// Split every site-wide aggregate by access: the public copies exclude gated
+	// notes entirely, and each group gets its own mirror under restricted/<group>/.
+	// Groups defined in settings but without notes still get (empty) mirrors so
+	// the SPA's per-group fetches never hit a missing key.
+	await plugin.accessManager.ensureLoaded(profileId);
+	const accessOf = (uid: string) => plugin.accessManager.getGroups(profileId, uid);
+	const groupNames = [...new Set([
+		...Object.keys(profile.accessGroups || {}),
+		...plugin.accessManager.groupsInUse(profileId),
+	])].sort();
 
-	if (mappingFiles.length > 0) {
-		const { success } = await NoticeManager.showProgressWithCounter(
-			'Uploading mappings to S3',
-			mappingFiles.length,
-			async (updateProgress) => {
-				let completed = 0;
-				await runWithConcurrency(mappingFiles, async (filePath) => {
-					const content = await plugin.app.vault.adapter.read(filePath);
-					const fileName = filePath.split('/').pop()!;
-					const key = `${s3Prefix}static/mapping/${fileName}`;
+	const readJson = async <T>(p: string, fallback: T): Promise<T> => {
+		if (!await plugin.app.vault.adapter.exists(p)) return fallback;
+		return JSON.parse(await plugin.app.vault.adapter.read(p)) as T;
+	};
+	const slugToUid = await readJson<Record<string, string>>(`${mappingDir}/slug-to-uid.json`, {});
+	const uidToHash = await readJson<Record<string, string>>(`${mappingDir}/uid-to-hash.json`, {});
+	const slugParts = partitionSlugMap(slugToUid, accessOf, groupNames);
+	const hashParts = partitionRecord(uidToHash, accessOf, groupNames);
 
-					await s3Client.send(new PutObjectCommand({
-						Bucket: bucket,
-						Key: key,
-						Body: content,
-						ContentType: 'application/json',
-					}));
-
-					completed++;
-					updateProgress(completed);
-					Logger.debug(`Uploaded mapping: ${key}`);
-				}, MAX_CONCURRENCY);
-			},
-			`Mapping files successfully uploaded to S3`,
-			`Mapping upload failed, check console for error details`
+	const uploads: Array<{ key: string; body: string; restricted: boolean }> = [
+		{ key: `${s3Prefix}static/mapping/slug-to-uid.json`, body: JSON.stringify(slugParts.publicView), restricted: false },
+		{ key: `${s3Prefix}static/mapping/uid-to-hash.json`, body: JSON.stringify(hashParts.publicView), restricted: false },
+	];
+	for (const g of groupNames) {
+		const base = `${s3Prefix}${restrictedPrefix(g)}static/mapping/`;
+		uploads.push(
+			{ key: `${base}slug-to-uid.json`, body: JSON.stringify(slugParts.groupViews[g] || {}), restricted: true },
+			{ key: `${base}uid-to-hash.json`, body: JSON.stringify(hashParts.groupViews[g] || {}), restricted: true },
 		);
-
-		if (!success) throw new Error('Mapping upload failed');
 	}
+
+	const { success } = await NoticeManager.showProgressWithCounter(
+		'Uploading mappings to S3',
+		uploads.length,
+		async (updateProgress) => {
+			let completed = 0;
+			await runWithConcurrency(uploads, async ({ key, body, restricted }) => {
+				await s3Client.send(new PutObjectCommand({
+					Bucket: bucket,
+					Key: key,
+					Body: body,
+					ContentType: 'application/json',
+					...(restricted ? { CacheControl: RESTRICTED_CACHE_CONTROL } : {}),
+				}));
+				completed++;
+				updateProgress(completed);
+				Logger.debug(`Uploaded mapping: ${key}`);
+			}, MAX_CONCURRENCY);
+		},
+		`Mapping files successfully uploaded to S3`,
+		`Mapping upload failed, check console for error details`
+	);
+	if (!success) throw new Error('Mapping upload failed');
 
 	if (profile.publishContentIndex) {
 		const contentIndexPath = plugin.profileManager.getContentIndexPath(profileId);
@@ -213,7 +256,10 @@ export async function pushMappingAndIndexToS3(
 			Logger.warn(`Content index file does not exist: ${contentIndexPath}`);
 			NoticeManager.showNotice('No content index file found to upload');
 		} else {
-			const content = await plugin.app.vault.adapter.read(contentIndexPath);
+			// Gated notes are never queued into the index, but filter again so a
+			// stale local entry (e.g. from before the note was gated) can't leak.
+			const index = JSON.parse(await plugin.app.vault.adapter.read(contentIndexPath)) as Record<string, unknown>;
+			const content = JSON.stringify(partitionRecord(index, accessOf, []).publicView);
 			const key = `${s3Prefix}static/content/contentIndex.json`;
 
 			const { success } = await NoticeManager.showProgress(
@@ -343,7 +389,9 @@ export async function deleteKbCorpusFromS3(
 export async function deleteNoteHashesFromS3(
 	plugin: CommonplaceNotesPlugin,
 	profileId: string,
-	hashes: string[]
+	hashes: string[],
+	/** '' for the public `notes/`, or `restricted/<group>/` for a group partition. */
+	partitionPrefix: string = ''
 ): Promise<boolean> {
 	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 	if (!profile?.awsSettings) {
@@ -357,12 +405,12 @@ export async function deleteNoteHashesFromS3(
 	try {
 		if (hashes.length <= 5) {
 			for (const hash of hashes) {
-				const key = `${s3Prefix}notes/${hash}.json`;
+				const key = `${s3Prefix}${partitionPrefix}notes/${hash}.json`;
 				await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 				Logger.debug(`Deleted ${key}`);
 			}
 		} else {
-			const objects = hashes.map(hash => ({ Key: `${s3Prefix}notes/${hash}.json` }));
+			const objects = hashes.map(hash => ({ Key: `${s3Prefix}${partitionPrefix}notes/${hash}.json` }));
 			const response = await s3Client.send(new DeleteObjectsCommand({
 				Bucket: bucket,
 				Delete: { Objects: objects },
@@ -391,6 +439,141 @@ export async function deleteNoteHashesFromS3(
 		Logger.error('Error deleting from S3:', error);
 		throw error;
 	}
+}
+
+/** A staged note JSON and the S3 key it uploads to. */
+interface StagedNoteUpload {
+	path: string;
+	key: string;
+	restricted: boolean;
+}
+
+/**
+ * Staged note JSONs for this profile: public ones at the top of staged-notes/
+ * (-> `notes/`), gated copies under staged-notes/restricted/<group>/
+ * (-> `restricted/<group>/notes/`).
+ */
+async function listStagedNoteUploads(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+	s3Prefix: string,
+): Promise<StagedNoteUpload[]> {
+	const adapter = plugin.app.vault.adapter;
+	const stagedNotesDir = plugin.profileManager.getStagedNotesDir(profileId);
+	const out: StagedNoteUpload[] = [];
+	const top = await adapter.list(stagedNotesDir);
+	for (const f of top.files.filter(f => f.endsWith('.json'))) {
+		out.push({ path: f, key: `${s3Prefix}notes/${f.split('/').pop()}`, restricted: false });
+	}
+	const restrictedDir = `${stagedNotesDir}/restricted`;
+	if (await adapter.exists(restrictedDir)) {
+		const groups = await adapter.list(restrictedDir);
+		for (const groupDir of groups.folders) {
+			const group = groupDir.split('/').pop()!;
+			const files = await adapter.list(groupDir);
+			for (const f of files.files.filter(f => f.endsWith('.json'))) {
+				out.push({
+					path: f,
+					key: `${s3Prefix}${restrictedPrefix(group)}notes/${f.split('/').pop()}`,
+					restricted: true,
+				});
+			}
+		}
+	}
+	return out;
+}
+
+/**
+ * Delete note copies from the partitions notes left this publish (drained from
+ * AccessManager), then persist the access map. Every historical hash of the
+ * note is removed from each partition it left, so old permalinks there go too.
+ * Returns true if anything was deleted, false if nothing to do, or null on a
+ * credential error (already reported).
+ */
+export async function applyAccessTransitions(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+): Promise<boolean | null> {
+	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+	if (!profile?.awsSettings) return false;
+
+	const transitions = plugin.accessManager.consumeTransitions(profileId);
+	const homeRemoved = plugin.accessManager.consumeHomeRemoved(profileId);
+	if (transitions.length === 0 && !homeRemoved) {
+		await plugin.accessManager.save(profileId);
+		return false;
+	}
+
+	const history = await plugin.noteManager.loadPublishHistory(profileId);
+	// Group the deletes per partition to batch them.
+	const byPartition = new Map<string, Set<string>>();
+	const leftPublic: string[] = [];
+	for (const t of transitions) {
+		const hashes = history[t.uid] || [];
+		const keep = new Set((t.to ?? []).map((p: Partition) => p ?? ''));
+		for (const p of t.from) {
+			const k = p ?? '';
+			if (keep.has(k)) continue;
+			if (p === null) leftPublic.push(t.uid);
+			if (!byPartition.has(k)) byPartition.set(k, new Set());
+			hashes.forEach(h => byPartition.get(k)!.add(h));
+		}
+	}
+
+	for (const [k, hashes] of byPartition) {
+		if (hashes.size === 0) continue;
+		const prefix = k === '' ? '' : restrictedPrefix(k);
+		const ok = await deleteNoteHashesFromS3(plugin, profileId, [...hashes], prefix);
+		if (!ok) return null;
+		Logger.info(`Access change: removed ${hashes.size} note version(s) from ${prefix || 'notes/'}`);
+	}
+
+	if (homeRemoved) {
+		const s3Client = plugin.awsSdkManager.getS3Client(profile);
+		await s3Client.send(new DeleteObjectCommand({
+			Bucket: profile.awsSettings.bucketName,
+			Key: `${profile.awsSettings.s3Prefix || ''}notes/index.json`,
+		}));
+	}
+
+	// Notes that left the public partition also leave the chat corpus.
+	if (profile.chat?.enabled) {
+		for (const uid of leftPublic) {
+			const ok = await deleteKbCorpusFromS3(plugin, profileId, uid);
+			if (!ok) return null;
+		}
+	}
+
+	await plugin.accessManager.save(profileId);
+	return true;
+}
+
+/**
+ * Delete every object under a group partition (`restricted/<group>/`), e.g.
+ * after the group is removed from settings. Returns the number deleted.
+ */
+export async function purgeRestrictedPartition(
+	plugin: CommonplaceNotesPlugin,
+	profileId: string,
+	group: string,
+): Promise<number> {
+	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
+	if (!profile?.awsSettings) return 0;
+	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const bucket = profile.awsSettings.bucketName;
+	const prefix = `${profile.awsSettings.s3Prefix || ''}${restrictedPrefix(group)}`;
+	let deleted = 0;
+	let token: string | undefined;
+	do {
+		const page = await s3Client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
+		const keys = (page.Contents || []).map(o => ({ Key: o.Key! })).filter(o => o.Key);
+		if (keys.length > 0) {
+			await s3Client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys } }));
+			deleted += keys.length;
+		}
+		token = page.IsTruncated ? page.NextContinuationToken : undefined;
+	} while (token);
+	return deleted;
 }
 
 export async function pushSiteAssetsToS3(

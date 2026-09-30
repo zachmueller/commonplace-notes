@@ -26,6 +26,9 @@ import { FrontmatterManager } from './utils/frontmatter';
 import { ContentIndexManager } from './utils/contentIndex';
 import { KbCorpusManager } from './utils/kbCorpus';
 import { MappingManager } from './utils/mappings';
+import { AccessManager } from './utils/accessManager';
+import { buildGroupsJson } from './utils/access';
+import { sha256HexBytes } from './infrastructure/lambdaZip';
 import { NoticeManager } from './utils/notice';
 import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
@@ -94,6 +97,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	contentIndexManager: ContentIndexManager;
 	kbCorpusManager: KbCorpusManager;
 	mappingManager: MappingManager;
+	accessManager: AccessManager;
 	templateManager: TemplateManager;
 	publisher: Publisher;
 	awsSdkManager: AwsSdkManager;
@@ -135,6 +139,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.contentIndexManager = new ContentIndexManager(this);
 		this.kbCorpusManager = new KbCorpusManager(this);
 		this.mappingManager = new MappingManager(this);
+		this.accessManager = new AccessManager(this);
 		this.publisher = new Publisher(this);
 		this.templateManager = new TemplateManager(this);
 		this.awsSdkManager = new AwsSdkManager(this);
@@ -886,8 +891,13 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			// unset; this is belt-and-suspenders.)
 			await deleteAndWait(state.certStackName, 'us-east-1', false);
 		}
+		if (state.cognitoAuth?.edgeStackName) {
+			// The Cognito read-gate edge fn (own stack). Lambda@Edge replica-removal
+			// caveat — the first delete often ends DELETE_FAILED.
+			await deleteAndWait(state.cognitoAuth.edgeStackName, 'us-east-1', true);
+		}
 		if (state.cognitoAuth?.stackName) {
-			// Lambda@Edge replica-removal caveat — first delete often DELETE_FAILED.
+			// Legacy pools still own an inline edge fn — same replica caveat.
 			await deleteAndWait(state.cognitoAuth.stackName, 'us-east-1', true);
 		}
 		if (state.passwordAuth?.stackName) {
@@ -991,6 +1001,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		if (state.comment?.stackName) await forceClean(state.comment.stackName, state.region);
 		if (state.fullStackName) await forceClean(state.fullStackName, state.region);
 		if (state.certStackName && !state.certificateReused) await forceClean(state.certStackName, 'us-east-1');
+		if (state.cognitoAuth?.edgeStackName) await forceClean(state.cognitoAuth.edgeStackName, 'us-east-1');
 		if (state.cognitoAuth?.stackName) await forceClean(state.cognitoAuth.stackName, 'us-east-1');
 		if (state.passwordAuth?.stackName) await forceClean(state.passwordAuth.stackName, 'us-east-1');
 
@@ -1298,6 +1309,27 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		Logger.debug('Completed profile command registration');
 	}
 
+	/**
+	 * Upload this profile's access-group membership file for the Cognito
+	 * pre-token trigger when it changed since the last upload (or always with
+	 * `force`). No-op for profiles without Cognito access-group support. Returns
+	 * whether an upload happened. Membership changes reach readers on their next
+	 * token issuance (at most ~1h, the session cookie lifetime).
+	 */
+	async syncAccessGroups(profile: PublishingProfile, opts: { force?: boolean } = {}): Promise<boolean> {
+		const cognito = profile.infrastructureState?.cognitoAuth;
+		if (profile.publishMechanism !== 'AWS' || !cognito?.accessGroupsBucket || !cognito.accessGroupsKey) {
+			return false;
+		}
+		const body = buildGroupsJson(profile);
+		const hash = await sha256HexBytes(new TextEncoder().encode(body));
+		if (!opts.force && cognito.accessGroupsSyncedHash === hash) return false;
+		await this.cloudFormationManager.putAccessGroups(profile, body);
+		cognito.accessGroupsSyncedHash = hash;
+		await this.saveSettings();
+		return true;
+	}
+
 	async rebuildContentIndex(): Promise<void> {
 		/*
 		Access this in the Obsidian console via:
@@ -1314,6 +1346,13 @@ cpn.rebuildContentIndex();
 				const raw = await this.noteManager.stripFrontmatter(file, rawWithFrontmatter);
 				const title = this.frontmatterManager.getNoteTitle(file);
 				const uid = this.frontmatterManager.getNoteUID(file);
+				// Gated (or unpublishable) notes never enter the site-wide index/corpus.
+				const access = this.noteManager.resolveNoteAccess(file, profile);
+				if (uid && (!access.ok || access.groups.length > 0)) {
+					await this.contentIndexManager.removeEntry(profile.id, uid);
+					await this.kbCorpusManager.removeEntry(profile.id, uid);
+					continue;
+				}
 				if (uid) {
 					Logger.info(`Processing ${file.basename}`);
 					// Mirror the scrub applied in queueNote so the content index
