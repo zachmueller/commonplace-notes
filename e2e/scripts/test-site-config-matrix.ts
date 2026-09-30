@@ -257,6 +257,48 @@ function testCognitoUrls() {
 }
 
 // ---------------------------------------------------------------------------
+// Per-note access groups: accessGating is advertised only when the site's edge
+// fn enforces /restricted/<group>/* and at least one group exists.
+// ---------------------------------------------------------------------------
+
+function testAccessGating() {
+	const EDGE = 'arn:aws:lambda:us-east-1:1:function:authedge:2';
+	const gated = (mut: (p: any) => void = () => {}) => {
+		const p: any = makeProfile({ readGateMode: 'cognito' });
+		p.accessGroups = { team: { members: ['a@x.com'] } };
+		p.infrastructureState.authLambdaEdgeArn = EDGE;
+		Object.assign(p.infrastructureState.cognitoAuth, {
+			edgeStackName: 'cpn-authedge-test',
+			edgeFunctionVersionArn: EDGE,
+			accessGroupsBucket: 'bkt',
+			accessGroupsKey: 'access/cpn-cognito-test/groups.json',
+		});
+		mut(p);
+		return JSON.parse(renderConfigJson(p));
+	};
+
+	const on = gated();
+	check('access: upgraded cognito + groups -> accessGating', on.accessGating === true, JSON.stringify(on.accessGating));
+	check('access: whoami path', on.accessWhoamiPath === '/restricted/whoami', on.accessWhoamiPath);
+	check('access: group names never listed in config.json', !JSON.stringify(on).includes('team'), JSON.stringify(on));
+
+	const noGroups = gated(p => { delete p.accessGroups; });
+	check('access: no groups -> absent', noGroups.accessGating === undefined, JSON.stringify(noGroups.accessGating));
+	const legacy = gated(p => { delete p.infrastructureState.cognitoAuth.edgeStackName; });
+	check('access: legacy (un-upgraded) cognito -> absent', legacy.accessGating === undefined, JSON.stringify(legacy.accessGating));
+	const password = gated(p => { p.infrastructureState.readGateMode = 'password'; });
+	check('access: password gate -> absent', password.accessGating === undefined, JSON.stringify(password.accessGating));
+	const byoNoOptIn = gated(p => { p.infrastructureState.readGateMode = 'byo'; });
+	check('access: byo without opt-in -> absent', byoNoOptIn.accessGating === undefined, JSON.stringify(byoNoOptIn.accessGating));
+	const byoOptIn = gated(p => { p.infrastructureState.readGateMode = 'byo'; p.byoEnforcesAccessGroups = true; });
+	check('access: byo with opt-in -> accessGating', byoOptIn.accessGating === true, JSON.stringify(byoOptIn.accessGating));
+
+	// Existing profiles (no groups) keep an identical config.json.
+	const plain = config({ readGateMode: 'cognito' });
+	check('access: untouched profiles emit no access keys', plain.accessGating === undefined && plain.accessWhoamiPath === undefined, JSON.stringify(plain));
+}
+
+// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
@@ -264,6 +306,7 @@ function main() {
 	testConfigMatrix();
 	testStylesAndTheme();
 	testCognitoUrls();
+	testAccessGating();
 
 	if (failures.length === 0) {
 		console.log('All site-config + cognito-url matrix cases passed.');

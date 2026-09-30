@@ -564,6 +564,13 @@ a:not([href^="#"]):hover {
 	border-bottom-color: var(--link-color);
 }
 
+.gated-badge {
+	display: inline-flex;
+	vertical-align: middle;
+	margin-right: 0.35em;
+	opacity: 0.7;
+}
+
 .permanent-link {
 	display: inline-flex;
 	align-items: center;
@@ -1788,23 +1795,107 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			return mappingCache.get(path);
 		}
 
+		// --- Per-note access groups ---------------------------------------------
+		// Gated notes live only under /restricted/<group>/ (notes + mapping mirrors)
+		// and the edge function admits a viewer to a group's partition only when
+		// their session token carries that group. config.json never lists group
+		// names; instead the edge answers GET <accessWhoamiPath> with the viewer's
+		// own groups. Everything here degrades to public-only on any failure.
+		const GROUP_NAME_RE = /^[a-z0-9-]{1,40}$/;
+		let myGroupsPromise = null;
+		function getMyGroups() {
+			if (!myGroupsPromise) {
+				myGroupsPromise = (async () => {
+					if (window.__CPN_CONFIG_READY__) await window.__CPN_CONFIG_READY__;
+					const cfg = window.__CPN_CONFIG__ || {};
+					if (!cfg.accessGating) return [];
+					try {
+						const r = await fetch(cfg.accessWhoamiPath || '/restricted/whoami', { cache: 'no-store' });
+						if (cpnAuthGate(r)) return [];
+						if (!r.ok) return [];
+						const data = await r.json();
+						return Array.isArray(data.groups)
+							? data.groups.filter(g => typeof g === 'string' && GROUP_NAME_RE.test(g))
+							: [];
+					} catch (e) {
+						console.warn('Could not determine access groups:', e);
+						return [];
+					}
+				})();
+			}
+			return myGroupsPromise;
+		}
+
+		// hash -> partition prefixes ('restricted/<g>/') it was seen in, so a note
+		// fetch goes straight to the right partition.
+		const hashPartitions = new Map();
+
+		// A mapping file merged across the public copy and every partition the
+		// viewer can read. Public entries win on a (never expected) key clash.
+		async function fetchMergedMapping(file) {
+			const base = await fetchMapping(`/static/mapping/${file}`);
+			const groups = await getMyGroups();
+			if (!groups.length) return base;
+			const merged = Object.assign({}, base);
+			const views = await Promise.all(groups.map(g =>
+				fetchMapping(`/restricted/${g}/static/mapping/${file}`)
+					.then(m => [g, m])
+					.catch(() => [g, null])
+			));
+			for (const [g, view] of views) {
+				if (!view) continue;
+				for (const [k, v] of Object.entries(view)) {
+					if (!(k in merged)) merged[k] = v;
+					if (file === 'uid-to-hash.json') {
+						if (!hashPartitions.has(v)) hashPartitions.set(v, []);
+						const list = hashPartitions.get(v);
+						if (!list.includes(`restricted/${g}/`)) list.push(`restricted/${g}/`);
+					}
+				}
+			}
+			return merged;
+		}
+
+		// Fetch a note revision by content hash from whichever partition holds it:
+		// known partitions first, then public, then each of the viewer's groups.
+		// Resolves { note } | { gate: true } (auth reload in progress) | { forbidden, status }.
+		async function fetchNoteJson(hash) {
+			const groups = await getMyGroups();
+			const hinted = hashPartitions.get(hash) || [];
+			const order = [...hinted, ''];
+			for (const g of groups) {
+				const p = `restricted/${g}/`;
+				if (!order.includes(p)) order.push(p);
+			}
+			let forbidden = false;
+			let status = 0;
+			for (const prefix of order) {
+				const response = await fetch(`/${prefix}notes/${hash}.json`);
+				if (cpnAuthGate(response)) return { gate: true };
+				if (response.ok) return { note: await response.json() };
+				status = response.status;
+				if (response.headers.get('x-cpn-auth') === 'forbidden') forbidden = true;
+			}
+			return { forbidden, status };
+		}
+
 		async function resolveHash(type, value) {
 			let hash;
 			switch (type) {
 				case '~': // Title/slug (human-readable alias for 't')
 				case 't': // Title/slug
 					console.log('Resolving by title');
-					const slugMap = await fetchMapping('/static/mapping/slug-to-uid.json');
+					const slugMap = await fetchMergedMapping('slug-to-uid.json');
 					const uid = slugMap[value];
 					if (!uid) throw new Error(`No note found with title: ${value}`);
 
-					const uidMap = await fetchMapping('/static/mapping/uid-to-hash.json');
+					const uidMap = await fetchMergedMapping('uid-to-hash.json');
 					hash = uidMap[uid];
 					break;
 
 				case 'u': // UUID
 					console.log('Resolving by UUID');
-					const uidHashMap = await fetchMapping('/static/mapping/uid-to-hash.json');
+					const uidHashMap = await fetchMergedMapping('uid-to-hash.json');
 					hash = uidHashMap[value];
 					break;
 
@@ -1829,11 +1920,13 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			try {
 				const hash = await resolveHash(type, value);
 
-				// Load the actual note data
-				const response = await fetch(`/notes/${hash}.json`);
-				if (cpnAuthGate(response)) return null;
-				if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-				const noteData = await response.json();
+				// Load the actual note data (public or an access-group partition)
+				const result = await fetchNoteJson(hash);
+				if (result.gate) return null;
+				if (!result.note) {
+					throw new Error(result.forbidden ? 'Forbidden' : `HTTP error! status: ${result.status}`);
+				}
+				const noteData = result.note;
 				sessionStorage.removeItem('cpn_pw_reload');
 				// Stamp the resolved hash so the comment client has a reliable
 				// revision anchor (it is not otherwise guaranteed on noteData for
@@ -2230,10 +2323,14 @@ ${closeButton}
 					<div class="diff-notice">${noteData.diffNotice}</div>
 				` : '';
 
+				// Gated notes (per-note access groups) get a lock badge. The note JSON
+				// only carries a boolean, never the group names.
+				const gatedBadgeHtml = noteData.gated ? `<span class="gated-badge" title="Visible only to specific readers" aria-label="Restricted note"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span>` : '';
+
 				panel.innerHTML = `
 					<div class="panel-header">
 						${closeButton}
-						<h1 title="${escapeHtml(noteData.title)}">${noteData.title}</h1>
+						<h1 title="${escapeHtml(noteData.title)}">${gatedBadgeHtml}${noteData.title}</h1>
 					</div>
 					${hasMetadata ? `
 						<div class="note-metadata">
@@ -2401,7 +2498,8 @@ ${closeButton}
 			// Fire-and-forget: comments load asynchronously and reveal the region.
 			// Skipped for error and diff panels (a diff has no .comments region and is
 			// not a commentable note).
-			if (!isError && !noteData.diffHtml) initComments(panel, noteData);
+			// Comments are site-wide (not partitioned), so gated notes skip them (v1).
+			if (!isError && !noteData.diffHtml && !noteData.gated) initComments(panel, noteData);
 
 			return panel;
 		}
@@ -3339,10 +3437,10 @@ ${closeButton}
 			const targetValue = diffTarget.slice(1);
 			const targetHash = await resolveHash(targetType, targetValue);
 
-			const response = await fetch(`/notes/${targetHash}.json`);
-			if (cpnAuthGate(response)) throw new Error('auth');
-			if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-			const targetNote = await response.json();
+			const result = await fetchNoteJson(targetHash);
+			if (result.gate) throw new Error('auth');
+			if (!result.note) throw new Error(`HTTP error! status: ${result.status}`);
+			const targetNote = result.note;
 
 			if (typeof targetNote.raw !== 'string' || typeof baseNote.raw !== 'string') {
 				throw new Error('Note JSON is missing raw Markdown; cannot diff');

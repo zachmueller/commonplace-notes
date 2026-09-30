@@ -1308,7 +1308,7 @@ export class CloudFormationManager {
 		const deployedTpl = await client.send(new GetTemplateCommand({ StackName: poolStack, TemplateStage: 'Original' }));
 		let tpl: { Resources?: Record<string, Record<string, unknown>>; Outputs?: Record<string, unknown> };
 		try {
-			tpl = JSON.parse(deployedTpl.TemplateBody || '{}');
+			tpl = JSON.parse(deployedTpl.TemplateBody || '{}') as typeof tpl;
 		} catch {
 			throw new Error(`Could not parse the deployed template of ${poolStack} (expected JSON).`);
 		}

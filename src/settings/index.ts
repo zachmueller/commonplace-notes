@@ -10,6 +10,7 @@ import { renderIdentitySection } from './profile/identity';
 import { renderContentSection } from './profile/content';
 import { renderDestinationSection } from './profile/destination';
 import { renderDangerZone } from './profile/dangerZone';
+import { renderAccessGroupsSection } from './profile/accessGroups';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	plugin: CommonplaceNotesPlugin;
@@ -214,6 +215,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		// --- Destination (spawns AWS Infrastructure / Auth / Site sections) ---
 		const destSection = this.createSection(profileContainer, 'Destination');
 		renderDestinationSection(ctx, destSection, profileContainer);
+
+		// --- Access groups (per-note access gating) ---
+		const accessSection = this.createSection(profileContainer, 'Access groups', { defaultCollapsed: true });
+		renderAccessGroupsSection(ctx, accessSection);
 
 		// --- Danger Zone (starts collapsed so destructive actions are tucked away) ---
 		const dangerSection = this.createSection(profileContainer, 'Danger Zone', { defaultCollapsed: true });
