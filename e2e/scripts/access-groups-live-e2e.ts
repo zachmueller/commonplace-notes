@@ -21,11 +21,23 @@
  *   5. Access transitions: gated -> public -> gated again, checking old copies
  *      are deleted from partitions the note left.
  *
+ *   6. Fail-open guard: re-running the deployment wizard with plain public
+ *      reads while gated notes are published is refused before any site update
+ *      (the real wizard, via its command; deployFullStack is a tripwire).
+ *
+ * `--public` runs the PUBLIC-SITE variant instead: the site starts fully public
+ * (read gate `none`, no edge fn attached; the pool only serves comment
+ * identity), the profile opts in with `publicSiteAccessGroups`, and the upgrade
+ * deploys + attaches the edge fn in public-reads mode. Checks then expect
+ * anonymous public reads (200), anonymous whoami `{ signedIn: false }`, and a
+ * uniform 403 forbidden on restricted paths, plus `authLoginUrl` in config.json.
+ *
  * Google federation itself is NOT exercised (needs a browser sign-in); the
  * trigger/edge path is identical for any verified-email token.
  *
  * Usage (sandbox account strongly recommended):
- *   CPN_LIVE_AWS_PROFILE=random npx tsx e2e/scripts/access-groups-live-e2e.ts
+ *   CPN_LIVE_AWS_PROFILE=random npx tsx e2e/scripts/access-groups-live-e2e.ts [--public]
+ *   CPN_LIVE_AWS_PROFILE=random npx tsx e2e/scripts/access-groups-live-e2e.ts --resume
  *   CPN_LIVE_AWS_PROFILE=random npx tsx e2e/scripts/access-groups-live-e2e.ts --teardown
  *
  * Resource names are written to e2e/results/access-groups-live-state.json so a
@@ -53,9 +65,15 @@ const DATA_JSON = path.join(PROJECT_ROOT, 'e2e/test-vault/.obsidian/plugins/comm
 const LEGACY_COMMIT = '0ca8be6';
 const PASSWORD = 'Live-E2e-Passw0rd!';
 const NOTE_FILES = ['Access Home.md', 'Public Note.md', 'Team Secret.md', 'Family Secret.md', 'Bad Group.md'];
+/** Site kind for a fresh run; --resume uses the kind recorded in the state file. */
+const PUBLIC_FLAG = process.argv.includes('--public');
+
+/** 'gated' = whole-site Cognito gate; 'public' = public reads + per-note groups. */
+type SiteKind = 'gated' | 'public';
 
 interface LiveState {
 	variant: string;
+	kind?: SiteKind;
 	accountId?: string;
 	poolStack?: string;
 	edgeStack?: string;
@@ -128,11 +146,11 @@ function idToken(poolId: string, clientId: string, clientSecret: string, email: 
 	return d.AuthenticationResult.IdToken;
 }
 
-async function get(url: string, token?: string): Promise<{ status: number; auth: string | null; body: string }> {
+async function get(url: string, token?: string, nav = false): Promise<{ status: number; auth: string | null; body: string }> {
 	const r = await fetch(url, {
 		headers: {
 			...(token ? { cookie: `cpn_id=${token}` } : {}),
-			'sec-fetch-mode': 'cors',
+			'sec-fetch-mode': nav ? 'navigate' : 'cors',
 			'cache-control': 'no-cache',
 		},
 		redirect: 'manual',
@@ -242,10 +260,11 @@ async function live(ctx: TestContext): Promise<void> {
 
 	const accountId = aws(['sts', 'get-caller-identity']).Account as string;
 	const variant = `acce2e${crypto.randomBytes(3).toString('hex')}`;
-	const state: LiveState = { variant, accountId, domainPrefix: `cpnlive${crypto.randomBytes(4).toString('hex')}` };
+	const kind: SiteKind = PUBLIC_FLAG ? 'public' : 'gated';
+	const state: LiveState = { variant, kind, accountId, domainPrefix: `cpnlive${crypto.randomBytes(4).toString('hex')}` };
 	state.bootstrapPreexisting = !!aws(['cloudformation', 'describe-stacks', '--stack-name', 'cpn-bootstrap'], { allowFail: true });
 	saveState(state);
-	console.log(`  variant: ${variant} (account ${accountId})`);
+	console.log(`  variant: ${variant} (${kind} site, account ${accountId})`);
 
 	// --- 1a. Legacy pool stack (inline edge fn) ----------------------------------
 	state.poolStack = `cpn-cognito-${variant}`;
@@ -262,8 +281,10 @@ async function live(ctx: TestContext): Promise<void> {
 	const legacy = stackOutputs(state.poolStack);
 	step('Legacy pool stack deployed', !!legacy.EdgeFunctionVersionArn, legacy.EdgeFunctionVersionArn || 'no edge ARN');
 
-	// --- 1b. Full site stack on the legacy edge fn (via the plugin) -------------
-	const site = await page.evaluate(async ({ variant, awsProfile, legacy, poolStack }) => {
+	// --- 1b. Full site stack (via the plugin) -------------------------------------
+	// gated: runs the legacy inline edge fn. public: no edge fn at all; the pool
+	// only backs the /auth/* callback (comment identity), like a typical public site.
+	const site = await page.evaluate(async ({ variant, awsProfile, legacy, poolStack, isPublic }) => {
 		const plugin = (window as any).app.plugins.plugins['commonplace-notes'];
 		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === 'default');
 		profile.awsSettings = {
@@ -282,7 +303,7 @@ async function live(ctx: TestContext): Promise<void> {
 		const config = {
 			profileId: 'default', variantName: variant, s3Prefix: '', customDomain: '', useRoute53: false,
 			hostedZoneId: '', hostedZoneName: '', region: 'us-east-1', awsProfile, originAccessMethod: 'oac',
-			authLambdaEdgeArn: legacy.EdgeFunctionVersionArn, callbackApiDomainName: legacy.CallbackApiDomain,
+			authLambdaEdgeArn: isPublic ? '' : legacy.EdgeFunctionVersionArn, callbackApiDomainName: legacy.CallbackApiDomain,
 		};
 		const stackName = await cfm.deployFullStack(config);
 		const status = await cfm.pollStackUntilComplete(stackName, profile, () => {}, 'us-east-1');
@@ -291,12 +312,14 @@ async function live(ctx: TestContext): Promise<void> {
 		profile.awsSettings.bucketName = out.bucketName;
 		profile.awsSettings.cloudFrontDistributionId = out.distributionId;
 		profile.baseUrl = `https://${out.distributionDomainName}`;
-		profile.readGate = { mode: 'cognito' };
+		profile.readGate = isPublic ? undefined : { mode: 'cognito' };
+		profile.publicSiteAccessGroups = isPublic ? true : undefined;
 		profile.infrastructureState = {
 			status: 'deployed', fullStackName: stackName, useRoute53: false, region: 'us-east-1', variantName: variant,
-			originAccessMethod: 'oac', authLambdaEdgeArn: legacy.EdgeFunctionVersionArn, readGateMode: 'cognito',
+			originAccessMethod: 'oac', authLambdaEdgeArn: isPublic ? undefined : legacy.EdgeFunctionVersionArn,
+			readGateMode: isPublic ? 'none' : 'cognito',
 			cognitoAuth: {
-				stackName: poolStack, enabled: true, commentIdentity: false,
+				stackName: poolStack, enabled: true, commentIdentity: isPublic,
 				userPoolId: legacy.UserPoolId, userPoolClientId: legacy.UserPoolClientId, hostedUiDomain: legacy.HostedUiDomain,
 				jwksUri: legacy.JwksUri, issuer: legacy.Issuer, edgeFunctionVersionArn: legacy.EdgeFunctionVersionArn,
 				callbackApiDomain: legacy.CallbackApiDomain,
@@ -304,14 +327,19 @@ async function live(ctx: TestContext): Promise<void> {
 		};
 		await plugin.saveSettings();
 		return { stackName, ...out };
-	}, { variant, awsProfile: AWS_PROFILE, legacy, poolStack: state.poolStack }) as any;
+	}, { variant, awsProfile: AWS_PROFILE, legacy, poolStack: state.poolStack, isPublic: kind === 'public' }) as any;
 	if (site.error) { ctx.fail('Full site stack deployed', site.error); return; }
 	state.fullStack = site.stackName;
 	state.siteBucket = site.bucketName;
 	state.distributionId = site.distributionId;
 	saveState(state);
 	const base = `https://${site.distributionDomainName}`;
-	step('Full site stack deployed on legacy edge fn', !!site.bucketName, `${base} bucket=${site.bucketName}`);
+	step(kind === 'public' ? 'Full site stack deployed (public, no edge fn)' : 'Full site stack deployed on legacy edge fn', !!site.bucketName, `${base} bucket=${site.bucketName}`);
+	if (kind === 'public') {
+		const before = aws(['cloudfront', 'get-distribution-config', '--id', site.distributionId]);
+		const items = before.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations?.Items || [];
+		step('Public site starts with no edge fn attached', items.length === 0, JSON.stringify(items));
+	}
 	const legacyPoolRes = aws(['cloudformation', 'describe-stack-resource', '--stack-name', state.poolStack, '--logical-resource-id', 'AuthEdgeFn']);
 	state.legacyEdgeFunction = legacyPoolRes.StackResourceDetail.PhysicalResourceId;
 	saveState(state);
@@ -339,8 +367,18 @@ async function live(ctx: TestContext): Promise<void> {
 	step('Upgrade: legacy fn queued for cleanup', (up.pending || []).some((p: any) => p.functionName === state.legacyEdgeFunction), JSON.stringify(up.pending));
 	const dist = aws(['cloudfront', 'get-distribution-config', '--id', site.distributionId]);
 	const assoc = dist.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations?.Items?.[0]?.LambdaFunctionARN;
-	step('Upgrade: CloudFront re-pointed at the new edge version', assoc === up.edgeFunctionVersionArn && assoc !== legacy.EdgeFunctionVersionArn, `${assoc}`);
+	step(kind === 'public' ? 'Upgrade: CloudFront now runs the public-reads edge fn' : 'Upgrade: CloudFront re-pointed at the new edge version',
+		!!up.edgeFunctionVersionArn && assoc === up.edgeFunctionVersionArn && assoc !== legacy.EdgeFunctionVersionArn, `${assoc}`);
 	step('Upgrade: state records edge stack + membership location', !!(up.state.cognitoAuth.edgeStackName && up.state.cognitoAuth.accessGroupsKey), JSON.stringify(up.state.cognitoAuth));
+	const edgeOut = stackOutputs(state.edgeStack!);
+	step('Upgrade: edge stack mode matches the site', edgeOut.PublicReads === (kind === 'public' ? 'true' : 'false')
+		&& !!up.state.cognitoAuth.edgePublicReads === (kind === 'public'), `PublicReads=${edgeOut.PublicReads} edgePublicReads=${up.state.cognitoAuth.edgePublicReads}`);
+	step('Upgrade: read gate unchanged', up.state.readGateMode === (kind === 'public' ? 'none' : 'cognito'), String(up.state.readGateMode));
+	if (kind === 'public') {
+		const params = aws(['cloudformation', 'describe-stacks', '--stack-name', state.fullStack!]).Stacks[0].Parameters;
+		const cb = params.find((p: any) => p.ParameterKey === 'CallbackApiDomainName')?.ParameterValue;
+		step('Upgrade: /auth/* callback origin wired', cb === legacy.CallbackApiDomain, String(cb));
+	}
 
 	await publishAndVerify(ctx, step, state, site, legacy, accountId);
 }
@@ -357,14 +395,16 @@ async function resume(ctx: TestContext, step: Step): Promise<void> {
 	if (!state.fullStack || !state.poolStack || !state.edgeStack) throw new Error('No upgraded deployment recorded to resume.');
 	const pool = stackOutputs(state.poolStack);
 	const full = stackOutputs(state.fullStack);
-	const edgeArn = stackOutputs(state.edgeStack).EdgeFunctionVersionArn;
+	const edgeOuts = stackOutputs(state.edgeStack);
+	const edgeArn = edgeOuts.EdgeFunctionVersionArn;
+	const isPublic = (state.kind ?? 'gated') === 'public';
 	const site = {
 		stackName: state.fullStack,
 		bucketName: full.BucketName,
 		distributionId: full.DistributionID,
 		distributionDomainName: full.DistributionDomainName,
 	};
-	await ctx.page.evaluate(async ({ awsProfile, state, pool, site, edgeArn }) => {
+	await ctx.page.evaluate(async ({ awsProfile, state, pool, site, edgeArn, isPublic, edgePublicReads }) => {
 		const plugin = (window as any).app.plugins.plugins['commonplace-notes'];
 		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === 'default');
 		profile.awsSettings = {
@@ -377,26 +417,29 @@ async function resume(ctx: TestContext, step: Step): Promise<void> {
 		profile.commenting = undefined;
 		profile.homeNotePath = 'Access Home.md';
 		profile.baseUrl = `https://${site.distributionDomainName}`;
-		profile.readGate = { mode: 'cognito' };
+		profile.readGate = isPublic ? undefined : { mode: 'cognito' };
+		profile.publicSiteAccessGroups = isPublic ? true : undefined;
 		profile.infrastructureState = {
 			status: 'deployed', fullStackName: site.stackName, useRoute53: false, region: 'us-east-1', variantName: state.variant,
-			originAccessMethod: 'oac', authLambdaEdgeArn: edgeArn, readGateMode: 'cognito',
+			originAccessMethod: 'oac', authLambdaEdgeArn: edgeArn, readGateMode: isPublic ? 'none' : 'cognito',
 			cognitoAuth: {
-				stackName: state.poolStack, enabled: true, commentIdentity: false,
+				stackName: state.poolStack, enabled: true, commentIdentity: isPublic,
 				userPoolId: pool.UserPoolId, userPoolClientId: pool.UserPoolClientId, hostedUiDomain: pool.HostedUiDomain,
 				jwksUri: pool.JwksUri, issuer: pool.Issuer, edgeFunctionVersionArn: edgeArn, callbackApiDomain: pool.CallbackApiDomain,
 				edgeStackName: state.edgeStack, accessGroupsBucket: pool.AccessGroupsBucket, accessGroupsKey: pool.AccessGroupsKey,
+				edgePublicReads: edgePublicReads || undefined,
 			},
 		};
 		await plugin.saveSettings();
-	}, { awsProfile: AWS_PROFILE, state, pool, site, edgeArn });
-	step('Resume: profile re-seeded from live stacks', !!pool.AccessGroupsKey && !!edgeArn, `${state.variant}`);
+	}, { awsProfile: AWS_PROFILE, state, pool, site, edgeArn, isPublic, edgePublicReads: edgeOuts.PublicReads === 'true' });
+	step('Resume: profile re-seeded from live stacks', !!pool.AccessGroupsKey && !!edgeArn, `${state.variant} (${isPublic ? 'public' : 'gated'} site)`);
 	await publishAndVerify(ctx, step, state, site, pool, state.accountId!);
 }
 
 async function publishAndVerify(ctx: TestContext, step: Step, state: LiveState, site: any, legacy: Record<string, string>, accountId: string): Promise<void> {
 	const { page } = ctx;
 	const base = `https://${site.distributionDomainName}`;
+	const isPublic = (state.kind ?? 'gated') === 'public';
 
 	// --- 3. Publish a small vault ------------------------------------------------
 	const pub = await page.evaluate(async () => {
@@ -439,7 +482,7 @@ async function publishAndVerify(ctx: TestContext, step: Step, state: LiveState, 
 	const publicNoteKeys = s3Keys(B, 'notes/');
 	const teamKeys = s3Keys(B, 'restricted/team/notes/');
 	step('S3: team note only in restricted/team/', teamKeys.includes(`restricted/team/notes/${lastHash('Team Secret.md')}.json`) && !publicNoteKeys.includes(`notes/${lastHash('Team Secret.md')}.json`), teamKeys.join(','));
-	step('S3: family note only in restricted/family/', s3Keys(B, 'restricted/family/notes/').includes(`restricted/family/notes/${lastHash('Family Secret.md')}.json`) && !publicNoteKeys.includes(`notes/${lastHash('Family Secret.md')}.json`) && !teamKeys.some(k => k.includes(lastHash('Family Secret.md'))), s3Keys(B, 'restricted/family/notes/').join(','));
+	step('S3: family note only in restricted/family/', s3Keys(B, 'restricted/family/notes/').includes(`restricted/family/notes/${lastHash('Family Secret.md')}.json`) && !publicNoteKeys.includes(`notes/${lastHash('Family Secret.md')}.json`) && !teamKeys.some(k => k.includes(lastHash('Family Secret.md'))), `last=${lastHash('Family Secret.md')} uid=${U('Family Secret.md')} history=${JSON.stringify(hist[U('Family Secret.md')])} keys=${s3Keys(B, 'restricted/family/notes/').join(',')}`);
 	step('S3: undefined-group note not published anywhere', !lastHash('Bad Group.md') || (!publicNoteKeys.some(k => k.includes(lastHash('Bad Group.md'))) && !s3Keys(B, 'restricted/').some(k => k.includes(lastHash('Bad Group.md')))), String(lastHash('Bad Group.md')));
 	const pubU2H = s3Json(B, 'static/mapping/uid-to-hash.json');
 	const pubS2U = s3Json(B, 'static/mapping/slug-to-uid.json');
@@ -459,6 +502,10 @@ async function publishAndVerify(ctx: TestContext, step: Step, state: LiveState, 
 	step('S3: restricted objects are private, no-store', head.CacheControl === 'private, no-store', String(head.CacheControl));
 	const cfg = s3Json(B, 'config.json');
 	step('S3: config.json advertises gating without group names', cfg.accessGating === true && !JSON.stringify(cfg).includes('team'), JSON.stringify(cfg));
+	if (isPublic) {
+		step('S3: config.json carries the reader sign-in URL', typeof cfg.authLoginUrl === 'string' && cfg.authLoginUrl.startsWith(legacy.HostedUiDomain + '/oauth2/authorize')
+			&& cfg.authLoginUrl.includes(encodeURIComponent(`${base}/auth/callback`)), String(cfg.authLoginUrl));
+	}
 	const membership = s3Json(`cpn-assets-${accountId}-us-east-1`, `access/${state.poolStack}/groups.json`);
 	step('S3: membership file uploaded (normalized)', JSON.stringify(membership.groups.team) === '["alice@example.com"]', JSON.stringify(membership));
 
@@ -485,7 +532,8 @@ async function publishAndVerify(ctx: TestContext, step: Step, state: LiveState, 
 
 	const teamUrl = `${base}/restricted/team/notes/${lastHash('Team Secret.md')}.json`;
 	const who = await get(`${base}/restricted/whoami`, alice);
-	step('Edge: whoami returns alice\'s groups', who.status === 200 && JSON.parse(who.body).groups.join() === 'team', `${who.status} ${who.body}`);
+	const whoBody = who.status === 200 ? JSON.parse(who.body) : {};
+	step('Edge: whoami returns alice\'s groups', who.status === 200 && whoBody.groups.join() === 'team' && whoBody.signedIn === true, `${who.status} ${who.body}`);
 	const aTeam = await get(teamUrl, alice);
 	step('Edge: member reads gated note', aTeam.status === 200 && aTeam.body.includes('TOP-SECRET-TEAM-BODY'), `${aTeam.status}`);
 	const bTeam = await get(teamUrl, bob);
@@ -493,7 +541,36 @@ async function publishAndVerify(ctx: TestContext, step: Step, state: LiveState, 
 	const aFam = await get(`${base}/restricted/family/static/mapping/uid-to-hash.json`, alice);
 	step('Edge: member of another group gets 403', aFam.status === 403 && aFam.auth === 'forbidden', `${aFam.status} ${aFam.auth}`);
 	const anon = await get(`${base}/notes/${lastHash('Public Note.md')}.json`);
-	step('Edge: anonymous data fetch gets 401 required', anon.status === 401 && anon.auth === 'required', `${anon.status} ${anon.auth}`);
+	if (isPublic) {
+		step('Edge (public): anonymous reader reads a public note', anon.status === 200 && !anon.auth && anon.body.includes('See'), `${anon.status} ${anon.auth}`);
+		const anonCfg = await get(`${base}/config.json`);
+		step('Edge (public): anonymous config.json', anonCfg.status === 200 && !anonCfg.auth, `${anonCfg.status} ${anonCfg.auth}`);
+		// The site stack is deployed directly (not via the wizard, which seeds the
+		// site assets), so give the bucket an index.html for the navigation check.
+		if (!s3Keys(B, 'index.html').includes('index.html')) {
+			const tmp = path.join(os.tmpdir(), `cpn-live-index-${state.variant}.html`);
+			fs.writeFileSync(tmp, '<!DOCTYPE html><title>live e2e</title>');
+			aws(['s3', 'cp', tmp, `s3://${B}/index.html`, '--content-type', 'text/html'], { json: false });
+			fs.unlinkSync(tmp);
+		}
+		const anonIndex = await get(`${base}/`, undefined, true);
+		step('Edge (public): anonymous navigation to / is not redirected', anonIndex.status === 200 && !anonIndex.auth, `${anonIndex.status} ${anonIndex.auth}`);
+		const anonWho = await get(`${base}/restricted/whoami`);
+		const anonWhoBody = anonWho.status === 200 ? JSON.parse(anonWho.body) : {};
+		step('Edge (public): anonymous whoami -> 200 signedIn false', anonWho.status === 200 && anonWhoBody.signedIn === false
+			&& Array.isArray(anonWhoBody.groups) && anonWhoBody.groups.length === 0 && !anonWho.auth, `${anonWho.status} ${anonWho.body}`);
+		const anonTeam = await get(teamUrl);
+		step('Edge (public): anonymous restricted fetch -> 403 forbidden', anonTeam.status === 403 && anonTeam.auth === 'forbidden', `${anonTeam.status} ${anonTeam.auth}`);
+		const anonTeamNav = await get(teamUrl, undefined, true);
+		step('Edge (public): anonymous restricted navigation -> 403 forbidden (no login redirect)', anonTeamNav.status === 403 && anonTeamNav.auth === 'forbidden', `${anonTeamNav.status} ${anonTeamNav.auth}`);
+		const forgedTeam = await get(teamUrl, 'not-a-token');
+		step('Edge (public): invalid cookie on a restricted path -> 403 forbidden', forgedTeam.status === 403 && forgedTeam.auth === 'forbidden', `${forgedTeam.status} ${forgedTeam.auth}`);
+		const bobWho = await get(`${base}/restricted/whoami`, bob);
+		const bobWhoBody = bobWho.status === 200 ? JSON.parse(bobWho.body) : {};
+		step('Edge (public): signed-in non-member whoami -> signedIn true, no groups', bobWhoBody.signedIn === true && bobWhoBody.groups.length === 0, `${bobWho.status} ${bobWho.body}`);
+	} else {
+		step('Edge: anonymous data fetch gets 401 required', anon.status === 401 && anon.auth === 'required', `${anon.status} ${anon.auth}`);
+	}
 	const bPub = await get(`${base}/notes/${lastHash('Public Note.md')}.json`, bob);
 	step('Edge: any signed-in reader reads public notes', bPub.status === 200, `${bPub.status}`);
 
@@ -529,6 +606,83 @@ async function publishAndVerify(ctx: TestContext, step: Step, state: LiveState, 
 	step('Transition public->gated: dropped from public mapping', !s3Json(B, 'static/mapping/uid-to-hash.json')[U('Team Secret.md')], 'ok');
 	const inv = aws(['cloudfront', 'list-invalidations', '--distribution-id', site.distributionId]).InvalidationList?.Items || [];
 	step('Transition forced a CloudFront invalidation (scheme is "all")', inv.length >= 3, `${inv.length} invalidations`);
+
+	await checkDetachGuard(ctx, step, state);
+}
+
+/**
+ * Re-run the real deployment wizard (via its command) with plain public reads
+ * while gated notes are published: it must refuse before touching the site.
+ * deployFullStack is swapped for a tripwire so a broken guard can't detach the
+ * edge fn from the sandbox site.
+ */
+async function checkDetachGuard(ctx: TestContext, step: Step, state: LiveState): Promise<void> {
+	const { page } = ctx;
+	step('Guard: gated notes are published (restricted/ non-empty)', s3Keys(state.siteBucket!, 'restricted/').length > 0, 'precondition');
+	const opened = await page.evaluate(async () => {
+		const app = (window as any).app;
+		const plugin = app.plugins.plugins['commonplace-notes'];
+		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === 'default');
+		(window as any).__cpnGuardSaved = { flag: profile.publicSiteAccessGroups, cognitoAuth: profile.cognitoAuth, readGate: profile.readGate };
+		profile.publicSiteAccessGroups = undefined;
+		profile.cognitoAuth = undefined;
+		profile.readGate = undefined;
+		const cfm = plugin.cloudFormationManager;
+		(window as any).__cpnGuardDeploy = cfm.deployFullStack;
+		(window as any).__cpnGuardTripped = false;
+		cfm.deployFullStack = async () => { (window as any).__cpnGuardTripped = true; throw new Error('GUARD-TRIPWIRE'); };
+		app.commands.executeCommandById('commonplace-notes:deploy-infrastructure');
+		for (let i = 0; i < 20 && !document.querySelector('.cpn-wizard-modal'); i++) await new Promise(r => setTimeout(r, 250));
+		return !!document.querySelector('.cpn-wizard-modal');
+	});
+	if (!opened) { ctx.fail('Guard: wizard opened', 'no .cpn-wizard-modal'); }
+	const result = opened ? await page.evaluate(async ({ variant }) => {
+		const modal = document.querySelector('.cpn-wizard-modal')!;
+		// Force plain public reads and fill the variant (the live stacks' suffix).
+		for (const sel of Array.from(modal.querySelectorAll('select'))) {
+			if (Array.from(sel.options).some((o) => o.value === 'byo')) {
+				sel.value = 'none';
+				sel.dispatchEvent(new Event('change', { bubbles: true }));
+			}
+		}
+		await new Promise(r => setTimeout(r, 300));
+		const m2 = document.querySelector('.cpn-wizard-modal')!;
+		for (const item of Array.from(m2.querySelectorAll('.setting-item'))) {
+			const name = item.querySelector('.setting-item-name')?.textContent?.trim() || '';
+			const input = item.querySelector<HTMLInputElement>("input[type='text']");
+			if (input && name.includes('Variant')) {
+				input.value = variant;
+				input.dispatchEvent(new Event('input', { bubbles: true }));
+				input.dispatchEvent(new Event('change', { bubbles: true }));
+			}
+		}
+		const toggles = Array.from(m2.querySelectorAll('.setting-item')).filter((i) => (i.textContent || '').includes('Gate individual notes'));
+		const next = Array.from(m2.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Next');
+		next?.click();
+		let text = '';
+		for (let i = 0; i < 60; i++) {
+			await new Promise(r => setTimeout(r, 500));
+			text = document.querySelector('.cpn-wizard-modal')?.textContent || '';
+			if (text.includes('already publishes gated notes') || (window as any).__cpnGuardTripped || text.includes('Error deploying')) break;
+		}
+		return { text: text.slice(0, 600), tripped: (window as any).__cpnGuardTripped, toggleShown: toggles.length > 0 };
+	}, { variant: state.variant }) : { text: '', tripped: false, toggleShown: false };
+	await page.keyboard.press('Escape');
+	await page.evaluate(async () => {
+		const plugin = (window as any).app.plugins.plugins['commonplace-notes'];
+		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === 'default');
+		const saved = (window as any).__cpnGuardSaved;
+		profile.publicSiteAccessGroups = saved.flag;
+		profile.cognitoAuth = saved.cognitoAuth;
+		profile.readGate = saved.readGate;
+		plugin.cloudFormationManager.deployFullStack = (window as any).__cpnGuardDeploy;
+		await plugin.saveSettings();
+	});
+	step('Guard: wizard shows the public-site access-groups toggle', result.toggleShown, 'Gate individual notes with access groups');
+	step('Guard: wizard refuses to detach the edge fn while gated notes exist', result.text.includes('already publishes gated notes') && !result.tripped, result.text);
+	const dist = aws(['cloudfront', 'get-distribution-config', '--id', state.distributionId!]);
+	const assoc = dist.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations?.Items?.[0]?.LambdaFunctionARN;
+	step('Guard: edge fn still attached afterwards', !!assoc, String(assoc));
 }
 
 // ---------------------------------------------------------------------------
