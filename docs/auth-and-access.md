@@ -24,7 +24,7 @@ parameter). Four modes, selected via the wizard's **Read access** dropdown:
 
 | Mode | Wizard label | Behavior |
 |------|--------------|----------|
-| `none` | Public (anyone can read) | Fully public reads. No edge function. |
+| `none` | Public (anyone can read) | Fully public reads. No edge function, unless you turn on [per-note access groups](#per-note-access-groups-on-a-public-site). |
 | `cognito` | Login required (Cognito + Google) | Whole-site sign-in via Cognito Hosted UI + Google. Supports [per-note access groups](#per-note-access-groups). |
 | `password` | Password (anyone with the password) | Shared password enforced at the edge. |
 | `byo` | Custom Lambda@Edge ARN (advanced) | You supply your own viewer-request Lambda@Edge ARN. |
@@ -68,13 +68,21 @@ individual notes: a note that lists groups is readable only by signed-in readers
 in at least one of those groups. Notes that list no groups keep the site-wide
 read access.
 
+Access groups work on two kinds of site:
+
+- **Login-required sites** (`cognito` read gate). Everyone signs in to read
+  anything; gated notes further require membership.
+- **Public sites** (`none` read gate). Notes without groups stay public and
+  anonymous. Only gated notes need sign-in and membership. See
+  [below](#per-note-access-groups-on-a-public-site).
+
 ### Setting it up
 
-1. Deploy (or upgrade) the site with the **`cognito`** read gate. Existing
-   Cognito sites need a one-time **Settings → Infrastructure → Upgrade Cognito
-   gate**. The upgrade moves the sign-in edge function to its own stack and adds
-   the membership trigger. The site stays up throughout; it takes several
-   minutes.
+1. Deploy (or upgrade) the site with the **`cognito`** read gate, or set up a
+   [public site](#per-note-access-groups-on-a-public-site). Existing Cognito
+   sites need a one-time **Settings → Infrastructure → Upgrade Cognito gate**.
+   The upgrade moves the sign-in edge function to its own stack and adds the
+   membership trigger. The site stays up throughout; it takes several minutes.
 2. Under **Settings → Publishing profiles → Access groups**, add a group (for
    example `family`) and list its members' Google account emails, one per line.
 3. In a note, list the groups that may read it:
@@ -99,7 +107,9 @@ Group names use lowercase letters, digits, and hyphens (up to 40 characters).
   by `#/u<uid>`, and by title.
 - **Everyone else** gets the same "might not exist or you may not have
   permission" message as for a missing note. The site does not reveal that the
-  note exists.
+  note exists. On a public site, signed-out readers also see a **Sign in** link
+  there and in the header. The link appears for any missing note, so it gives
+  nothing away.
 - **Membership changes** apply at a reader's next sign-in. The session cookie
   lasts an hour, so removing someone takes effect within about an hour.
 
@@ -119,8 +129,12 @@ CPN never publishes a gated note publicly. A note that lists groups is removed
 from the site, with a notice, when any of these hold:
 
 - A listed group isn't defined in the profile, or a name is invalid.
-- The read gate isn't `cognito`, the Cognito gate hasn't been upgraded, or the
-  site was pointed at a different edge function by hand.
+- The read gate is `password`, or `byo` without the opt-in below.
+- The read gate is `cognito` but the gate hasn't been upgraded, or it runs the
+  public-site build of the edge function.
+- The read gate is `none` but access groups aren't turned on for the site, or
+  the access-groups edge function isn't deployed.
+- The site was pointed at a different edge function by hand.
 - The profile uses the Local publish mechanism.
 - The note is the profile's home note.
 
@@ -128,13 +142,58 @@ Changing a note's groups deletes its old copies, including earlier revisions,
 from every area it left, and invalidates the CloudFront cache. Permalinks
 (`#/p<hash>`) and diffs that point at those deleted revisions stop working.
 
+### Per-note access groups on a public site
+
+A public site can gate individual notes without asking anyone else to sign in.
+CPN attaches the Cognito edge function in a **public-reads** mode:
+
+- Every path outside `/restricted/` passes straight through. There's no
+  token check, so public notes stay anonymous.
+- `/restricted/<group>/…` requires a signed-in reader in `<group>`.
+- `GET /restricted/whoami` answers signed-out readers with
+  `{"groups": [], "signedIn": false}`, so the site knows to offer sign-in.
+
+**Cost.** This adds a Lambda@Edge invocation to every request, public ones
+included. That's about US$0.60 per million requests plus a small duration
+charge, and a few milliseconds of latency. It's off unless you turn it on.
+
+To set it up:
+
+1. The site needs the Cognito sign-in pool. A site with comments already has
+   one. Otherwise re-run the deployment wizard with **Public** reads and turn
+   on **Gate individual notes with access groups**, which deploys everything.
+2. For an existing pool, turn on **Access groups → Gate notes on this public
+   site**, then run **Settings → Infrastructure → Deploy access-groups edge
+   function**. It adds the membership trigger and attaches the edge function.
+   Public notes keep working throughout.
+3. Define groups and gate notes as [above](#setting-it-up), then publish.
+
+Why a signed-out reader gets **403**, not a redirect to sign-in, on a gated
+note: the site only ever fetches gated notes in the background, where a
+redirect to the sign-in page can't be followed. A "please sign in" response
+would make the site reload in a loop. And the same 403 for "signed out" and
+"not a member" means a stranger can't tell whether a note exists. The site
+offers sign-in itself, based on whoami.
+
+**Turning it off.** Switching the toggle off leaves the edge function
+attached, so already-published gated notes stay protected. They're removed
+from the site at the next publish.
+
+**Detaching is refused while gated notes exist.** If `restricted/` in the site
+bucket has any objects, CPN refuses to attach an edge function that doesn't
+enforce access groups. That covers re-running the wizard with plain public
+reads, switching to a password gate, or clearing the ARN in **Auth
+Lambda@Edge → Update**. Remove the groups from those notes and publish, or
+remove the groups in settings, first. The Auth Lambda@Edge dialog has an
+explicit **Detach anyway** button for recovery; it makes those notes public.
+
 ### Bring-your-own edge functions
 
 A `byo` site can use access groups when its edge function enforces the same
 contract. It must allow `/restricted/<group>/*` only for viewers in `<group>`,
 and answer `GET /restricted/whoami` with `{"groups": [...]}`. Confirm this with
 **My edge function enforces access groups** in the Access groups section.
-Password and public sites can't use access groups.
+Password sites can't use access groups.
 
 ## Commenting
 
@@ -157,7 +216,7 @@ CPN uses these CloudFormation templates (see `src/infrastructure/templates.ts`):
 |----------|---------|
 | `CERTIFICATE_TEMPLATE` | ACM certificate for a custom domain (DNS-validated, in `us-east-1`). |
 | `COGNITO_AUTH_TEMPLATE` | Cognito user pool + Google IdP + OAuth callback + access-group membership trigger. |
-| `COGNITO_EDGE_TEMPLATE` | The Cognito viewer-request edge function (`cpn-authedge-<variant>`), packaged as an S3 asset. |
+| `COGNITO_EDGE_TEMPLATE` | The Cognito viewer-request edge function (`cpn-authedge-<variant>`), packaged as an S3 asset. Its `PublicReads` parameter and output record whether it runs in public-site mode. |
 | `PASSWORD_AUTH_TEMPLATE` | Password-check viewer-request edge function. |
 | `FULL_STACK_OAC_TEMPLATE` | S3 + CloudFront using Origin Access Control (modern). |
 | `FULL_STACK_OAI_TEMPLATE` | S3 + CloudFront using Origin Access Identity (legacy). |
@@ -176,7 +235,8 @@ Under **Authentication & Delivery** (and Infrastructure):
   a targeted stack update.
 - **Cognito gate → Upgrade / Redeploy** — migrate an older Cognito deployment to
   the separate edge stack (needed for access groups), or redeploy the latest edge
-  function and trigger code.
+  function and trigger code. On a public site with access groups turned on, the
+  button reads **Deploy access-groups edge function**.
 - **Sync settings from stack** — re-read stack outputs (bucket, distribution ID,
   site URL) into the profile.
 - **Manage DNS** — reopen the DNS validation assistant for a pending certificate.

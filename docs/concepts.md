@@ -55,8 +55,8 @@ How read access to a published site is controlled: `none` (fully public),
 
 A named set of reader emails, defined per profile, that a note can list in its
 `cpn-access-groups` frontmatter. A gated note is readable only by members of one
-of its groups and is kept out of search, chat, and public links. Requires the
-`cognito` read gate. See
+of its groups and is kept out of search, chat, and public links. Works on sites
+with the `cognito` read gate, and on public sites that turn on access groups. See
 [authentication & access](auth-and-access.md#per-note-access-groups).
 
 ### Cognito and Google sign-in

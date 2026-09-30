@@ -141,6 +141,11 @@ read it. See [per-note access groups](auth-and-access.md#per-note-access-groups)
 - **Sync membership now** — upload member lists immediately (also done on every
   publish).
 - **My edge function enforces access groups** — `byo` read gate only.
+- **Gate notes on this public site** — `none` read gate only. Attaches the
+  access-groups edge function to every request (a small per-request cost);
+  public notes stay anonymous. Then run **Deploy access-groups edge function**
+  under Infrastructure. See
+  [access groups on a public site](auth-and-access.md#per-note-access-groups-on-a-public-site).
 
 ### Danger Zone
 - **Destroy infrastructure** — tear down the profile's stacks (bucket retained).
