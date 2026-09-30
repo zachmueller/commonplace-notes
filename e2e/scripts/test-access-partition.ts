@@ -111,13 +111,57 @@ function testPublishChecks() {
 	for (const mode of ['none', 'password']) {
 		const p = profile();
 		p.infrastructureState.readGateMode = mode;
-		check(!A.canPublishGated(p).ok, `${mode} read gate blocked`);
+		check(!A.canPublishGated(p).ok, `${mode} read gate blocked (no public-site opt-in)`);
 	}
+	const pwOptIn = profile({ publicSiteAccessGroups: true });
+	pwOptIn.infrastructureState.readGateMode = 'password';
+	check(!A.canPublishGated(pwOptIn).ok, 'password read gate blocked even with the public-site flag');
+
+	// Public site (read gate 'none') with the public-reads edge fn attached.
+	const publicSite = (mut: (p: any) => void = () => {}) => {
+		const p = profile({ publicSiteAccessGroups: true });
+		p.infrastructureState.readGateMode = 'none';
+		p.infrastructureState.cognitoAuth.edgePublicReads = true;
+		mut(p);
+		return p;
+	};
+	eq(A.canPublishGated(publicSite()), { ok: true }, 'public site with the public-reads edge fn attached ok');
+	eq(A.validateNoteAccess(publicSite(), n(['team']), false), { ok: true }, 'gated note on an opted-in public site ok');
+	check(!A.canPublishGated(publicSite(p => { delete p.publicSiteAccessGroups; })).ok, 'public site without the opt-in blocked');
+	check(!A.canPublishGated(publicSite(p => { delete p.infrastructureState.cognitoAuth; })).ok, 'public site without a pool blocked');
+	check(!A.canPublishGated(publicSite(p => { delete p.infrastructureState.cognitoAuth.edgeStackName; })).ok, 'public site without the edge stack blocked');
+	check(!A.canPublishGated(publicSite(p => { delete p.infrastructureState.cognitoAuth.accessGroupsKey; })).ok, 'public site without the membership trigger blocked');
+	check(!A.canPublishGated(publicSite(p => { p.infrastructureState.cognitoAuth.edgePublicReads = false; })).ok, 'public site on a whole-site (non public-reads) edge build blocked');
+	check(!A.canPublishGated(publicSite(p => { p.infrastructureState.authLambdaEdgeArn = ''; })).ok, 'public site with the edge fn detached blocked');
+	check(!A.canPublishGated(publicSite(p => { p.infrastructureState.authLambdaEdgeArn = 'arn:aws:lambda:us-east-1:1:function:other:1'; })).ok, 'public site on another edge fn blocked');
+	check(A.canPublishGated(publicSite(p => { delete p.infrastructureState.readGateMode; })).ok, 'absent readGateMode is treated as public');
+	const cognitoOnPublicBuild = profile();
+	cognitoOnPublicBuild.infrastructureState.cognitoAuth.edgePublicReads = true;
+	check(!A.canPublishGated(cognitoOnPublicBuild).ok, 'cognito read gate on a public-reads edge build blocked');
 	const byo = profile();
 	byo.infrastructureState.readGateMode = 'byo';
 	check(!A.canPublishGated(byo).ok, 'byo without opt-in blocked');
 	byo.byoEnforcesAccessGroups = true;
 	check(A.canPublishGated(byo).ok, 'byo with opt-in ok');
+}
+
+function testEdgeEnforcesGroups() {
+	check(A.edgeEnforcesGroups(profile(), EDGE_ARN), 'upgraded cognito edge ARN enforces groups');
+	check(!A.edgeEnforcesGroups(profile(), ''), "'' (no edge fn) does not enforce groups");
+	check(!A.edgeEnforcesGroups(profile(), undefined), 'undefined does not enforce groups');
+	check(!A.edgeEnforcesGroups(profile(), 'arn:aws:lambda:us-east-1:1:function:password:1'), 'another ARN does not enforce groups');
+	const legacy = profile();
+	delete legacy.infrastructureState.cognitoAuth.edgeStackName;
+	check(!A.edgeEnforcesGroups(legacy, EDGE_ARN), 'legacy inline Cognito edge fn does not enforce groups');
+	const pub = profile({ publicSiteAccessGroups: true });
+	pub.infrastructureState.readGateMode = 'none';
+	pub.infrastructureState.cognitoAuth.edgePublicReads = true;
+	check(A.edgeEnforcesGroups(pub, EDGE_ARN), 'public-reads edge ARN enforces groups');
+	const byo = profile();
+	byo.infrastructureState.readGateMode = 'byo';
+	check(!A.edgeEnforcesGroups(byo, 'arn:aws:lambda:us-east-1:1:function:byo:1'), 'un-vouched byo ARN does not enforce groups');
+	byo.byoEnforcesAccessGroups = true;
+	check(A.edgeEnforcesGroups(byo, 'arn:aws:lambda:us-east-1:1:function:byo:1'), 'vouched byo ARN enforces groups');
 }
 
 function testAggregates() {
@@ -144,6 +188,7 @@ testNormalize();
 testPartitions();
 testVisibility();
 testPublishChecks();
+testEdgeEnforcesGroups();
 testAggregates();
 testGroupsJson();
 

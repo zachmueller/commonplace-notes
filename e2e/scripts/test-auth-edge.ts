@@ -51,8 +51,11 @@ const TOKENS: Record<string, any> = {
 	solo: { sub: 's', email: 's@example.com', 'cognito:groups': 'team' },
 };
 
-function loadHandler() {
-	const source = `const CFG = ${JSON.stringify(CFG)};\n` + AUTH_EDGE_BODY;
+// Token verifications performed by the stub (public-reads mode must skip them).
+let verifications = 0;
+
+function loadHandler(cfg: Record<string, unknown> = CFG) {
+	const source = `const CFG = ${JSON.stringify(cfg)};\n` + AUTH_EDGE_BODY;
 	const sandbox: any = {
 		module: { exports: {} },
 		exports: {},
@@ -67,7 +70,10 @@ function loadHandler() {
 	vm.runInNewContext(source, sandbox, { filename: 'auth-edge.baked.js' });
 	// Function declarations in the script land on the sandbox global, and the
 	// handler resolves verifyIdToken at call time, so this swaps in the stub.
-	sandbox.verifyIdToken = async (token: string) => TOKENS[token] || null;
+	sandbox.verifyIdToken = async (token: string) => {
+		verifications++;
+		return TOKENS[token] || null;
+	};
 	return sandbox.exports.handler as (e: any) => Promise<any>;
 }
 
@@ -112,6 +118,7 @@ async function main() {
 	check(JSON.stringify(whoBody.groups) === JSON.stringify(['family', 'team']), `alice whoami groups (got ${who.body})`);
 	check(whoBody.email === 'alice@example.com', 'whoami carries email');
 	check(hdr(who, 'cache-control') === 'no-store', 'whoami is no-store');
+	check(whoBody.signedIn === true, 'whoami reports signedIn for a valid token');
 	const whoBob = JSON.parse((await handler(event('/restricted/whoami', 'bob'))).body || '{}');
 	check(Array.isArray(whoBob.groups) && whoBob.groups.length === 0, 'bob whoami -> []');
 	const whoSolo = JSON.parse((await handler(event('/restricted/whoami', 'solo'))).body || '{}');
@@ -138,6 +145,8 @@ async function main() {
 	const anonLegacy = await handler(legacy);
 	check(anonLegacy.status === '401', `restricted path without fetch metadata -> 401 (got ${anonLegacy.status})`);
 
+	await publicReadsCases();
+
 	if (failures.length === 0) {
 		console.log('All auth edge-fn cases passed.');
 		process.exit(0);
@@ -145,6 +154,47 @@ async function main() {
 	console.log(`${failures.length} auth edge-fn assertion(s) FAILED:`);
 	for (const f of failures) console.log('  - ' + f);
 	process.exit(1);
+}
+
+// Public site (CFG.publicReads): only /restricted/* is gated, and anonymous or
+// non-member requests there get a uniform 403 forbidden, never a 302 or 401.
+async function publicReadsCases() {
+	const handler = loadHandler({ ...CFG, publicReads: true });
+
+	verifications = 0;
+	for (const uri of ['/', '/index.html', '/config.json', '/notes/abc.json', '/static/mapping/uid-to-hash.json', '/comments/x.json', '/api/chat']) {
+		check(passed(await handler(event(uri))), `public: anon ${uri} passes`);
+		check(passed(await handler(event(uri, undefined, true))), `public: anon navigation to ${uri} passes`);
+	}
+	check(passed(await handler(event('/notes/abc.json', 'forged'))), 'public: a forged cookie on a public path is ignored');
+	check(verifications === 0, `public: no token verification outside /restricted/ (got ${verifications})`);
+	check(passed(await handler(event('/auth/callback'))), 'public: /auth/callback passes');
+
+	const anonWho = await handler(event('/restricted/whoami'));
+	const anonWhoBody = JSON.parse(anonWho.body || '{}');
+	check(anonWho.status === '200', `public: anon whoami -> 200 (got ${anonWho.status})`);
+	check(anonWhoBody.signedIn === false && Array.isArray(anonWhoBody.groups) && anonWhoBody.groups.length === 0,
+		`public: anon whoami -> { groups: [], signedIn: false } (got ${anonWho.body})`);
+	check(!hdr(anonWho, 'x-cpn-auth'), 'public: anon whoami has no x-cpn-auth header (no SPA reload)');
+	check(hdr(anonWho, 'cache-control') === 'no-store', 'public: anon whoami is no-store');
+	const forgedWho = JSON.parse((await handler(event('/restricted/whoami', 'forged'))).body || '{}');
+	check(forgedWho.signedIn === false, 'public: invalid token whoami -> signedIn false');
+	const aliceWho = JSON.parse((await handler(event('/restricted/whoami', 'alice'))).body || '{}');
+	check(aliceWho.signedIn === true && JSON.stringify(aliceWho.groups) === '["family","team"]', `public: member whoami (got ${JSON.stringify(aliceWho)})`);
+
+	for (const [label, ev] of [
+		['anon fetch', event('/restricted/team/notes/h.json')],
+		['anon navigation', event('/restricted/team/notes/h.json', undefined, true)],
+		['forged token', event('/restricted/team/notes/h.json', 'forged')],
+		['non-member', event('/restricted/team/notes/h.json', 'bob')],
+		['member of another group', event('/restricted/ops/notes/h.json', 'alice')],
+		['malformed group', event('/restricted/Team/notes/h.json', 'alice')],
+	] as const) {
+		const r = await handler(ev);
+		check(r.status === '403' && hdr(r, 'x-cpn-auth') === 'forbidden', `public: ${label} on a restricted path -> 403 forbidden (got ${r.status} ${hdr(r, 'x-cpn-auth')})`);
+	}
+	check(passed(await handler(event('/restricted/team/notes/h.json', 'alice'))), 'public: member reads the team partition');
+	check(passed(await handler(event('/restricted/team/static/mapping/uid-to-hash.json', 'solo'))), 'public: string group reads its mapping');
 }
 
 main().catch((e) => {

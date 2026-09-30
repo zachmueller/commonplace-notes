@@ -1056,7 +1056,8 @@ div.comment-input:empty:before {
 	font-size: 12px;
 	color: var(--text-secondary);
 }
-.comment-signin {
+.comment-signin,
+.site-signin {
 	display: inline-block;
 	padding: 6px 14px;
 	border: 1px solid var(--border-color);
@@ -1065,6 +1066,11 @@ div.comment-input:empty:before {
 	color: var(--text-primary);
 	text-decoration: none;
 	font-size: 14px;
+}
+.header .site-signin {
+	padding: 4px 12px;
+	font-size: 13px;
+	white-space: nowrap;
 }
 
 .close-button {
@@ -1801,30 +1807,72 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		// their session token carries that group. config.json never lists group
 		// names; instead the edge answers GET <accessWhoamiPath> with the viewer's
 		// own groups. Everything here degrades to public-only on any failure.
+		//
+		// On a public site (edge fn in public-reads mode) whoami answers anonymous
+		// viewers with { groups: [], signedIn: false }, and a "Sign in" link lets
+		// members reach their gated notes.
 		const GROUP_NAME_RE = /^[a-z0-9-]{1,40}$/;
-		let myGroupsPromise = null;
-		function getMyGroups() {
-			if (!myGroupsPromise) {
-				myGroupsPromise = (async () => {
+		let myIdentityPromise = null;
+		// Resolved identity ({ groups, signedIn }), or null until whoami answers.
+		let myIdentity = null;
+		function getMyIdentity() {
+			if (!myIdentityPromise) {
+				myIdentityPromise = (async () => {
 					if (window.__CPN_CONFIG_READY__) await window.__CPN_CONFIG_READY__;
 					const cfg = window.__CPN_CONFIG__ || {};
-					if (!cfg.accessGating) return [];
+					const anon = { groups: [], signedIn: false };
+					if (!cfg.accessGating) return anon;
 					try {
 						const r = await fetch(cfg.accessWhoamiPath || '/restricted/whoami', { cache: 'no-store' });
-						if (cpnAuthGate(r)) return [];
-						if (!r.ok) return [];
+						if (cpnAuthGate(r)) return anon;
+						if (!r.ok) return anon;
 						const data = await r.json();
-						return Array.isArray(data.groups)
+						const groups = Array.isArray(data.groups)
 							? data.groups.filter(g => typeof g === 'string' && GROUP_NAME_RE.test(g))
 							: [];
+						// Older edge fns omit signedIn; any identity implies a session.
+						const signedIn = data.signedIn === true
+							|| (data.signedIn === undefined && (groups.length > 0 || !!data.email));
+						return { groups, signedIn };
 					} catch (e) {
 						console.warn('Could not determine access groups:', e);
-						return [];
+						return anon;
 					}
-				})();
+				})().then(identity => {
+					myIdentity = identity;
+					return identity;
+				});
 			}
-			return myGroupsPromise;
+			return myIdentityPromise;
 		}
+		async function getMyGroups() {
+			return (await getMyIdentity()).groups;
+		}
+
+		// Whether to offer signed-out readers a way to sign in (gated notes exist
+		// and the Hosted UI is configured). Only true once whoami has answered.
+		function offerSignIn() {
+			const cfg = window.__CPN_CONFIG__ || {};
+			return !!(cfg.accessGating && cfg.authLoginUrl && myIdentity && !myIdentity.signedIn);
+		}
+
+		// Header "Sign in" link for signed-out readers of a site with gated notes.
+		async function renderSiteSignIn() {
+			await getMyIdentity();
+			const right = document.querySelector('.header-right');
+			if (!right || right.querySelector('.site-signin') || !offerSignIn()) return;
+			const url = hostedUiLoginUrl();
+			if (!url) return;
+			const link = document.createElement('a');
+			link.className = 'site-signin';
+			link.href = url;
+			link.textContent = 'Sign in';
+			link.title = 'Sign in to see notes shared with you';
+			// The return URL follows the current route.
+			link.addEventListener('click', () => { link.href = hostedUiLoginUrl() || url; });
+			right.insertBefore(link, right.firstChild);
+		}
+		void renderSiteSignIn();
 
 		// hash -> partition prefixes ('restricted/<g>/') it was seen in, so a note
 		// fetch goes straight to the right partition.
@@ -2240,6 +2288,7 @@ ${closeButton}
 <div class="error-message">
 	<p>Unable to load the note "${noteData.uid}".</p>
 	<p>${noteData.errorMessage || 'The note might not exist or you may not have permission to view it.'}</p>
+	${offerSignIn() && hostedUiLoginUrl() ? `<p><a class="comment-signin error-signin" href="${escapeHtml(hostedUiLoginUrl())}">Sign in</a> to see notes shared with you.</p>` : ''}
 </div>
 				`;
 			} else if (noteData.diffHtml) {

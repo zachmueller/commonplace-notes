@@ -10,6 +10,11 @@
  *   - notes in groups the viewer isn't in are not resolvable (no leak)
  *   - gated notes render a lock badge; public notes don't
  *   - without accessGating: no whoami call and no restricted fetches at all
+ *   - public site (edge in public-reads mode), anonymous viewer: whoami says
+ *     { groups: [], signedIn: false }, public notes load, gated notes don't, the
+ *     page never reload-loops, and a header "Sign in" link (plus one on the
+ *     not-found panel, whose wording is unchanged) points at the Hosted UI
+ *   - signed-in member on a public site: no "Sign in" link
  *
  * Run: npx tsx e2e/scripts/test-access-client.ts
  */
@@ -36,12 +41,24 @@ const note = (uid: string, hash: string, extra: any = {}) => ({
 	uid, slug: '', title: 'Note ' + uid, hash, lastUpdated: null, content: '<p>' + uid + '</p>', backlinks: [], ...extra,
 });
 
-// What the edge + bucket serve to a viewer in group "team" only.
-function siteFetch(log: string[]) {
+type Viewer = 'team' | 'anon' | 'team-public';
+
+// What the edge + bucket serve: to a viewer in group "team" only (whole-site
+// gate, or 'team-public' on a public site), or to an anonymous viewer of a
+// public site (the edge answers every restricted path with 403 forbidden).
+function siteFetch(log: string[], viewer: Viewer = 'team') {
 	return async (url: string) => {
 		const u = String(url);
 		log.push(u);
-		if (u === '/restricted/whoami') return ok({ groups: ['team'], email: 'a@x.com' });
+		if (viewer === 'anon') {
+			if (u === '/restricted/whoami') return ok({ groups: [], email: '', signedIn: false });
+			if (u.startsWith('/restricted/')) return forbidden();
+		}
+		if (u === '/restricted/whoami') {
+			return ok(viewer === 'team-public'
+				? { groups: ['team'], email: 'a@x.com', signedIn: true }
+				: { groups: ['team'], email: 'a@x.com' }); // older edge fn: no signedIn
+		}
 		if (u === '/static/mapping/uid-to-hash.json') return ok({ PUB: 'hpub' });
 		if (u === '/static/mapping/slug-to-uid.json') return ok({ 'pub.md': 'PUB' });
 		if (u === '/restricted/team/static/mapping/uid-to-hash.json') return ok({ SEC: 'hsec' });
@@ -54,11 +71,16 @@ function siteFetch(log: string[]) {
 	};
 }
 
-async function boot(config: any, log: string[]) {
-	const dom = new JSDOM(`<!DOCTYPE html><html><body><div class="panels-container" id="panels"></div></body></html>`,
+const LOGIN = 'https://pool.auth.us-east-1.amazoncognito.com/oauth2/authorize?client_id=c&response_type=code';
+const PUBLIC_SITE = { version: 1, accessGating: true, accessWhoamiPath: '/restricted/whoami', authLoginUrl: LOGIN };
+
+async function boot(config: any, log: string[], viewer: Viewer = 'team') {
+	const dom = new JSDOM(`<!DOCTYPE html><html><body>
+		<header class="header"><div class="header-left"></div><div class="header-right"><button id="theme-toggle"></button></div></header>
+		<div class="panels-container" id="panels"></div></body></html>`,
 		{ url: 'https://example.test/', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole() });
 	const w = dom.window as any;
-	w.fetch = siteFetch(log);
+	w.fetch = siteFetch(log, viewer);
 	w.__CPN_CONFIG__ = config;
 	w.__CPN_CONFIG_READY__ = Promise.resolve();
 	w.FlexSearch = { Document: class { add() {} async search() { return []; } } };
@@ -109,6 +131,46 @@ async function main() {
 		const sec = await w.__loadNoteByParameter('u', 'SEC');
 		check(sec === null, 'gated note is unreachable without gating');
 		check(!log.some((u) => u.startsWith('/restricted/')), `no restricted fetches when gating is off (got ${log.filter((u) => u.startsWith('/restricted/')).join(', ')})`);
+	}
+
+	// --- Public site, anonymous viewer ------------------------------------------
+	{
+		const log: string[] = [];
+		const w = await boot(PUBLIC_SITE, log, 'anon');
+		const pub = await w.__loadNoteByParameter('u', 'PUB');
+		check(pub && pub.uid === 'PUB', 'anon: public note loads on a public site');
+		const sec = await w.__loadNoteByParameter('u', 'SEC');
+		check(sec === null, 'anon: gated note does not load');
+		const restricted = log.filter((u) => u.startsWith('/restricted/'));
+		check(restricted.every((u) => u === '/restricted/whoami'), `anon: only whoami under /restricted/ (got ${restricted.join(', ')})`);
+		check(restricted.length === 1, `anon: whoami requested once (got ${restricted.length})`);
+		check(w.sessionStorage.getItem('cpn_pw_reload') !== '1', 'anon: no auth-gate reload on a public site');
+		const signin = w.document.querySelector('.header-right .site-signin');
+		check(!!signin, 'anon: header shows a Sign in link');
+		check(!!signin && String(signin.getAttribute('href')).startsWith(LOGIN + '&state='), `anon: Sign in points at the Hosted UI with a return state (got ${signin?.getAttribute('href')})`);
+		const errPanel = w.__createPanel({ uid: 'SEC' }, 0, true);
+		const errText = errPanel.textContent || '';
+		check(errText.includes('The note might not exist or you may not have permission to view it.'), 'anon: not-found wording unchanged');
+		check(!!errPanel.querySelector('a.error-signin'), 'anon: not-found panel offers sign-in');
+	}
+
+	// --- Public site, signed-in member -------------------------------------------
+	{
+		const log: string[] = [];
+		const w = await boot(PUBLIC_SITE, log, 'team-public');
+		const sec = await w.__loadNoteByParameter('u', 'SEC');
+		check(sec && sec.uid === 'SEC', 'member: gated note loads on a public site');
+		check(!w.document.querySelector('.site-signin'), 'member: no Sign in link when signed in');
+		const errPanel = w.__createPanel({ uid: 'NOPE' }, 0, true);
+		check(!errPanel.querySelector('a.error-signin'), 'member: not-found panel has no sign-in link');
+	}
+
+	// --- Whole-site gate (older edge fn without signedIn): no sign-in link --------
+	{
+		const log: string[] = [];
+		const w = await boot({ ...PUBLIC_SITE }, log, 'team');
+		await w.__loadNoteByParameter('u', 'PUB');
+		check(!w.document.querySelector('.site-signin'), 'legacy whoami with groups counts as signed in');
 	}
 
 	if (failures.length === 0) {

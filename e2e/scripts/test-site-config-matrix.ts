@@ -293,6 +293,36 @@ function testAccessGating() {
 	const byoOptIn = gated(p => { p.infrastructureState.readGateMode = 'byo'; p.byoEnforcesAccessGroups = true; });
 	check('access: byo with opt-in -> accessGating', byoOptIn.accessGating === true, JSON.stringify(byoOptIn.accessGating));
 
+	// Whole-site gate without comments: sign-in is the gate itself; the login
+	// URL still ships so the SPA can offer it (harmless on a cognito site).
+	check('access: cognito gating without comments -> authLoginUrl', typeof on.authLoginUrl === 'string' && on.authLoginUrl.startsWith(HOSTED_UI + '/oauth2/authorize'), String(on.authLoginUrl));
+
+	// Public site (read gate 'none') running the public-reads edge fn.
+	const publicSite = (mut: (p: any) => void = () => {}) => gated(p => {
+		p.infrastructureState.readGateMode = 'none';
+		p.infrastructureState.cognitoAuth.edgePublicReads = true;
+		p.publicSiteAccessGroups = true;
+		mut(p);
+	});
+	const pub = publicSite();
+	check('access: public site + public-reads edge -> accessGating', pub.accessGating === true, JSON.stringify(pub));
+	check('access: public site -> whoami path', pub.accessWhoamiPath === '/restricted/whoami', String(pub.accessWhoamiPath));
+	check('access: public site without comments -> authLoginUrl for reader sign-in',
+		typeof pub.authLoginUrl === 'string' && pub.authLoginUrl.includes('identity_provider=Google')
+			&& pub.authLoginUrl.includes(encodeURIComponent('https://d999888.cloudfront.net/auth/callback')), String(pub.authLoginUrl));
+	check('access: public site -> no readGating / commentsEnabled without comments', pub.readGating === undefined && pub.commentsEnabled === undefined, JSON.stringify(pub));
+	check('access: public site -> group names never listed', !JSON.stringify(pub).includes('team'), JSON.stringify(pub));
+	const pubComments = publicSite(p => { p.commenting = { enabled: true }; p.infrastructureState.cognitoAuth.commentIdentity = true; });
+	check('access: public site + comments -> readGating false, one login URL', pubComments.readGating === false && pubComments.commentsEnabled === true && typeof pubComments.authLoginUrl === 'string', JSON.stringify(pubComments));
+	const pubNoOptIn = publicSite(p => { delete p.publicSiteAccessGroups; });
+	check('access: public site without opt-in -> no gating, no login URL', pubNoOptIn.accessGating === undefined && pubNoOptIn.authLoginUrl === undefined, JSON.stringify(pubNoOptIn));
+	const pubDetached = publicSite(p => { p.infrastructureState.authLambdaEdgeArn = ''; });
+	check('access: public site with the edge fn detached -> absent', pubDetached.accessGating === undefined && pubDetached.authLoginUrl === undefined, JSON.stringify(pubDetached));
+	const pubWrongBuild = publicSite(p => { p.infrastructureState.cognitoAuth.edgePublicReads = false; });
+	check('access: public site on a whole-site edge build -> absent', pubWrongBuild.accessGating === undefined, JSON.stringify(pubWrongBuild));
+	const pubNoBase = publicSite(p => { p.baseUrl = ''; });
+	check('access: public site without baseUrl -> gating on, no login URL', pubNoBase.accessGating === true && pubNoBase.authLoginUrl === undefined, JSON.stringify(pubNoBase));
+
 	// Existing profiles (no groups) keep an identical config.json.
 	const plain = config({ readGateMode: 'cognito' });
 	check('access: untouched profiles emit no access keys', plain.accessGating === undefined && plain.accessWhoamiPath === undefined, JSON.stringify(plain));
