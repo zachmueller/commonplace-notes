@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ensureAppConfig } from "./test-helpers";
 
 export interface VaultResetOptions {
 	/** Additional vault-relative file/dir paths to delete. */
@@ -45,6 +46,8 @@ function rmSafe(targetPath: string): void {
  *   - Known test-generated notes and directories
  *   - Any extra paths specified in options
  *
+ * Also enforces the harness's required app.json settings (ensureAppConfig).
+ *
  * Preserves:
  *   - .obsidian/ config and plugin symlinks
  *   - Test Note.md (base fixture)
@@ -74,6 +77,8 @@ export function resetVault(vaultPath: string, options?: VaultResetOptions): void
 	for (const extra of options?.extraDeletePaths ?? []) {
 		rmSafe(path.join(vaultPath, extra));
 	}
+
+	ensureAppConfig(vaultPath);
 
 	console.log(`  Vault reset complete: ${vaultPath}`);
 }

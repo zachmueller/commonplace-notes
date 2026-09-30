@@ -19,7 +19,7 @@
 import { test as base, chromium, type Page, type Browser } from "@playwright/test";
 import { launchObsidian, closeObsidian, type ObsidianProcess } from "./obsidian-launcher";
 import { LogCollector } from "./log-collector";
-import { PLUGIN_ID } from "./test-helpers";
+import { PLUGIN_ID, ensureAppConfig } from "./test-helpers";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,8 @@ function ensureTestVault(vaultPath: string): void {
 			JSON.stringify({}, null, 2)
 		);
 	}
+
+	ensureAppConfig(vaultPath);
 
 	const pluginDir = path.join(obsidianDir, "plugins", PLUGIN_ID);
 	const projectRoot = path.resolve(__dirname, "..", "..");

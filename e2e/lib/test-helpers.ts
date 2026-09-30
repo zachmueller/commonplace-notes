@@ -123,6 +123,37 @@ export function createTestNote(vaultPath: string, name: string, content: string)
 }
 
 /**
+ * Vault `app.json` settings the harness relies on, merged into any existing
+ * config. `settingsPopoutWindow` (Obsidian 1.13+, default true) opens Settings
+ * in its own window instead of a modal in the vault page, so tests driving the
+ * vault page would never see it — and modals opened from it (e.g. the
+ * deployment wizard) would mount in that other window's document.
+ */
+export const REQUIRED_APP_CONFIG: Record<string, unknown> = {
+	settingsPopoutWindow: false,
+};
+
+/**
+ * Merge REQUIRED_APP_CONFIG into `<vault>/.obsidian/app.json`. Must run before
+ * Obsidian launches: it reads app.json only at vault load.
+ */
+export function ensureAppConfig(vaultPath: string): void {
+	// Hard-coded `.obsidian`: runs in Node before launch, so there is no Vault#configDir.
+	const appJsonPath = path.join(vaultPath, ".obsidian", "app.json");
+	let config: Record<string, unknown> = {};
+	if (fs.existsSync(appJsonPath)) {
+		try {
+			config = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
+		} catch {
+			// Malformed config — rewrite with just the required keys
+		}
+	}
+	if (Object.entries(REQUIRED_APP_CONFIG).every(([k, v]) => config[k] === v)) return;
+	fs.mkdirSync(path.dirname(appJsonPath), { recursive: true });
+	fs.writeFileSync(appJsonPath, JSON.stringify({ ...config, ...REQUIRED_APP_CONFIG }, null, 2));
+}
+
+/**
  * Remove a test note from the vault.
  */
 export function removeTestNote(vaultPath: string, name: string): void {

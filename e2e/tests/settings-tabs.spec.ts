@@ -11,10 +11,17 @@
 
 import { test, expect } from "../lib/obsidian-fixture";
 
-/** Open the CPN plugin setting tab and return the container selector's state. */
+/**
+ * Open the CPN plugin setting tab from default UI state. The test vault's
+ * data.json persists across runs (and other e2e scripts), so a leftover active
+ * tab or collapsed section would otherwise leak into these assertions.
+ */
 async function openCpnSettings(page: import("@playwright/test").Page) {
-	await page.evaluate(() => {
+	await page.evaluate(async () => {
 		const app = (window as any).app;
+		const plugin = app.plugins.plugins["commonplace-notes"];
+		delete plugin.settings.settingsUiState;
+		await plugin.saveSettings();
 		app.setting.open();
 		app.setting.openTabById("commonplace-notes");
 	});

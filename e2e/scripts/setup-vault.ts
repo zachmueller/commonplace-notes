@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureAppConfig } from "../lib/test-helpers";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -116,6 +117,10 @@ for (const [filename, content] of Object.entries(configs)) {
 		}
 	}
 }
+
+// Settings the harness relies on (e.g. Settings as an in-window modal), merged
+// into app.json even when it already exists.
+ensureAppConfig(VAULT_PATH);
 
 // Set up plugin directory with individual file symlinks.
 // We can't symlink the project root because that would create a recursive loop
