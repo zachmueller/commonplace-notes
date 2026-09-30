@@ -82,15 +82,23 @@ async function safeShot(ctx: TestContext, name: string): Promise<string | undefi
 	}
 }
 
-async function openPluginSettings(ctx: TestContext): Promise<boolean> {
+async function openPluginSettings(ctx: TestContext, opts: { fatal?: boolean } = {}): Promise<boolean> {
 	const { page } = ctx;
+	const fatal = opts.fatal !== false;
 
 	await page.keyboard.press("Meta+,");
 	await page.waitForTimeout(1500);
 
 	const settingsModal = await waitForSelector(page, ".vertical-tab-header", 5000);
 	if (!settingsModal) {
-		ctx.fail("Open plugin settings", "Settings modal did not appear after Cmd+,");
+		if (fatal) ctx.fail("Open plugin settings", "Settings modal did not appear after Cmd+,");
+		// Newer Obsidian opens settings in its own window, and new modals mount in
+		// the active window's document; close it so the wizard opens here.
+		await page.evaluate(() => {
+			(window as any).app?.setting?.close?.();
+			window.focus();
+		});
+		await page.waitForTimeout(800);
 		return false;
 	}
 
@@ -150,6 +158,9 @@ async function installMocks(ctx: TestContext): Promise<void> {
 		cfm.deployFullStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("full"); return "cpn-variants"; };
 		cfm.updateFullStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("full-update"); return "cpn-variants"; };
 		cfm.updateFullStackAuthLambda = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("full-auth-update"); return "cpn-variants"; };
+		// The comment/chat attach steps carve their origins in with a targeted
+		// update (recorded as "full-update", like the full rebuild it replaced).
+		cfm.updateFullStackOrigins = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("full-update"); return "cpn-variants"; };
 		cfm.deployCertificateStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("cert"); return "cpn-cert-variants"; };
 		cfm.deployCognitoAuthStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("cognito"); return "cpn-cognito-variants"; };
 		cfm.updateCognitoAuthStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("cognito-phase2"); return "cpn-cognito-variants"; };
@@ -157,7 +168,12 @@ async function installMocks(ctx: TestContext): Promise<void> {
 		cfm.deployCommentStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("comment"); return "cpn-comment-variants"; };
 		// Cognito read gate: the edge fn is its own S3-asset stack now, and the pool's
 		// pre-token trigger is staged in the bootstrap bucket first.
-		cfm.deployCognitoEdgeStack = async () => { (window as any).__CPN_TEST_CFM_CALLS__.push("authedge"); return "cpn-authedge-variants"; };
+		// A public site with access groups gets the public-reads build (5th arg).
+		cfm.deployCognitoEdgeStack = async (_c: any, _p: any, _pool: any, _onEvent: any, opts: any) => {
+			(window as any).__CPN_TEST_CFM_CALLS__.push("authedge");
+			if (opts && opts.publicReads) (window as any).__CPN_TEST_CFM_CALLS__.push("authedge-public");
+			return "cpn-authedge-variants";
+		};
 		cfm.prepareCognitoAssets = async (config: any) => {
 			config.assetsBucket = "cpn-assets-999888777666-us-east-1";
 			config.preTokenAssetsKey = "lambda/pre-token-groups/abc.zip";
@@ -198,7 +214,14 @@ async function installMocks(ctx: TestContext): Promise<void> {
 		// (anonymous arrows only — see the __name note above)
 		if (plugin.awsSdkManager) {
 			plugin.awsSdkManager.getSTSClient = () => ({ send: async () => ({ Account: "999888777666" }) });
-			plugin.awsSdkManager.getS3Client = () => ({ send: async () => ({}) });
+			// The wizard's fail-open guard lists `restricted/` on re-runs; a scenario
+			// sets __CPN_TEST_S3_RESTRICTED__ to simulate published gated notes.
+			plugin.awsSdkManager.getS3Client = () => ({
+				send: async (cmd: any) => ((window as any).__CPN_TEST_S3_RESTRICTED__
+					&& String(cmd?.input?.Prefix || "").endsWith("restricted/")
+					? { KeyCount: 1, Contents: [{ Key: "restricted/team/notes/h.json" }] }
+					: {}),
+			});
 			plugin.awsSdkManager.getCloudFrontClient = () => ({ send: async () => ({}) });
 		}
 	}, {
@@ -232,6 +255,10 @@ interface VariantShape {
 	commentingEnabled?: boolean;
 	/** For password mode: seed a persisted hash so no plaintext entry is needed. */
 	passwordHash?: string;
+	/** Public reads: opt in to per-note access groups (public-reads edge fn). */
+	publicSiteAccessGroups?: boolean;
+	/** Simulate a live site bucket that already holds gated notes (restricted/). */
+	s3HasRestricted?: boolean;
 }
 
 /**
@@ -261,12 +288,18 @@ async function resetAndSeedProfile(ctx: TestContext, shape: VariantShape): Promi
 
 		// Cognito author intent (drives commentIdentityEnabled + prefill). The
 		// wizard constructor derives readGateMode as
-		//   profile.readGate?.mode || (cognitoAuth?.enabled ? 'cognito' : 'none')
+		//   profile.readGate?.mode || infrastructureState?.readGateMode
+		//     || (cognitoAuth?.enabled ? 'cognito' : 'none')
+		// (infrastructureState is deleted above, so the last fallback applies)
 		// so `enabled` must mirror whether READS are cognito-gated, else a
 		// "public reads + comment identity" profile would seed readGateMode as
 		// 'cognito' and deploy the wrong variant. For password/byo/cognito modes
 		// readGate.mode wins, so `enabled` only actually matters for public reads.
-		if (s.readGateMode === "cognito" || s.commentIdentity) {
+		if (s.publicSiteAccessGroups) profile.publicSiteAccessGroups = true;
+		else delete profile.publicSiteAccessGroups;
+		(window as any).__CPN_TEST_S3_RESTRICTED__ = !!s.s3HasRestricted;
+
+		if (s.readGateMode === "cognito" || s.commentIdentity || s.publicSiteAccessGroups) {
 			profile.cognitoAuth = {
 				enabled: s.readGateMode === "cognito",
 				commentIdentity: !!s.commentIdentity,
@@ -299,11 +332,14 @@ async function resetAndSeedProfile(ctx: TestContext, shape: VariantShape): Promi
 	await ctx.page.waitForTimeout(400);
 }
 
+/** Open the wizard through its command instead of the settings button. */
+let openWizardViaCommand = false;
+
 /** Click the "Deploy Infrastructure" button and confirm the wizard modal opens. */
 async function openWizard(ctx: TestContext, label: string): Promise<boolean> {
 	const { page } = ctx;
 
-	const clicked = await page.evaluate(() => {
+	const clicked = !openWizardViaCommand && await page.evaluate(() => {
 		const buttons = document.querySelectorAll("button");
 		for (const btn of buttons) {
 			if (btn.textContent?.includes("Deploy Infrastructure")) {
@@ -315,12 +351,24 @@ async function openWizard(ctx: TestContext, label: string): Promise<boolean> {
 	});
 
 	if (!clicked) {
-		ctx.fail(label, "Could not find 'Deploy Infrastructure' button");
-		return false;
+		// Settings UI unavailable: the command opens the same wizard for the
+		// (single) profile.
+		const ran = await page.evaluate(() => {
+			const commands = (window as any).app?.commands;
+			return !!commands?.executeCommandById?.("commonplace-notes:deploy-infrastructure");
+		});
+		if (!ran) {
+			ctx.fail(label, "Could not find 'Deploy Infrastructure' button or run the deploy command");
+			return false;
+		}
 	}
 
-	await page.waitForTimeout(700);
-	const exists = await page.evaluate(() => !!document.querySelector(".cpn-wizard-modal"));
+	// The command path resolves the profile asynchronously, so poll.
+	let exists = false;
+	for (let i = 0; i < 15 && !exists; i++) {
+		exists = await page.evaluate(() => !!document.querySelector(".cpn-wizard-modal"));
+		if (!exists) await page.waitForTimeout(400);
+	}
 	if (!exists) {
 		ctx.fail(label, "Wizard modal (.cpn-wizard-modal) did not appear");
 		return false;
@@ -445,6 +493,9 @@ async function readPersistedState(ctx: TestContext): Promise<any> {
 			hasComment: !!p?.infrastructureState?.comment,
 			commentingEnabled: p?.commenting?.enabled,
 			bucketName: p?.awsSettings?.bucketName,
+			authLambdaEdgeArn: p?.infrastructureState?.authLambdaEdgeArn,
+			edgePublicReads: p?.infrastructureState?.cognitoAuth?.edgePublicReads,
+			publicSiteAccessGroups: p?.publicSiteAccessGroups,
 		}));
 		return { mem: memPick, disk: diskPick };
 	});
@@ -644,7 +695,15 @@ interface MatrixCase {
 	expectCognito: boolean;
 	expectPassword: boolean;
 	expectComment: boolean;
+	/** Expected persisted authLambdaEdgeArn ('' = none); unchecked when absent. */
+	expectEdgeArn?: string;
+	/** Expected persisted cognitoAuth.edgePublicReads (public-site access groups). */
+	expectEdgePublicReads?: boolean;
+	/** The wizard must refuse the deploy with this text (fail-open guard). */
+	expectBlocked?: string;
 }
+
+const AUTHEDGE_ARN = "arn:aws:lambda:us-east-1:999888777666:function:cpn-authedge:1";
 
 const MATRIX: MatrixCase[] = [
 	{
@@ -679,6 +738,7 @@ const MATRIX: MatrixCase[] = [
 		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-comments" },
 		expectStacks: ["cognito", "comment", "full", "full-update", "cognito-phase2"], forbidStacks: ["password", "authedge"],
 		expectReadGate: "none", expectCognito: true, expectPassword: false, expectComment: true,
+		expectEdgeArn: "",
 	},
 	{
 		name: "password reads / comments on",
@@ -693,6 +753,40 @@ const MATRIX: MatrixCase[] = [
 		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-identity-only" },
 		expectStacks: ["cognito", "authedge", "full"], forbidStacks: ["comment", "full-update", "password"],
 		expectReadGate: "cognito", expectCognito: true, expectPassword: false, expectComment: false,
+	},
+	{
+		name: "public reads / gated notes (no comments)",
+		shape: { readGateMode: "none", publicSiteAccessGroups: true },
+		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-public-gated" },
+		expectStacks: ["cognito", "authedge", "authedge-public", "full", "cognito-phase2"], forbidStacks: ["password", "comment"],
+		expectReadGate: "none", expectCognito: true, expectPassword: false, expectComment: false,
+		expectEdgeArn: AUTHEDGE_ARN, expectEdgePublicReads: true,
+	},
+	{
+		// The shape of a typical public notes site: comments + a few gated notes.
+		name: "public reads / comments + gated notes",
+		shape: { readGateMode: "none", commentIdentity: true, commentingEnabled: true, publicSiteAccessGroups: true },
+		fill: { name: "Google Client Secret", value: "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" },
+		expectStacks: ["cognito", "authedge", "authedge-public", "comment", "full", "full-update", "cognito-phase2"], forbidStacks: ["password"],
+		expectReadGate: "none", expectCognito: true, expectPassword: false, expectComment: true,
+		expectEdgeArn: AUTHEDGE_ARN, expectEdgePublicReads: true,
+	},
+	{
+		name: "cognito reads (whole-site build, not public-reads)",
+		shape: { readGateMode: "cognito" },
+		fill: { name: "Google Client Secret", value: "GOCSPX-matrix-cognito-build" },
+		expectStacks: ["authedge", "full"], forbidStacks: ["authedge-public"],
+		expectReadGate: "cognito", expectCognito: true, expectPassword: false, expectComment: false,
+		expectEdgeArn: AUTHEDGE_ARN,
+	},
+	{
+		// Fail-open guard: re-running with plain public reads over a bucket that
+		// already holds gated notes would detach their protection.
+		name: "public reads re-run while gated notes are published -> refused",
+		shape: { readGateMode: "none", s3HasRestricted: true },
+		expectStacks: [], forbidStacks: ["full", "authedge"],
+		expectReadGate: "none", expectCognito: false, expectPassword: false, expectComment: false,
+		expectBlocked: "already publishes gated notes",
 	},
 ];
 
@@ -722,6 +816,32 @@ async function testVariantMatrix(ctx: TestContext): Promise<void> {
 			ctx.fail(label, "Could not click 'Next' (step-1 validation may have blocked)");
 			await closeWizard(ctx);
 			return;
+		}
+
+		if (c.expectBlocked) {
+			const blockedText = c.expectBlocked;
+			const deadline = Date.now() + 8000;
+			let text = "";
+			while (Date.now() < deadline) {
+				text = await ctx.page.evaluate(() => document.querySelector(".cpn-wizard-modal")?.textContent || "");
+				if (text.includes(blockedText) || text.includes("Deployment Complete")) break;
+				await ctx.page.waitForTimeout(400);
+			}
+			const blockedCalls = await readRecordedCalls(ctx);
+			await ctx.page.keyboard.press("Escape");
+			await ctx.page.waitForTimeout(400);
+			await ctx.page.evaluate(() => { (window as any).__CPN_TEST_S3_RESTRICTED__ = false; });
+			if (!text.includes(blockedText)) {
+				ctx.fail(label, `Expected the wizard to refuse ("${blockedText}"). Modal: "${text.substring(0, 300)}"`);
+				return;
+			}
+			const leaked = (c.forbidStacks || []).filter((f) => blockedCalls.includes(f));
+			if (leaked.length) {
+				ctx.fail(label, `Refused, but still deployed [${leaked.join(", ")}]`);
+				return;
+			}
+			ctx.pass(label, `refused before the site update; calls=[${blockedCalls.join(", ")}]`);
+			continue;
 		}
 
 		if (!(await reachCompletion(ctx, label, 8000))) {
@@ -770,7 +890,20 @@ async function testVariantMatrix(ctx: TestContext): Promise<void> {
 			return;
 		}
 
-		ctx.pass(label, `stacks=[${calls.join(", ")}]; readGate=${d.readGateMode}, cognito=${d.hasCognito}, password=${d.hasPassword}, comment=${d.hasComment}`);
+		if (c.expectEdgeArn !== undefined && (d.authLambdaEdgeArn || "") !== c.expectEdgeArn) {
+			ctx.fail(label, `Persisted authLambdaEdgeArn="${d.authLambdaEdgeArn}", expected "${c.expectEdgeArn}"`);
+			return;
+		}
+		if (c.expectEdgePublicReads !== undefined && !!d.edgePublicReads !== c.expectEdgePublicReads) {
+			ctx.fail(label, `Persisted edgePublicReads=${d.edgePublicReads}, expected ${c.expectEdgePublicReads}`);
+			return;
+		}
+		if (c.shape.publicSiteAccessGroups && d.publicSiteAccessGroups !== true) {
+			ctx.fail(label, `Persisted publicSiteAccessGroups=${d.publicSiteAccessGroups}, expected true`);
+			return;
+		}
+
+		ctx.pass(label, `stacks=[${calls.join(", ")}]; readGate=${d.readGateMode}, cognito=${d.hasCognito}, password=${d.hasPassword}, comment=${d.hasComment}, edge=${d.authLambdaEdgeArn || "none"}`);
 	}
 }
 
@@ -800,7 +933,12 @@ async function tests(ctx: TestContext): Promise<void> {
 	const { page } = ctx;
 	await page.waitForTimeout(5_000); // let the plugin initialise
 
-	if (!(await openPluginSettings(ctx))) return;
+	// Obsidian 1.13.7 no longer opens settings in the vault page for Cmd+, (a
+	// separate, known bug). The wizard is still reachable through the
+	// "Deploy publishing infrastructure" command, which openWizard falls back to.
+	const settingsOpen = await openPluginSettings(ctx, { fatal: false });
+	openWizardViaCommand = !settingsOpen;
+	if (!settingsOpen) console.log("  (settings UI unavailable; opening the wizard via its command)");
 	await installMocks(ctx);
 
 	await testCanonicalPublic(ctx);
