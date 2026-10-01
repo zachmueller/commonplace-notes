@@ -192,7 +192,7 @@ const indexTemplate = `<!DOCTYPE html>
 \t<meta name="viewport" content="width=device-width, initial-scale=1.0">
 \t<link rel="icon" href="data:image/x-icon;base64,">
 \t<title>{{SITE_TITLE}}</title>
-\t<link rel="stylesheet" href="styles.css">
+\t<link rel="stylesheet" href="{{STYLES_CSS_PATH}}">
 \t{{HEAD_EXTRA}}
 </head>
 <body>
@@ -218,9 +218,9 @@ const indexTemplate = `<!DOCTYPE html>
 
 \t<script>${CONFIG_BOOTSTRAP}</script>
 \t{{HOME_NOTE_UID_SCRIPT}}
-\t<script src="flexsearch.min.js"></script>
-\t<script src="vendor.js"></script>
-\t<script src="app.js"></script>
+\t<script src="{{FLEXSEARCH_JS_PATH}}"></script>
+\t<script src="{{VENDOR_JS_PATH}}"></script>
+\t<script src="{{APP_JS_PATH}}"></script>
 \t{{BODY_END_SCRIPTS}}
 </body>
 </html>`;

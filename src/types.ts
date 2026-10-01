@@ -33,6 +33,8 @@ export interface PublishingProfile {
     name: string;
     id: string;
     lastFullPublishTimestamp: number;
+	/** `<bucket>/<prefix>:<fingerprint>` of the site files last pushed (see renderSiteAssets); publish re-pushes when it changes. */
+	siteAssetsFingerprint?: string;
     excludedDirectories: string[];
     baseUrl: string;
 	homeNotePath: string;

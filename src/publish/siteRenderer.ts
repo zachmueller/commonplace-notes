@@ -46,14 +46,38 @@ function renderHeaderLinksHtml(headerLinks: HeaderLink[], homeNoteUid?: string):
 	return `${homeLink}\n\t\t\t${customLinks}`;
 }
 
+/**
+ * Where index.html loads its long-cached assets from. The plain names are the
+ * defaults; renderSiteAssets() substitutes content-hashed names so a browser
+ * holding an `immutable` copy can never keep running an old version.
+ */
+export interface SiteAssetPaths {
+	stylesCss: string;
+	flexsearchJs: string;
+	vendorJs: string;
+	appJs: string;
+}
+
+const PLAIN_ASSET_PATHS: SiteAssetPaths = {
+	stylesCss: 'styles.css',
+	flexsearchJs: 'flexsearch.min.js',
+	vendorJs: 'vendor.js',
+	appJs: 'app.js',
+};
+
 export function renderIndexHtml(
 	profile: PublishingProfile,
 	homeNoteUid?: string,
 	customizations: AssetCustomization[] = [],
+	paths: SiteAssetPaths = PLAIN_ASSET_PATHS,
 ): string {
 	const custom = getCustomization(profile);
 
 	let html = SITE_INDEX_TEMPLATE;
+	html = html.replace('{{STYLES_CSS_PATH}}', paths.stylesCss);
+	html = html.replace('{{FLEXSEARCH_JS_PATH}}', paths.flexsearchJs);
+	html = html.replace('{{VENDOR_JS_PATH}}', paths.vendorJs);
+	html = html.replace('{{APP_JS_PATH}}', paths.appJs);
 	html = html.replace('{{SITE_TITLE}}', custom.siteTitle || DEFAULT_SITE_TITLE);
 	html = html.replace('{{HEADER_LINKS_HTML}}', renderHeaderLinksHtml(custom.headerLinks, homeNoteUid));
 
@@ -229,4 +253,61 @@ export function getFlexSearchJs(): string {
 
 export function renderVendorJs(): string {
 	return VENDOR_JS;
+}
+
+/** A site file to upload, relative to the site root (the profile's S3 prefix). */
+export interface SiteAssetFile {
+	name: string;
+	body: string;
+	contentType: string;
+	cacheControl: string;
+}
+
+const IMMUTABLE = 'public, max-age=31536000, immutable';
+
+async function shortHash(text: string): Promise<string> {
+	const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+	return Array.from(new Uint8Array(digest).slice(0, 6)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** `app.js` + hash -> `app.<hash>.js` (`flexsearch.min.js` -> `flexsearch.min.<hash>.js`). */
+function hashedName(name: string, hash: string): string {
+	const dot = name.lastIndexOf('.');
+	return `${name.slice(0, dot)}.${hash}${name.slice(dot)}`;
+}
+
+/**
+ * Render every site file for a profile, in upload order. The long-cached
+ * scripts and styles get content-hashed names, and index.html (no-cache)
+ * references them, so a new version reaches readers on their next page load.
+ * The hashed files come before index.html so it never points at a missing
+ * file mid-upload.
+ *
+ * `fingerprint` identifies this exact set of files (config.json excluded: it
+ * is refreshed on every publish anyway). Publishing compares it with the last
+ * push to decide whether the site code needs re-uploading.
+ */
+export async function renderSiteAssets(
+	profile: PublishingProfile,
+	homeNoteUid?: string,
+	customizations: AssetCustomization[] = [],
+): Promise<{ files: SiteAssetFile[]; fingerprint: string }> {
+	const longCached = {
+		stylesCss: { name: 'styles.css', body: renderStylesCss(profile, customizations), contentType: 'text/css' },
+		flexsearchJs: { name: 'flexsearch.min.js', body: getFlexSearchJs(), contentType: 'application/javascript' },
+		vendorJs: { name: 'vendor.js', body: renderVendorJs(), contentType: 'application/javascript' },
+		appJs: { name: 'app.js', body: renderAppJs(), contentType: 'application/javascript' },
+	};
+	const files: SiteAssetFile[] = [];
+	const paths = { ...PLAIN_ASSET_PATHS };
+	for (const key of Object.keys(longCached) as Array<keyof SiteAssetPaths>) {
+		const asset = longCached[key];
+		const name = hashedName(asset.name, await shortHash(asset.body));
+		paths[key] = name;
+		files.push({ name, body: asset.body, contentType: asset.contentType, cacheControl: IMMUTABLE });
+	}
+	files.push({ name: 'index.html', body: renderIndexHtml(profile, homeNoteUid, customizations, paths), contentType: 'text/html', cacheControl: 'no-cache' });
+	const fingerprint = await shortHash(files.map((f) => `${f.name}\n${f.body}`).join('\n'));
+	files.push({ name: 'config.json', body: renderConfigJson(profile, homeNoteUid), contentType: 'application/json', cacheControl: 'no-cache' });
+	return { files, fingerprint };
 }

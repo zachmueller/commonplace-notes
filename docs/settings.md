@@ -84,8 +84,10 @@ deployed) view outputs. See [Infrastructure deployment](infrastructure-deploymen
 
 ### Site Customization *(AWS only)*
 - **Push site assets** — upload `index.html`, styles, scripts, and config to S3
-  without re-publishing notes (needed to apply site-look changes and asset
-  snippets).
+  now, without re-publishing notes. Publishing also re-uploads them whenever
+  they've changed since the last push (after a plugin update, a site-look
+  change, or an asset snippet edit), so this button is only needed to apply a
+  change without publishing.
 - **Site title**, **Font family**, **Panel width** (default **600** px),
   **Header links**, and collapsible **Theme color overrides** (light/dark).
 - **Named styles (per-note)** — see below.

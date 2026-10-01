@@ -5,7 +5,7 @@ import CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
-import { renderIndexHtml, renderStylesCss, renderAppJs, renderConfigJson, getFlexSearchJs, renderVendorJs } from './siteRenderer';
+import { renderConfigJson, renderSiteAssets } from './siteRenderer';
 import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
 import { partitionRecord, partitionSlugMap, restrictedPrefix, type Partition } from '../utils/access';
 
@@ -285,10 +285,17 @@ export async function pushMappingAndIndexToS3(
 		await pushKbCorpusToS3(plugin, profileId);
 	}
 
-	// Refresh config.json so commenting/auth (and theme/home) flags stay in sync
-	// on every publish — without this a settings change would not reach the site
-	// until the user manually re-pushed site assets.
-	await uploadConfigJson(plugin, profile);
+	// Re-push the site code when it changed since the last push (a plugin update
+	// or a site customization); otherwise just refresh config.json so
+	// commenting/auth (and theme/home) flags stay in sync on every publish.
+	// Without this, a plugin update's new site code never reached the site.
+	const { fingerprint } = await renderProfileSiteAssets(plugin, profile);
+	if (profile.siteAssetsFingerprint !== siteAssetsTarget(profile, fingerprint)) {
+		Logger.info(`Site assets changed since the last push for profile ${profileId}; uploading them`);
+		if (!await pushSiteAssetsToS3(plugin, profileId)) await uploadConfigJson(plugin, profile);
+	} else {
+		await uploadConfigJson(plugin, profile);
+	}
 }
 
 /**
@@ -600,6 +607,26 @@ export async function purgeRestrictedPartition(
 	return deleted;
 }
 
+/** The pushed-assets fingerprint, tied to the bucket and prefix it was pushed to. */
+function siteAssetsTarget(profile: PublishingProfile, fingerprint: string): string {
+	return `${profile.awsSettings?.bucketName ?? ''}/${profile.awsSettings?.s3Prefix ?? ''}:${fingerprint}`;
+}
+
+/** Render the profile's site files, resolving its home note and asset customizations. */
+async function renderProfileSiteAssets(plugin: CommonplaceNotesPlugin, profile: PublishingProfile) {
+	const homeNoteUid = resolveHomeNoteUid(plugin, profile);
+	// Per-profile snippet customizations authored as vault notes (route 2).
+	const assetsDir = getAssetsDir(plugin.settings.cpnDirectory, profile.id);
+	const { customizations, errors } = await discoverAssetCustomizations(
+		plugin.app.vault,
+		plugin.app.metadataCache,
+		assetsDir,
+		parseYaml,
+	);
+	const rendered = await renderSiteAssets(profile, homeNoteUid, customizations);
+	return { ...rendered, customizations, customizationErrors: errors };
+}
+
 export async function pushSiteAssetsToS3(
 	plugin: CommonplaceNotesPlugin,
 	profileId: string
@@ -619,19 +646,7 @@ export async function pushSiteAssetsToS3(
 		const bucket = profile.awsSettings.bucketName;
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
-		// Resolve home note UID from the configured home note path
-		const homeNoteUid = resolveHomeNoteUid(plugin, profile);
-
-		// Discover per-profile snippet customizations authored as vault notes
-		// (route 2). Pre-resolved here so the (synchronous) renderers receive
-		// them the same way homeNoteUid is threaded in.
-		const assetsDir = getAssetsDir(plugin.settings.cpnDirectory, profileId);
-		const { customizations, errors: customizationErrors } = await discoverAssetCustomizations(
-			plugin.app.vault,
-			plugin.app.metadataCache,
-			assetsDir,
-			parseYaml,
-		);
+		const { files, fingerprint, customizations, customizationErrors } = await renderProfileSiteAssets(plugin, profile);
 		if (customizationErrors.length > 0) {
 			for (const err of customizationErrors) {
 				Logger.warn(`Asset customization skipped: ${err.filePath} — ${err.message}`);
@@ -645,44 +660,7 @@ export async function pushSiteAssetsToS3(
 			Logger.info(`Applying ${customizations.length} asset customization snippet(s) for profile ${profileId}`);
 		}
 
-		const assets: { key: string; body: string; contentType: string; cacheControl: string }[] = [
-			{
-				key: `${s3Prefix}index.html`,
-				body: renderIndexHtml(profile, homeNoteUid, customizations),
-				contentType: 'text/html',
-				cacheControl: 'no-cache',
-			},
-			{
-				key: `${s3Prefix}styles.css`,
-				body: renderStylesCss(profile, customizations),
-				contentType: 'text/css',
-				cacheControl: 'public, max-age=31536000, immutable',
-			},
-			{
-				key: `${s3Prefix}app.js`,
-				body: renderAppJs(),
-				contentType: 'application/javascript',
-				cacheControl: 'public, max-age=31536000, immutable',
-			},
-			{
-				key: `${s3Prefix}flexsearch.min.js`,
-				body: getFlexSearchJs(),
-				contentType: 'application/javascript',
-				cacheControl: 'public, max-age=31536000, immutable',
-			},
-			{
-				key: `${s3Prefix}vendor.js`,
-				body: renderVendorJs(),
-				contentType: 'application/javascript',
-				cacheControl: 'public, max-age=31536000, immutable',
-			},
-			{
-				key: `${s3Prefix}config.json`,
-				body: renderConfigJson(profile, homeNoteUid),
-				contentType: 'application/json',
-				cacheControl: 'no-cache',
-			},
-		];
+		const assets = files.map((file) => ({ ...file, key: `${s3Prefix}${file.name}` }));
 
 		const { success, error } = await NoticeManager.showProgress(
 			'Uploading site assets to S3',
@@ -709,6 +687,8 @@ export async function pushSiteAssetsToS3(
 			return false;
 		}
 
+		profile.siteAssetsFingerprint = siteAssetsTarget(profile, fingerprint);
+		await plugin.saveSettings();
 		return true;
 	} catch (error) {
 		Logger.error('Error uploading site assets:', error);

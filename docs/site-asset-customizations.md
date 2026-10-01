@@ -64,15 +64,17 @@ cpn-slot: head-extra
 Multiple notes targeting the **same slot** are concatenated in
 **filename-ascending** order.
 
-## Applying changes: "Push site assets" (important)
+## Applying changes
 
-Snippet edits take effect **only** when you run **Settings → (profile) → Push
-site assets**. That re-renders all static assets from your current snippet notes
-and issues a CloudFront invalidation.
+Snippet edits take effect at the next publish, or immediately with
+**Settings → (profile) → Push site assets**. Both re-render all static assets
+from your current snippet notes. A publish compares the rendered assets with
+the last push and re-uploads them only when they changed.
 
-A **normal publish does not pick up snippet edits** — it only refreshes
-`config.json` and note content. After editing a snippet note, always run *Push
-site assets*.
+Scripts and styles are uploaded under content-hashed names (for example
+`app.3f9c0e2a1b4d.js`), and `index.html` is served `no-cache`, so readers get
+the new version on their next page load. Browsers can't keep running a stale
+copy.
 
 Malformed notes (bad `cpn-type`/`cpn-slot`, missing fence) are skipped with a
 warning notice + console detail; the rest still publish.
