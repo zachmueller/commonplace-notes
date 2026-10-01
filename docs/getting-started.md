@@ -41,7 +41,7 @@ by the repo's `.github/workflows/release.yml` (on each version tag) and contain
 ```sh
 git clone https://github.com/zachmueller/commonplace-notes
 cd commonplace-notes
-nvm use          # Node 24 (see .nvmrc)
+nvm use          # Node 26 (see .nvmrc)
 npm install
 npm run build    # typecheck + esbuild production bundle
 ```

@@ -64,7 +64,7 @@ Full definitions in the [concept glossary](docs/concepts.md).
 Contributors (end users should use BRAT):
 
 ```sh
-nvm use          # Node 24 (see .nvmrc)
+nvm use          # Node 26 (see .nvmrc)
 npm install
 npm run build    # tsc typecheck + esbuild production bundle → main.js
 npm run dev      # esbuild watch mode

@@ -182,7 +182,7 @@ export class CognitoAuthStack extends cdk.Stack {
 		triggerRole.cfnOptions.condition = hasAccessGroups;
 
 		const triggerFn = new cdk.aws_lambda.CfnFunction(this, 'PreTokenGroupsFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: triggerRole.attrArn,
 			timeout: 5,
@@ -233,7 +233,7 @@ export class CognitoAuthStack extends cdk.Stack {
 		});
 
 		const callbackFn = new cdk.aws_lambda.CfnFunction(this, 'AuthCallbackFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: callbackRole.attrArn,
 			timeout: 10,

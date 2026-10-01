@@ -187,7 +187,7 @@ export class CommentStack extends cdk.Stack {
 		// ---- Cookie-based authorizer Lambda ----------------------------------
 		const authorizerRole = basicRole('AuthorizerFnRole');
 		const authorizerFn = new cdk.aws_lambda.CfnFunction(this, 'AuthorizerFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: authorizerRole.attrArn,
 			timeout: 10,
@@ -210,7 +210,7 @@ export class CommentStack extends cdk.Stack {
 			},
 		]);
 		const writeFn = new cdk.aws_lambda.CfnFunction(this, 'WriteFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: writeRole.attrArn,
 			timeout: 10,
@@ -229,7 +229,7 @@ export class CommentStack extends cdk.Stack {
 			},
 		]);
 		const meFn = new cdk.aws_lambda.CfnFunction(this, 'MeFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: meRole.attrArn,
 			timeout: 10,
@@ -252,7 +252,7 @@ export class CommentStack extends cdk.Stack {
 			{ Effect: 'Allow', Action: ['sqs:SendMessage'], Resource: dlq.attrArn },
 		]);
 		const reexportFn = new cdk.aws_lambda.CfnFunction(this, 'ReexportFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: reexportRole.attrArn,
 			timeout: 30,

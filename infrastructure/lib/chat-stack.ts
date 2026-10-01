@@ -216,7 +216,7 @@ export class ChatStack extends cdk.Stack {
 		});
 
 		const chatFn = new cdk.aws_lambda.CfnFunction(this, 'ChatFn', {
-			runtime: 'nodejs20.x',
+			runtime: 'nodejs24.x',
 			handler: 'index.handler',
 			role: chatRole.attrArn,
 			timeout: 120,

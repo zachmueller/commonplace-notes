@@ -72,7 +72,7 @@ export function addAssetEdgeFunction(stack: cdk.Stack, ids: AssetEdgeFunctionIds
 	});
 
 	const fn = new cdk.aws_lambda.CfnFunction(stack, ids.fn, {
-		runtime: 'nodejs20.x',
+		runtime: 'nodejs24.x',
 		handler: 'index.handler',
 		role: role.attrArn,
 		code: {
