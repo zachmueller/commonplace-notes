@@ -15,6 +15,7 @@ The deploying user/role needs at minimum:
 - `cloudformation:CreateStack`, `cloudformation:DescribeStacks`, `cloudformation:DescribeStackEvents`, `cloudformation:DeleteStack`
 - `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutBucketPolicy`, `s3:PutPublicAccessBlock`
 - `cloudfront:CreateDistribution`, `cloudfront:CreateOriginAccessControl` (or `CreateCloudFrontOriginAccessIdentity` for OAI)
+- `cloudfront:GetDistributionConfig`, to check the site's live domains before every site-stack update (see [Domains changed outside the plugin](#domains-changed-outside-the-plugin))
 - If using custom domains: `acm:RequestCertificate`, `acm:DescribeCertificate`, `acm:ListCertificates` (to offer reuse of existing certificates)
 - If using Route53: `route53:ListHostedZones`, `route53:ChangeResourceRecordSets`, `route53:CreateHostedZone` (only if creating a new zone)
 
@@ -172,6 +173,32 @@ After import, the Infrastructure section shows:
 ### Syncing Settings
 
 If stack outputs change (e.g., you updated the CDK stack externally), click **"Sync settings from stack"** in the Infrastructure section to re-read outputs and update your profile.
+
+### Domains changed outside the plugin
+
+CloudFormation rewrites the whole CloudFront distribution config on every
+site-stack update. Aliases or a certificate attached by hand, for example in
+the CloudFront console, would be wiped by the next update, and the site would
+stop serving HTTPS on those domains.
+
+So before every site-stack update (wizard re-runs, adding comments or chat,
+attaching an edge function, upgrading the Cognito gate), CPN reads the live
+distribution. If its aliases, ACM certificate, or TLS security policy differ
+from the stack's, CPN carries the live values into the update: the domain that
+matches the profile's base URL becomes the custom domain, the rest become extra
+aliases, and the certificate and TLS policy are kept. After that, the stack
+manages them. A warning is logged, and the profile's **Domain** shows the
+adopted domain.
+
+CPN refuses the update instead, with an error, when:
+
+- the update also changes the custom domain or certificate. Make the change in
+  one place: revert the manual change in the console, or re-run without
+  changing the domain so the live setup is adopted first.
+- the distribution uses an IAM server certificate. The stack only supports ACM
+  certificates in `us-east-1`.
+- the distribution can't be read, for example because
+  `cloudfront:GetDistributionConfig` is missing.
 
 ### DNS Management
 

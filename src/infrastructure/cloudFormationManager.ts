@@ -32,6 +32,7 @@ import {
 	ListHostedZonesCommand,
 	CreateHostedZoneCommand,
 } from '@aws-sdk/client-route-53';
+import { CloudFrontClient, GetDistributionConfigCommand } from '@aws-sdk/client-cloudfront';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { OrphanedEdgeResource, PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
@@ -66,6 +67,7 @@ import type {
 	StackRole,
 } from './types';
 import { certCoversDomain } from './certMatch';
+import { DEFAULT_MIN_TLS, hostOf, reconcileLiveDomain, type LiveDomainConfig } from './domainDrift';
 import { Logger, errorMessage, errorCode } from '../utils/logging';
 
 const POLL_INTERVAL_MS = 5000;
@@ -239,6 +241,7 @@ export class CloudFormationManager {
 	private cfClients: Map<string, CloudFormationClient> = new Map();
 	private acmClients: Map<string, ACMClient> = new Map();
 	private route53Clients: Map<string, Route53Client> = new Map();
+	private cloudFrontClients: Map<string, CloudFrontClient> = new Map();
 
 	constructor(plugin: CommonplaceNotesPlugin) {
 		this.plugin = plugin;
@@ -839,6 +842,63 @@ export class CloudFormationManager {
 	}
 
 	/**
+	 * Read the site distribution's live aliases and certificate and fold them
+	 * into `overrides` when they differ from what the deployed parameters render
+	 * (they were changed outside CloudFormation). CloudFormation rewrites the
+	 * whole distribution config on every update, so without this an update
+	 * silently drops domains attached by hand and the site stops serving HTTPS.
+	 * Throws when the live setup can't be kept. Returns `overrides` unchanged
+	 * for a stack that doesn't exist yet or is in sync.
+	 */
+	private async preserveLiveDomain(
+		client: CloudFormationClient,
+		stackName: string,
+		awsProfile: string,
+		profileId: string,
+		overrides: Partial<Record<string, string>>,
+	): Promise<Partial<Record<string, string>>> {
+		let stack: Stack | undefined;
+		try {
+			stack = (await client.send(new DescribeStacksCommand({ StackName: stackName }))).Stacks?.[0];
+		} catch (err: unknown) {
+			if (/does not exist/i.test(errorMessage(err))) return overrides;
+			throw err;
+		}
+		const distributionId = stack?.Outputs?.find((o) => o.OutputKey === 'DistributionID')?.OutputValue;
+		if (!stack || !distributionId) return overrides;
+
+		let live: LiveDomainConfig;
+		try {
+			const resp = await this.getCloudFrontClient(awsProfile).send(new GetDistributionConfigCommand({ Id: distributionId }));
+			const viewer = resp.DistributionConfig?.ViewerCertificate;
+			live = {
+				aliases: resp.DistributionConfig?.Aliases?.Items || [],
+				acmCertificateArn: viewer?.ACMCertificateArn || undefined,
+				iamCertificateId: viewer?.IAMCertificateId || undefined,
+				minimumProtocolVersion: viewer?.MinimumProtocolVersion || undefined,
+			};
+		} catch (err: unknown) {
+			throw new Error(`Could not read CloudFront distribution ${distributionId} to check its domains before updating ${stackName}: ${errorMessage(err)}`);
+		}
+
+		const deployed: Record<string, string | undefined> = {};
+		for (const p of stack.Parameters || []) if (p.ParameterKey) deployed[p.ParameterKey] = p.ParameterValue;
+		const profile = this.plugin.settings.publishingProfiles.find((p) => p.id === profileId);
+		const result = reconcileLiveDomain(deployed, live, overrides, hostOf(profile?.baseUrl));
+		if (result.kind === 'in-sync') return overrides;
+		if (result.kind === 'conflict') throw new Error(result.reason);
+
+		Logger.warn(`${stackName}: distribution ${distributionId} has domains set outside CloudFormation `
+			+ `(${live.aliases.join(', ') || 'none'}); adopting them into the stack so this update keeps them.`
+			+ (result.dropped.length ? ` No longer served (removed by hand): ${result.dropped.join(', ')}.` : ''));
+		if (profile?.infrastructureState && result.params.CustomDomain) {
+			profile.infrastructureState.customDomain = result.params.CustomDomain;
+			await this.plugin.saveSettings();
+		}
+		return { ...overrides, ...result.params };
+	}
+
+	/**
 	 * Every full-stack template parameter key. Used to build a targeted update
 	 * that changes only a named subset and inherits the rest via UsePreviousValue.
 	 */
@@ -846,8 +906,14 @@ export class CloudFormationManager {
 		'VariantName', 'S3Prefix', 'CustomDomain', 'CertificateArn', 'UseRoute53',
 		'HostedZoneId', 'HostedZoneName', 'AuthLambdaEdgeArn',
 		'CallbackApiDomainName', 'CommentBucketDomainName', 'CommentApiDomainName',
-		'ChatFunctionUrlDomainName',
+		'ChatFunctionUrlDomainName', 'AdditionalAliases', 'MinimumProtocolVersion',
 	] as const;
+
+	/** Values for params a live stack predates whose template default isn't ''. */
+	private static readonly FULL_STACK_PARAM_DEFAULTS: Partial<Record<string, string>> = {
+		UseRoute53: 'false',
+		MinimumProtocolVersion: DEFAULT_MIN_TLS,
+	};
 
 	/**
 	 * Build UpdateStack parameters that change only the keys present in
@@ -877,7 +943,9 @@ export class CloudFormationManager {
 			if (key in overrides) return { ParameterKey: key, ParameterValue: overrides[key] };
 			// A newly-introduced param the live stack doesn't have can't inherit —
 			// give it an explicit default so the template upgrade succeeds.
-			if (deployedKeys && !deployedKeys.has(key)) return { ParameterKey: key, ParameterValue: '' };
+			if (deployedKeys && !deployedKeys.has(key)) {
+				return { ParameterKey: key, ParameterValue: CloudFormationManager.FULL_STACK_PARAM_DEFAULTS[key] ?? '' };
+			}
 			return { ParameterKey: key, UsePreviousValue: true };
 		});
 	}
@@ -1112,41 +1180,21 @@ export class CloudFormationManager {
 		// UsePreviousValue would be rejected for it — pass explicit defaults for any
 		// param the live stack doesn't carry (this is also the template-upgrade path).
 		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
+		const guarded = await this.preserveLiveDomain(client, stackName, config.awsProfile, config.profileId, updateOverrides);
 
 		return this.createOrUpdateStack(client, stackName, {
 			templateBody: template,
 			createParameters: this.buildFullStackParameters(config),
-			updateParameters: this.buildFullStackUpdateParameters(updateOverrides, deployedKeys),
+			updateParameters: this.buildFullStackUpdateParameters(guarded, deployedKeys),
 			capabilities: ['CAPABILITY_IAM'],
 			profileId: config.profileId,
 		});
 	}
 
-	async updateFullStack(config: DeploymentConfig): Promise<string> {
-		const stackName = this.getStackName(config.variantName, 'full');
-		const client = this.getCloudFormationClient(config, config.region);
-		const template = config.originAccessMethod === 'oac'
-			? FULL_STACK_OAC_TEMPLATE
-			: FULL_STACK_OAI_TEMPLATE;
-
-		await this.sendUpdateToleratingNoop(client, {
-			StackName: stackName,
-			TemplateBody: template,
-			Parameters: this.buildFullStackParameters(config),
-			Capabilities: ['CAPABILITY_IAM'],
-			Tags: [
-				{ Key: 'cpn:managed', Value: 'true' },
-				{ Key: 'cpn:profile', Value: config.profileId },
-			],
-		});
-
-		return stackName;
-	}
-
 	/**
 	 * Targeted full-stack update that carves in ONE feature's origin domain(s)
 	 * while inheriting every other param via UsePreviousValue. Use this from the
-	 * comment/chat attach steps instead of updateFullStack(): a full param rebuild
+	 * comment/chat attach steps instead of a full param rebuild: rebuilding
 	 * from config would blank the OTHER feature's origin domain (e.g. adding
 	 * comments to a site that already has chat re-passes ChatFunctionUrlDomainName=''
 	 * and prunes the live /api/chat route). The overrides carry only the just-
@@ -1162,11 +1210,12 @@ export class CloudFormationManager {
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
 		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
+		const guarded = await this.preserveLiveDomain(client, stackName, config.awsProfile, config.profileId, overrides);
 
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: template,
-			Parameters: this.buildFullStackUpdateParameters(overrides, deployedKeys),
+			Parameters: this.buildFullStackUpdateParameters(guarded, deployedKeys),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -1180,7 +1229,7 @@ export class CloudFormationManager {
 	/**
 	 * Targeted update that changes ONLY the viewer-request auth Lambda@Edge ARN and
 	 * leaves every other full-stack parameter at its deployed value. Use this
-	 * instead of updateFullStack() when the caller only knows the ARN (e.g. the
+	 * instead of a full param rebuild when the caller only knows the ARN (e.g. the
 	 * Settings "Update Auth Lambda@Edge" modal): a full parameter rebuild from a
 	 * partial config would blank CallbackApiDomainName/CommentBucketDomainName/
 	 * CommentApiDomainName and prune the /auth/*, /comments/*, /api/comments routes
@@ -1200,11 +1249,13 @@ export class CloudFormationManager {
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
 		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
+		const guarded = await this.preserveLiveDomain(client, stackName, profile.awsSettings!.awsProfile, profile.id,
+			{ ...extraOverrides, AuthLambdaEdgeArn: authLambdaEdgeArn });
 
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: template,
-			Parameters: this.buildFullStackUpdateParameters({ ...extraOverrides, AuthLambdaEdgeArn: authLambdaEdgeArn }, deployedKeys),
+			Parameters: this.buildFullStackUpdateParameters(guarded, deployedKeys),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -2061,9 +2112,11 @@ export class CloudFormationManager {
 		for (const client of this.cfClients.values()) client.destroy();
 		for (const client of this.acmClients.values()) client.destroy();
 		for (const client of this.route53Clients.values()) client.destroy();
+		for (const client of this.cloudFrontClients.values()) client.destroy();
 		this.cfClients.clear();
 		this.acmClients.clear();
 		this.route53Clients.clear();
+		this.cloudFrontClients.clear();
 	}
 
 	/**
@@ -2092,6 +2145,19 @@ export class CloudFormationManager {
 	private getCloudFormationClientForProfile(profile: PublishingProfile, region?: string): CloudFormationClient {
 		const resolvedRegion = region || profile.awsSettings!.region;
 		return this.getCfClient(profile.awsSettings!.awsProfile, resolvedRegion);
+	}
+
+	/** Cache-keyed (by awsProfile) CloudFront client; CloudFront is global. */
+	private getCloudFrontClient(awsProfile: string): CloudFrontClient {
+		const existing = this.cloudFrontClients.get(awsProfile);
+		if (existing) return existing;
+
+		const client = new CloudFrontClient({
+			region: 'us-east-1',
+			credentials: this.buildCredentialProvider(awsProfile),
+		});
+		this.cloudFrontClients.set(awsProfile, client);
+		return client;
 	}
 
 	private getRoute53Client(profile: PublishingProfile): Route53Client {

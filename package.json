@@ -26,6 +26,8 @@
 		"test:comment-wikilinks": "npx tsx e2e/scripts/test-comment-wikilinks.ts",
 		"test:chat-citations": "npx tsx e2e/scripts/test-chat-citations.ts",
 		"test:cert-match": "npx tsx e2e/scripts/test-cert-match.ts",
+		"test:domain-drift": "npx tsx e2e/scripts/test-domain-drift.ts",
+		"test:site-domain-guard": "npx tsx e2e/scripts/test-site-domain-guard.ts",
 		"test:site-config-matrix": "npx tsx e2e/scripts/test-site-config-matrix.ts",
 		"test:asset-customizations": "npx tsx e2e/scripts/test-asset-customizations.ts",
 		"test:password-edge": "npx tsx e2e/scripts/test-password-edge.ts",

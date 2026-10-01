@@ -34,6 +34,18 @@ export class FullStackOai extends cdk.Stack {
 			description: 'ARN of the ACM certificate (required if using custom domain)',
 		});
 
+		const additionalAliases = new cdk.CfnParameter(this, 'AdditionalAliases', {
+			type: 'String',
+			default: '',
+			description: 'Optional comma-separated extra hostnames served alongside CustomDomain (the certificate must cover them)',
+		});
+
+		const minimumProtocolVersion = new cdk.CfnParameter(this, 'MinimumProtocolVersion', {
+			type: 'String',
+			default: 'TLSv1.2_2021',
+			description: 'CloudFront viewer TLS security policy when a custom certificate is used',
+		});
+
 		const useRoute53 = new cdk.CfnParameter(this, 'UseRoute53', {
 			type: 'String',
 			default: 'false',
@@ -70,6 +82,10 @@ export class FullStackOai extends cdk.Stack {
 
 		const hasCustomDomain = new cdk.CfnCondition(this, 'HasCustomDomain', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(customDomain.valueAsString, '')),
+		});
+
+		new cdk.CfnCondition(this, 'HasAdditionalAliases', {
+			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(additionalAliases.valueAsString, '')),
 		});
 
 		const hasCertificate = new cdk.CfnCondition(this, 'HasCertificate', {
@@ -148,13 +164,21 @@ export class FullStackOai extends cdk.Stack {
 				httpVersion: 'http2',
 				priceClass: 'PriceClass_100',
 				ipv6Enabled: true,
-				aliases: cdk.Fn.conditionIf('HasCustomDomain', [customDomain.valueAsString], cdk.Aws.NO_VALUE) as any,
+				aliases: cdk.Fn.conditionIf(
+					'HasCustomDomain',
+					cdk.Fn.conditionIf(
+						'HasAdditionalAliases',
+						cdk.Fn.split(',', cdk.Fn.join(',', [customDomain.valueAsString, additionalAliases.valueAsString])),
+						[customDomain.valueAsString],
+					),
+					cdk.Aws.NO_VALUE,
+				) as any,
 				viewerCertificate: cdk.Fn.conditionIf(
 					'HasCertificate',
 					{
 						AcmCertificateArn: certificateArn.valueAsString,
 						SslSupportMethod: 'sni-only',
-						MinimumProtocolVersion: 'TLSv1.2_2021',
+						MinimumProtocolVersion: minimumProtocolVersion.valueAsString,
 					},
 					{ CloudFrontDefaultCertificate: true },
 				) as any,
