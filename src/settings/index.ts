@@ -1,7 +1,7 @@
 import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, SettingsTab, SettingsUiState } from '../types';
-import { Logger } from '../utils/logging';
+import { Logger, errorMessage } from '../utils/logging';
 import { SettingsContext, ProfileContext } from './context';
 import { renderGeneralTab } from './tabs/generalTab';
 import { renderParserTab } from './tabs/parserTab';
@@ -154,6 +154,12 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			this.displayProfileSettings(this.profileContainerEl, profile, index);
 		} catch (error) {
 			Logger.error(`Error displaying profile ${profile.name}:`, error);
+			// Say so on the page: otherwise the sections after the failure just
+			// vanish with no hint why.
+			this.profileContainerEl.createDiv({
+				cls: 'setting-item-description mod-warning cpn-profile-render-error',
+				text: `Some settings for this profile failed to render: ${errorMessage(error)}. See the developer console for details.`,
+			});
 		}
 	}
 

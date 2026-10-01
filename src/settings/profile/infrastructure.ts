@@ -102,10 +102,12 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 							+ 'access-groups edge function (public notes stay anonymous; every request runs it). The site stays up; takes several minutes.'
 						: 'Upgrade required for per-note access groups: moves the sign-in edge function to its own stack and adds the group-membership trigger. The site stays up; takes several minutes.')
 					: 'Up to date. Re-run to redeploy the latest edge function and trigger code.')
-				.addButton(btn => btn
-					.setButtonText(needsUpgrade ? upgradeLabel : 'Redeploy')
-					.setClass(needsUpgrade ? 'mod-cta' : '')
-					.onClick(async () => {
+				.addButton(btn => {
+					btn.setButtonText(needsUpgrade ? upgradeLabel : 'Redeploy');
+					// Not setClass(cond ? 'mod-cta' : ''): an empty class token throws
+					// and aborts the rest of the profile page.
+					if (needsUpgrade) btn.setCta();
+					btn.onClick(async () => {
 						btn.setDisabled(true);
 						btn.setButtonText('Working...');
 						eventLog.empty();
@@ -133,7 +135,8 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 							btn.setDisabled(false);
 							btn.setButtonText(needsUpgrade ? upgradeLabel : 'Redeploy');
 						}
-					}));
+					});
+				});
 		}
 
 		// Google sign-in: the Cognito Hosted UI URLs the user must register
