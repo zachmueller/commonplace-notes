@@ -9,7 +9,8 @@
  * The vendored libraries (jsdiff `Diff`, diff2html `Diff2Html`) are STUBBED in the
  * jsdom window so this test verifies the SPA's WIRING (resolution, orientation,
  * panel identity, URL round-trip, graceful degradation) rather than the libraries'
- * own diff math. A separate browser e2e verifies real rendering + CSS.
+ * own diff math. test-diff-wrap-layout.ts checks real rendering + wrap layout
+ * in headless Chromium.
  *
  * What it guards:
  *   - parseURLFragment surfaces `;diff=` as params.diff on the segment.
@@ -21,6 +22,8 @@
  *     round-trips `;diff=` through updateURL.
  *   - A malformed/unresolvable diff target degrades to the base note (no .diff-body,
  *     not an error panel); identical versions show a non-fatal notice.
+ *   - The "Wrap lines" toggle: on by default, persisted in localStorage, and
+ *     applied to every open diff panel.
  *
  * Mirrors the harness in test-note-params.ts.
  *
@@ -336,6 +339,59 @@ async function main() {
 		const panel = doc.querySelector('.panel') as HTMLElement;
 		check(panel?.classList.contains('error'), 'H1: unresolvable base note → error panel');
 		eq(panel?.dataset.panelId, 'u-no-such-uid', 'H2: error panel stores its panel key');
+	}
+
+	// Reset.
+	W.__loadedPanels.clear();
+	(doc.getElementById('panels') as HTMLElement).innerHTML = '';
+	window.history.replaceState(null, '', '/');
+	window.localStorage.removeItem('diffWrap');
+
+	// =====================================================================
+	// I. Line-wrap toggle: on by default, persisted site-wide, applied to
+	//    every open diff panel. (jsdom has no ResizeObserver, so this also
+	//    proves createPanel's guard; row-height sync is covered by
+	//    test-diff-wrap-layout.ts in a real browser.)
+	// =====================================================================
+	const wrapBox = (p: Element | null) =>
+		p?.querySelector('.diff-wrap-toggle input') as HTMLInputElement | null;
+	const flip = (box: HTMLInputElement | null) => {
+		if (!box) return;
+		box.checked = !box.checked;
+		box.dispatchEvent(new window.Event('change'));
+	};
+
+	check(typeof (window as any).ResizeObserver === 'undefined', 'I0: jsdom has no ResizeObserver');
+	await W.__addPanel('u', UID, null, null, { diff: 'p' + PRIOR_HASH });
+	await nextTick(0);
+	{
+		const panel = doc.querySelector('.diff-panel');
+		check(!!panel, 'I1a: diff panel renders without ResizeObserver');
+		check(!!panel?.classList.contains('diff-wrap'), 'I1b: diff panel wraps by default');
+		check(wrapBox(panel)?.checked === true, 'I1c: wrap toggle starts checked');
+
+		flip(wrapBox(panel));
+		check(!panel?.classList.contains('diff-wrap'), 'I2a: unchecking removes diff-wrap');
+		eq(window.localStorage.getItem('diffWrap'), 'off', 'I2b: choice persisted as off');
+	}
+
+	// A stored 'off' is honored by a newly rendered diff panel.
+	await W.__addPanel('p', CUR_HASH, null, null, { diff: 'p' + PRIOR_HASH });
+	await nextTick(0);
+	{
+		const panels = Array.from(doc.querySelectorAll('.diff-panel')) as HTMLElement[];
+		eq(panels.length, 2, 'I3a: second diff panel (different key) opened');
+		const second = panels.find(p => p.dataset.panelId?.startsWith('p-')) ?? null;
+		check(!second?.classList.contains('diff-wrap'), 'I3b: stored off → new panel unwrapped');
+		check(wrapBox(second)?.checked === false, 'I3c: stored off → toggle unchecked');
+
+		// Toggling one panel applies to all open diff panels.
+		flip(wrapBox(second));
+		for (const p of panels) {
+			check(p.classList.contains('diff-wrap'), `I4a: ${p.dataset.panelId} re-wrapped`);
+			check(wrapBox(p)?.checked === true, `I4b: ${p.dataset.panelId} toggle checked`);
+		}
+		eq(window.localStorage.getItem('diffWrap'), 'on', 'I4c: choice persisted as on');
 	}
 
 	report();

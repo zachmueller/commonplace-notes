@@ -1257,6 +1257,7 @@ div.comment-input:empty:before {
 /* CPN diff-panel chrome */
 .diff-panel .diff-header {
 	display: flex;
+	flex-wrap: wrap;
 	justify-content: space-between;
 	gap: 1em;
 	font-size: 0.85em;
@@ -1275,6 +1276,47 @@ div.comment-input:empty:before {
 .diff-body .d2h-file-header { display: none; }
 /* Keep side-by-side columns scrollable when a panel is dragged narrow. */
 .diff-body .d2h-file-side-diff { overflow-x: auto; }
+.diff-panel .diff-wrap-toggle { cursor: pointer; user-select: none; white-space: nowrap; }
+/* Soft-wrap mode (default; toggled by the .diff-wrap-toggle checkbox). Line
+   numbers become real table cells so wrapped rows stretch them, and the +/-
+   prefix and content sit in a flex row so content wraps beside the prefix.
+   The two halves are separate tables, so syncDiffRowHeights() keeps row i the
+   same height on both sides. Without .diff-wrap, upstream no-wrap applies. */
+.diff-wrap .d2h-diff-table { table-layout: fixed; }
+/* Top-align so the shorter side of a tall row starts beside its line number. */
+.diff-wrap .d2h-diff-table td { vertical-align: top; }
+.diff-wrap .d2h-file-side-diff { overflow-x: hidden; }
+.diff-wrap .d2h-code-side-linenumber {
+	position: static;
+	display: table-cell;
+	vertical-align: top;
+	width: 4em;
+}
+.diff-wrap .d2h-code-side-line {
+	display: flex;
+	align-items: baseline;
+	width: auto;
+	padding: 0 0.5em;
+	white-space: normal;
+}
+/* Flex drops the whitespace that spaced the prefix from the text; restore it. */
+.diff-wrap .d2h-code-line-prefix { flex: none; margin-right: 1ch; }
+.diff-wrap .d2h-code-line-ctn {
+	display: block;
+	flex: 1 1 auto;
+	min-width: 0;
+	width: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+/* Word highlights are inline-block upstream, which makes a long changed span
+   an unbreakable box; let it wrap like text. */
+.diff-wrap .d2h-code-side-line ins,
+.diff-wrap .d2h-code-side-line del {
+	display: inline;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
 .diff-notice {
 	background-color: var(--bg-secondary);
 	border: 1px solid var(--border-color);
@@ -2260,6 +2302,52 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			setTimeout(() => target.classList.remove('heading-target'), 2000);
 		}
 
+		// Diff line wrapping: a site-wide reader preference (like the theme),
+		// on unless the reader turned it off. Wrapping is the .diff-wrap class on
+		// a .diff-panel; all wrap CSS is scoped to it.
+		const DIFF_WRAP_KEY = 'diffWrap';
+
+		function diffWrapEnabled() {
+			return localStorage.getItem(DIFF_WRAP_KEY) !== 'off';
+		}
+
+		// diff2html's side-by-side view is two separate tables (old | new) whose
+		// rows only line up while every row is one line tall. When wrapped, give
+		// row i the taller of its two heights on both sides. Clear first so rows
+		// can shrink again after a panel widens; batch all reads before writes so
+		// layout runs once. Unwrapped, this just clears the inline heights.
+		function syncDiffRowHeights(panel) {
+			const bodies = panel.querySelectorAll('.d2h-file-side-diff tbody');
+			if (bodies.length < 2) return;
+			const left = Array.from(bodies[0].rows);
+			const right = Array.from(bodies[1].rows);
+			for (const tr of left.concat(right)) tr.style.height = '';
+			if (!panel.classList.contains('diff-wrap')) return;
+			const n = Math.min(left.length, right.length);
+			const heights = [];
+			for (let i = 0; i < n; i++) {
+				heights.push(Math.max(
+					left[i].getBoundingClientRect().height,
+					right[i].getBoundingClientRect().height
+				));
+			}
+			for (let i = 0; i < n; i++) {
+				left[i].style.height = right[i].style.height = heights[i] + 'px';
+			}
+		}
+
+		// Persist the preference and apply it to every open diff panel, so they
+		// stay consistent with each other.
+		function setDiffWrap(on) {
+			localStorage.setItem(DIFF_WRAP_KEY, on ? 'on' : 'off');
+			document.querySelectorAll('.diff-panel').forEach(panel => {
+				panel.classList.toggle('diff-wrap', on);
+				const checkbox = panel.querySelector('.diff-wrap-toggle input');
+				if (checkbox) checkbox.checked = on;
+				syncDiffRowHeights(panel);
+			});
+		}
+
 		function createPanel(noteData, position, isError = false) {
 			const panel = document.createElement('div');
 			const isDiff = !isError && !!noteData.diffHtml;
@@ -2307,10 +2395,38 @@ ${closeButton}
 					</div>
 					<div class="diff-header">
 						<span class="diff-side diff-side-old">old <strong>${shortHash(meta.left)}</strong></span>
+						<label class="diff-wrap-toggle"><input type="checkbox"> Wrap lines</label>
 						<span class="diff-side diff-side-new">new <strong>${shortHash(meta.right)}</strong></span>
 					</div>
 					<div class="diff-body">${noteData.diffHtml}</div>
 				`;
+
+				const wrap = diffWrapEnabled();
+				panel.classList.toggle('diff-wrap', wrap);
+				const wrapCheckbox = panel.querySelector('.diff-wrap-toggle input');
+				wrapCheckbox.checked = wrap;
+				wrapCheckbox.addEventListener('change', () => setDiffWrap(wrapCheckbox.checked));
+
+				// The panel is still detached here, so rows can't be measured yet.
+				// The observer's first callback lands once it's laid out, and later
+				// ones on drag-resize / window resize. Only width changes re-sync:
+				// our own row-height writes change the body's height, and reacting
+				// to that would loop.
+				if (typeof ResizeObserver !== 'undefined') {
+					const diffBody = panel.querySelector('.diff-body');
+					let lastWidth = -1;
+					const observer = new ResizeObserver(entries => {
+						if (!panel.isConnected) {
+							observer.disconnect();
+							return;
+						}
+						const width = entries[entries.length - 1].contentRect.width;
+						if (width === lastWidth) return;
+						lastWidth = width;
+						syncDiffRowHeights(panel);
+					});
+					observer.observe(diffBody);
+				}
 			} else {
 				// Only create metadata section if we have either lastUpdated or hash
 				const hasMetadata = noteData.lastUpdated || noteData.hash || noteData.priorHash;
