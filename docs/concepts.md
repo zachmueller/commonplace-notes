@@ -32,6 +32,14 @@ it drives the note's site URL — so don't edit it by hand. See the
 An optional frontmatter field that overrides the filename as the note's display
 title on the published site. Absent it, the filename is used.
 
+### Transclusion (embed)
+
+An Obsidian embed — `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block]]` —
+of another published note. The published site shows the target's **latest**
+content in place, looked up by UID when the page is viewed, so even old
+permalinked revisions show current embeds. See the
+[publishing model](publishing-model.md#embeds-transclusions).
+
 ### Publish mechanism
 
 How a profile publishes: **AWS** (the primary, fully-supported path — S3 +
@@ -74,7 +82,7 @@ comment box to published note pages. Requires Cognito comment identity. See
 ### Parser stage
 
 One step in the Markdown→HTML pipeline (e.g. parse Markdown, resolve wikilinks,
-serialize HTML). CPN ships eight **built-in** stages, and you can **override** a
+serialize HTML). CPN ships nine **built-in** stages, and you can **override** a
 built-in — or add your own — by authoring a stage as a Markdown file in your
 vault. See [parser extensions](parser-extensions.md).
 

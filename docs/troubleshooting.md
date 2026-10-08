@@ -26,6 +26,17 @@ Symptom → cause → fix, grouped by area. For AWS infrastructure issues
   if it's `manual`, or narrower than the publish command you ran, no invalidation
   fired. Re-publish with a broad enough command or invalidate manually.
 
+- **An embed (`![[Note]]`) shows as a plain link or a stray `!`.** The embedding
+  note was published before embeds were supported — republish it (see
+  [Embeds](publishing-model.md#embeds-transclusions)). If it renders as an
+  unpublished link, the target isn't published to this profile, or it's in an
+  access group that some readers of the embedding note can't see.
+- **"Embedded note unavailable."** The target couldn't be loaded for this reader:
+  it was unpublished or deleted, it's restricted to an access group the reader
+  isn't in (signing in may help), or the request failed. **"Embedded section
+  unavailable"** means the target loaded but the embedded heading or `^block`
+  no longer exists.
+
 ## URLs and stacking
 
 - **Stacked-URL commands do nothing / say they need the "Current" scheme.**

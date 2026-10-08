@@ -44,6 +44,7 @@ import remarkMath from 'remark-math';
 
 import remarkObsidianLinks from '../remarkObsidianLinks';
 import remarkLineNumbers from '../remarkLineNumbers';
+import remarkBlockIds from '../remarkBlockIds';
 import remarkCallouts from '../remarkCallouts';
 import type { ParserLibs, Plugin } from './types';
 import type { Node } from 'unist';
@@ -87,6 +88,7 @@ export function buildParserLibs(): ParserLibs {
 		// CPN-internal factories
 		remarkObsidianLinks,
 		remarkLineNumbers,
+		remarkBlockIds,
 		remarkCallouts,
 		// optional plugins — light ones eager
 		rehypeRaw,

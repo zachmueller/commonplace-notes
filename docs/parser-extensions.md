@@ -4,7 +4,7 @@
 > Markdown→HTML pipeline out of the box; this guide is for customizing it.
 
 CPN turns each note's Markdown into HTML by running it through an ordered list of
-**parser stages**. Every stage — including the eight built-ins — is defined as a
+**parser stages**. Every stage — including the nine built-ins — is defined as a
 Markdown file, so you can override a built-in or add your own by authoring a note
 in your vault. No plugin rebuild required.
 
@@ -18,24 +18,25 @@ Stages run in ascending `order`. The pipeline has two halves:
 The `remark-rehype` stage (order 50) is the boundary that converts MDAST → HAST.
 Keep remark stages below order 50 and rehype stages above it.
 
-The default order reproduces CPN's built-in pipeline exactly:
+The default order is:
 
 ```
-010 remark-parse → 020 remark-gfm → 030 line-numbers →
+010 remark-parse → 020 remark-gfm → 030 line-numbers → 035 remark-block-ids →
 040 remark-obsidian-links → 045 remark-callouts → 050 remark-rehype →
 055 rehype-slug → 060 rehype-stringify
 ```
 
 ## The built-in stages
 
-There are **eight** built-in stages:
+There are **nine** built-in stages:
 
 | Order | Name | Tree | What it does |
 |-------|------|------|--------------|
 | 10 | `remark-parse` | remark | Parses Markdown into an MDAST syntax tree (installs the parser). |
 | 20 | `remark-gfm` | remark | GitHub Flavored Markdown: tables, strikethrough, task lists, autolinks. |
 | 30 | `line-numbers` | remark | Tags each node with `class="line"` and `data-line=<source line>`. |
-| 40 | `remark-obsidian-links` | remark | Resolves `[[wikilinks]]` to published-note URLs (or unpublished spans). |
+| 35 | `remark-block-ids` | remark | Turns Obsidian `^block-id` markers into `data-block-id` attributes. |
+| 40 | `remark-obsidian-links` | remark | Resolves `[[wikilinks]]` to published-note URLs (or unpublished spans), and `![[embeds]]` to transclusion placeholders. |
 | 45 | `remark-callouts` | remark | Renders Obsidian `[!type]` callout blockquotes as styled callout boxes. |
 | 50 | `remark-rehype` | rehype | Converts the MDAST (Markdown) tree into a HAST (HTML) tree. |
 | 55 | `rehype-slug` | rehype | Assigns GitHub-style slug `id`s to every heading. |
@@ -48,6 +49,15 @@ A few couplings to respect if you override these:
   `github-slugger`. That's how section links from wikilinks scroll to the right
   heading. If you replace either, keep both producing `github-slugger`-compatible
   slugs.
+- **Block ids.** `remark-block-ids` (35) tags blocks with `data-block-id="abc"`
+  for a `^abc` marker. Block links (`[[Note#^abc]]`) carry `data-heading="^abc"`
+  and block embeds carry `data-block="abc"`; the published site resolves both
+  against `data-block-id`. Keep the attribute name if you replace the stage.
+- **Transclusion placeholders.** `remark-obsidian-links` turns `![[Note]]`
+  embeds of published notes into `.cpn-transclusion` elements carrying
+  `data-uid` (plus `data-heading` or `data-block`), which the published site
+  fills with the target's latest content. Override the stage with
+  `transclusions: false` in its options to render embeds as plain links.
 - **Callout CSS.** `remark-callouts` emits `data-callout-type` values that must
   match the published site's `[data-callout-type="…"]` CSS. Keep the type list in
   sync if you customize it.
@@ -128,12 +138,12 @@ A custom remark stage that upper-cases all heading text. Save it as
 cpn-type: parser
 cpn-parser-name: uppercase-headings
 cpn-parser-stage: remark
-cpn-parser-order: 35
+cpn-parser-order: 47
 cpn-description: "Upper-case all heading text."
 ---
 
-Runs on the Markdown tree (order 35, after wikilinks/callouts resolve, before
-the MDAST→HAST conversion at 50).
+Runs on the Markdown tree (order 47, after wikilinks (40) and callouts (45)
+resolve, before the MDAST→HAST conversion at 50).
 
 ```ts
 // In scope: libs, context, app, utils — NO imports.

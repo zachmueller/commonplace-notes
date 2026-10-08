@@ -16,6 +16,9 @@
  *   3. Custom rehype stage — placement after rehype-slug works.
  *   4. Bad-return-shape stage — failure is isolated; the rest of the pipeline runs.
  *   5. Override-by-name — a vault stage with a built-in's name replaces it.
+ *   6. context.noteStyle is readable from custom stages.
+ *   7. Transclusion placeholders (![[…]]) and block ids (^id).
+ *   8. remark-obsidian-links override with transclusions:false.
  *
  * Run: npx tsx e2e/scripts/test-parser-pipeline.ts
  */
@@ -304,6 +307,167 @@ return libs.defineTransform((tree) => {
 		// context.noteStyle is 'ai' in the stub → serialized as data-note-style="ai".
 		if (!/data-note-style="ai"/.test(html)) errs.push(`stage did not read context.noteStyle (html: ${html})`);
 		check('context-noteStyle-readable', errs);
+	}
+
+	// 7. Transclusions + block ids. Each case: markdown → substrings that must
+	//    (and must not) appear in the rendered HTML.
+	{
+		const cases: Array<{ name: string; md: string; has: string[]; not?: string[] }> = [
+			{
+				name: 'embed · whole note → block placeholder',
+				md: '![[a]]',
+				has: ['<div class="line cpn-transclusion" data-line="1" data-uid="UID-a" data-title="a"><a href="#/uUID-a">a</a></div>'],
+				not: ['!', '<p'],
+			},
+			{
+				name: 'embed · heading section',
+				md: '![[a#My Section]]',
+				has: ['data-uid="UID-a"', 'data-heading="my-section"><a href="#/uUID-a" data-heading="my-section">My Section</a>'],
+			},
+			{
+				name: 'embed · block',
+				md: '![[a#^abc]]',
+				has: ['data-block="abc"><a href="#/uUID-a" data-heading="^abc">a</a>'],
+			},
+			{
+				name: 'embed · several in one paragraph → group',
+				md: '![[a]]\n![[b]]',
+				has: [
+					'<div class="line cpn-transclusion-group" data-line="1">',
+					'<div class="cpn-transclusion" data-uid="UID-a"',
+					'<div class="cpn-transclusion" data-uid="UID-b"',
+				],
+			},
+			{
+				name: 'embed · group with an unpublished member',
+				md: '![[a]]\n![[missing]]',
+				has: ['data-uid="UID-a"', '<p><span class="unpublished-link">missing</span></p>'],
+				not: ['data-uid="UID-missing"'],
+			},
+			{
+				name: 'embed · mid-paragraph → inline span',
+				md: 'See ![[a]] here',
+				has: ['<p class="line" data-line="1">See <span class="cpn-transclusion" data-uid="UID-a" data-title="a"><a href="#/uUID-a">a</a></span> here</p>'],
+			},
+			{
+				name: 'embed · unpublished target → span, no ! or uid',
+				md: '![[missing]]',
+				has: ['<span class="unpublished-link">missing</span>'],
+				not: ['!', 'data-uid', 'cpn-transclusion'],
+			},
+			{
+				name: 'embed · attachment with size alias → path, no !',
+				md: '![[pic.png|300]]',
+				has: ['<span class="unpublished-link">pic.png</span>'],
+				not: ['!', '300', 'data-uid'],
+			},
+			{
+				name: 'embed · inside a heading → plain link',
+				md: '## Title ![[a]]',
+				has: ['<a href="#/uUID-a">a</a></h2>'],
+				not: ['cpn-transclusion', '!'],
+			},
+			{
+				name: 'embed · in a tight list item survives (div is not unwrapped)',
+				md: '- ![[a]]\n- b',
+				has: ['<li class="line" data-line="1">\n<div class="line cpn-transclusion"'],
+			},
+			{
+				name: 'embed · in a table cell → inline span',
+				md: '| x |\n|---|\n| ![[a]] |',
+				has: ['<td class="line" data-line="3"><span class="cpn-transclusion" data-uid="UID-a"'],
+			},
+			{
+				name: 'embed · followed by its own block id',
+				md: '![[a]] ^abc',
+				has: ['class="line cpn-transclusion" data-line="1" data-block-id="abc" data-uid="UID-a"'],
+				not: ['^abc'],
+			},
+			{
+				name: 'block id · trailing on paragraph (no id attribute)',
+				md: 'Some intro. ^intro',
+				has: ['<p class="line" data-line="1" data-block-id="intro">Some intro.</p>'],
+				not: [' id="', '^intro'],
+			},
+			{
+				name: 'block id · list item carries it (tight list)',
+				md: '- First ^li1\n  - nested\n- Second',
+				has: ['<li class="line" data-line="1" data-block-id="li1">First'],
+				not: ['^li1'],
+			},
+			{
+				name: 'block id · list item carries it (loose list)',
+				md: '- First ^li1\n\n- Second',
+				has: ['<li class="line" data-line="1" data-block-id="li1">\n<p class="line" data-line="1">First</p>'],
+			},
+			{
+				name: 'block id · standalone after table',
+				md: '| a |\n|---|\n| 1 |\n\n^tbl',
+				has: ['<table class="line" data-line="1" data-block-id="tbl">'],
+				not: ['^tbl'],
+			},
+			{
+				name: 'block id · standalone after blockquote / callout',
+				md: '> [!note] T\n> body\n\n^co\n\n> quote\n\n^bq',
+				has: ['data-block-id="co" data-callout-type="note"', '<blockquote class="line" data-line="6" data-block-id="bq">'],
+			},
+			{
+				name: 'block id · standalone after code fence (on <code>)',
+				md: '```js\nx()\n```\n\n^code',
+				has: ['<pre><code class="line" data-line="1" data-block-id="code">'],
+			},
+			{
+				name: 'block id · headings and leading markers are left alone',
+				md: '## Heading ^h\n\n^orphan',
+				has: ['Heading ^h</h2>', '<p class="line" data-line="3">^orphan</p>'],
+				not: ['data-block-id'],
+			},
+			{
+				name: 'block id · first duplicate wins',
+				md: 'one ^dup\n\ntwo ^dup',
+				has: ['data-block-id="dup">one</p>', '<p class="line" data-line="3">two</p>'],
+			},
+			{
+				name: 'block links · data-heading="^id", readable text',
+				md: '[[a#^abc]] and [[#^abc]] and [[a#^abc|alias]]',
+				has: [
+					'<a href="#/uUID-a" data-heading="^abc">a</a>',
+					'<a href="#" data-heading="^abc" data-same-note="true">',
+					'<a href="#/uUID-a" data-heading="^abc">alias</a>',
+				],
+			},
+		];
+		for (const c of cases) {
+			const { html, errors } = await assembleAndRender(c.md);
+			const errs = [...errors];
+			for (const h of c.has) if (!html.includes(h)) errs.push(`missing ${JSON.stringify(h)}`);
+			for (const n of c.not ?? []) if (html.includes(n)) errs.push(`unexpected ${JSON.stringify(n)}`);
+			if (errs.length > errors.length) errs.push(`html: ${JSON.stringify(html)}`);
+			check(c.name, errs);
+		}
+	}
+
+	// 8. Override with transclusions:false → embeds render as plain links.
+	{
+		const override = `---
+cpn-type: parser
+cpn-parser-name: remark-obsidian-links
+cpn-parser-stage: remark
+cpn-parser-order: 40
+---
+\`\`\`ts
+return [libs.remarkObsidianLinks, {
+  frontmatterManager: context.frontmatterManager,
+  urlScheme: context.urlScheme,
+  resolveInternalLinks: context.resolveInternalLinks,
+  transclusions: false,
+}];
+\`\`\``;
+		const { html, errors } = await assembleAndRender('![[a]]', [override]);
+		const errs = [...errors];
+		if (html.includes('cpn-transclusion')) errs.push('placeholder emitted despite transclusions:false');
+		if (!html.includes('<p class="line" data-line="1"><a href="#/uUID-a">a</a></p>')) errs.push(`expected a plain link (html: ${html})`);
+		check('override · transclusions:false → links', errs);
 	}
 
 	console.log('');

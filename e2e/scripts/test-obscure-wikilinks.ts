@@ -143,6 +143,21 @@ const CASES: Case[] = [
 		name: 'Verbatim preservation of mixed Markdown around the only link',
 		input: '## H\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\ntext [[Note A]] end  \n',
 		expected: '## H\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\ntext [[AAAA1111|Note A]] end  \n'
+	},
+	{
+		name: 'Embed — ! kept, path swapped for UID',
+		input: '![[Note A]]',
+		expected: '![[AAAA1111|Note A]]'
+	},
+	{
+		name: 'Block embed + alias — ^id kept verbatim',
+		input: '![[Note A#^abc|x]]',
+		expected: '![[AAAA1111#^abc|x]]'
+	},
+	{
+		name: 'Block id marker in prose untouched',
+		input: 'A paragraph ^intro\n',
+		expected: 'A paragraph ^intro\n'
 	}
 ];
 

@@ -153,6 +153,41 @@
 			background-color: rgba(128, 128, 128, 0.15);  /* slightly darker on hover */
 		}
 
+		/* transclusions (![[Note]] embeds): seamless, with a faint left rule
+		   and a source link while hovered */
+		div.cpn-transclusion {
+			position: relative;
+		}
+		div.cpn-transclusion--loaded {
+			border-left: 2px solid transparent;
+			margin-left: -12px;
+			padding-left: 10px;
+		}
+		div.cpn-transclusion--loaded:hover:not(:has(.cpn-transclusion--loaded:hover)) {
+			border-left-color: #ddd;
+		}
+		a.cpn-transclusion-source {
+			font-size: 0.75em;
+			color: #999;
+			border-bottom: none;
+			opacity: 0;
+		}
+		div.cpn-transclusion > a.cpn-transclusion-source {
+			position: absolute;
+			top: 0;
+			right: 0;
+		}
+		.cpn-transclusion--loaded:hover:not(:has(.cpn-transclusion--loaded:hover)) > a.cpn-transclusion-source {
+			opacity: 1;
+		}
+		.cpn-transclusion--unavailable {
+			background-color: rgba(128, 128, 128, 0.1);
+			border-radius: 3px;
+			padding: 2px 4px;
+			color: #666;
+			font-size: 0.9em;
+		}
+
 		/* external links */
 		a:not([href^="#"]) {
 			color: #6f42c1; /* Different color for external links */
@@ -830,6 +865,187 @@ async function loadNoteByParameter(type, value) {
 		}
 	}
 
+// Bind note-link click handling for every a[href^="#"] under root; new panels
+// open after `panel`. Also used on hydrated transclusion content.
+function bindNoteLinks(root, panel) {
+	root.querySelectorAll('a[href^="#"]').forEach(link => {
+		// Remove any existing click handlers first
+		const newLink = link.cloneNode(true);
+		link.parentNode.replaceChild(newLink, link);
+		
+		newLink.addEventListener('click', (e) => {
+			e.preventDefault();
+			e.stopPropagation(); // Stop event bubbling
+			
+			const href = newLink.getAttribute('href').slice(1);
+			console.log('Raw href:', href);
+			
+			const params = parseURLFragment(href);
+			console.log('Parsed params:', params);
+			
+			if (params.length > 0) {
+				const { type, value } = params[0];
+				console.log('Using type:', type, 'value:', value);
+				
+				// If panel is already loaded, scroll to it
+				const panelId = `${type}-${value}`;
+				if (loadedPanels.has(panelId)) {
+					scrollToPanel(panelId);
+				} else {
+					// Wrap in setTimeout to ensure it runs after current call stack
+					setTimeout(() => {
+						addPanel(type, value, panel);
+					}, 0);
+				}
+			}
+		});
+	});
+}
+
+// --------------------------------------------------------------------
+// Transclusions: .cpn-transclusion placeholders (from ![[Note]],
+// ![[Note#Heading]], ![[Note#^block]]) are filled with the target's content
+// from NOTES, keyed by uid, so they always show the latest publish.
+// --------------------------------------------------------------------
+
+const TRANSCLUSION_MAX_DEPTH = 4;
+
+function findBlock(root, id) {
+	const el = Array.from(root.querySelectorAll('[data-block-id]')).find(e => e.getAttribute('data-block-id') === id);
+	if (el && el.tagName === 'CODE' && el.parentElement && el.parentElement.tagName === 'PRE') return el.parentElement;
+	return el || null;
+}
+
+// Whole note, one heading's section, or one block; null if not found.
+function extractTransclusion(note, ph) {
+	const tpl = document.createElement('template');
+	tpl.innerHTML = note.content || '';
+	const frag = tpl.content;
+	const block = ph.dataset.block;
+	const heading = ph.dataset.heading;
+
+	if (block) {
+		const el = findBlock(frag, block);
+		if (!el) return null;
+		if (el.tagName !== 'LI') return [el];
+		const source = el.parentElement;
+		const ordered = !!source && source.tagName === 'OL';
+		const list = document.createElement(ordered ? 'ol' : 'ul');
+		if (ordered) {
+			const items = Array.from(source.children).filter(c => c.tagName === 'LI');
+			const start = parseInt(source.getAttribute('start') || '1', 10) || 1;
+			list.setAttribute('start', String(start + items.indexOf(el)));
+		}
+		list.appendChild(el);
+		return [list];
+	}
+
+	if (heading) {
+		const h = Array.from(frag.querySelectorAll('[id]')).find(e => e.id === heading);
+		if (!h || !/^H[1-6]$/.test(h.tagName)) return null;
+		const level = Number(h.tagName.charAt(1));
+		const nodes = [h];
+		for (let n = h.nextSibling; n; n = n.nextSibling) {
+			if (n.nodeType === 1 && /^H[1-6]$/.test(n.tagName) && Number(n.tagName.charAt(1)) <= level) break;
+			nodes.push(n);
+		}
+		return nodes;
+	}
+
+	return Array.from(frag.childNodes);
+}
+
+// Move embedded ids / block ids / line numbers aside and point the target's
+// same-note links at the target note.
+function prepareTranscludedNodes(nodes, targetUid) {
+	for (const node of nodes) {
+		if (node.nodeType !== 1) continue;
+		for (const el of [node, ...node.querySelectorAll('*')]) {
+			if (el.id) { el.dataset.cpnTid = el.id; el.removeAttribute('id'); }
+			if (el.hasAttribute('data-block-id')) { el.dataset.cpnTblock = el.getAttribute('data-block-id'); el.removeAttribute('data-block-id'); }
+			if (el.hasAttribute('data-line')) { el.dataset.cpnTline = el.getAttribute('data-line'); el.removeAttribute('data-line'); }
+			if (el.tagName === 'A' && el.dataset.sameNote === 'true') {
+				el.setAttribute('href', formatNoteUrl('u', targetUid));
+				delete el.dataset.sameNote;
+			}
+		}
+	}
+}
+
+function transclusionLink(ph, text) {
+	const a = document.createElement('a');
+	a.href = formatNoteUrl('u', ph.dataset.uid);
+	a.textContent = text;
+	return a;
+}
+
+function renderTransclusionFallback(ph, kind, panel) {
+	ph.dataset.state = kind;
+	if (kind === 'cycle' || kind === 'depth') {
+		ph.title = kind === 'cycle'
+			? 'Not embedded: this note is already embedded above'
+			: 'Not embedded: too many nested embeds';
+		return;
+	}
+	ph.classList.add('cpn-transclusion--unavailable');
+	const label = document.createElement('span');
+	label.textContent = kind === 'section-missing' ? 'Embedded section unavailable: ' : 'Embedded note unavailable: ';
+	ph.replaceChildren(label, transclusionLink(ph, ph.dataset.title || ph.dataset.uid));
+	bindNoteLinks(ph, panel);
+}
+
+function retagElement(el, tagName) {
+	const next = document.createElement(tagName);
+	for (const attr of Array.from(el.attributes)) next.setAttribute(attr.name, attr.value);
+	next.replaceChildren(...el.childNodes);
+	el.replaceWith(next);
+	return next;
+}
+
+function isBlankText(n) {
+	return n.nodeType === 3 && !n.textContent.trim();
+}
+
+function hydrateTransclusions(root, ancestors, depth) {
+	const panel = root.closest('.panel');
+	root.querySelectorAll('.cpn-transclusion[data-uid]:not([data-state])').forEach(original => {
+		let ph = original;
+		const uid = ph.dataset.uid;
+		if (ancestors.has(uid)) return renderTransclusionFallback(ph, 'cycle', panel);
+		if (depth >= TRANSCLUSION_MAX_DEPTH) return renderTransclusionFallback(ph, 'depth', panel);
+		const note = NOTES[uid];
+		if (!note) return renderTransclusionFallback(ph, 'unavailable', panel);
+		const nodes = extractTransclusion(note, ph);
+		if (!nodes) return renderTransclusionFallback(ph, 'section-missing', panel);
+		prepareTranscludedNodes(nodes, uid);
+
+		let content = nodes;
+		if (ph.tagName === 'SPAN') {
+			const meaningful = nodes.filter(n => !isBlankText(n));
+			if (meaningful.length === 1 && meaningful[0].tagName === 'P') {
+				content = Array.from(meaningful[0].childNodes);
+			} else {
+				const host = ph.parentElement;
+				if (host && host.tagName === 'P' &&
+					Array.from(host.childNodes).every(n => n === ph || isBlankText(n))) {
+					retagElement(host, 'div');
+				}
+				ph = retagElement(ph, 'div');
+			}
+		}
+
+		const title = note.title || ph.dataset.title || uid;
+		const source = transclusionLink(ph, ph.tagName === 'SPAN' ? '↗' : '↗ ' + title);
+		source.className = 'cpn-transclusion-source';
+		source.title = 'Embedded from: ' + title;
+		ph.replaceChildren(...content, source);
+		ph.classList.add('cpn-transclusion--loaded');
+		ph.dataset.state = 'loaded';
+		bindNoteLinks(ph, panel);
+		hydrateTransclusions(ph, new Set([...ancestors, uid]), depth + 1);
+	});
+}
+
 function createPanel(noteData, position, isError = false) {
 	const panel = document.createElement('div');
 	panel.className = `panel${isError ? ' error' : ''}`;
@@ -898,38 +1114,13 @@ ${closeButton}
 	}
 
 	// Add click handlers for links
-	panel.querySelectorAll('a[href^="#"]').forEach(link => {
-		// Remove any existing click handlers first
-		const newLink = link.cloneNode(true);
-		link.parentNode.replaceChild(newLink, link);
-		
-		newLink.addEventListener('click', (e) => {
-			e.preventDefault();
-			e.stopPropagation(); // Stop event bubbling
-			
-			const href = newLink.getAttribute('href').slice(1);
-			console.log('Raw href:', href);
-			
-			const params = parseURLFragment(href);
-			console.log('Parsed params:', params);
-			
-			if (params.length > 0) {
-				const { type, value } = params[0];
-				console.log('Using type:', type, 'value:', value);
-				
-				// If panel is already loaded, scroll to it
-				const panelId = `${type}-${value}`;
-				if (loadedPanels.has(panelId)) {
-					scrollToPanel(panelId);
-				} else {
-					// Wrap in setTimeout to ensure it runs after current call stack
-					setTimeout(() => {
-						addPanel(type, value, panel);
-					}, 0);
-				}
-			}
-		});
-	});
+	bindNoteLinks(panel, panel);
+
+	// Fill ![[embed]] placeholders from NOTES (latest revision, by uid).
+	if (!isError) {
+		const contentEl = panel.querySelector('.content');
+		if (contentEl) hydrateTransclusions(contentEl, new Set([noteData.uid]), 0);
+	}
 
 	// Add click handler for close button
 	const closeBtn = panel.querySelector('.close-button');

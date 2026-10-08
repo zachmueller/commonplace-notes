@@ -528,6 +528,59 @@ a[href^="#"].note-opened:hover {
 	background-color: var(--unpublished-bg-hover);
 }
 
+/* transclusions (![[Note]] embeds), filled in at view time by
+   hydrateTransclusions. Seamless: no frame, just a faint left rule and a
+   source link while hovered (innermost embed only when nested). */
+div.cpn-transclusion {
+	position: relative;
+}
+div.cpn-transclusion--loaded {
+	border-left: 2px solid transparent;
+	margin-left: -12px;
+	padding-left: 10px;
+	transition: border-color 0.15s;
+}
+div.cpn-transclusion--loaded:hover:not(:has(.cpn-transclusion--loaded:hover)) {
+	border-left-color: var(--border-color);
+}
+span.cpn-transclusion--loaded:hover:not(:has(.cpn-transclusion--loaded:hover)) {
+	background-color: var(--link-bg-hover);
+	border-radius: 3px;
+}
+a.cpn-transclusion-source,
+a.cpn-transclusion-source.note-opened {
+	font-size: 0.75em;
+	color: var(--text-muted);
+	border-bottom: none;
+	background: none;
+	padding: 0 2px;
+	margin: 0;
+	opacity: 0;
+	transition: opacity 0.15s;
+}
+div.cpn-transclusion > a.cpn-transclusion-source {
+	position: absolute;
+	top: 0;
+	right: 0;
+}
+.cpn-transclusion--loaded:hover:not(:has(.cpn-transclusion--loaded:hover)) > a.cpn-transclusion-source,
+a.cpn-transclusion-source:focus-visible {
+	opacity: 1;
+}
+@media (hover: none) {
+	a.cpn-transclusion-source { opacity: 1; }
+}
+.cpn-transclusion[data-state="loading"] > a {
+	opacity: 0.5;
+}
+.cpn-transclusion--unavailable {
+	background-color: var(--unpublished-bg);
+	border-radius: 3px;
+	padding: 2px 4px;
+	color: var(--text-secondary);
+	font-size: 0.9em;
+}
+
 /* external links */
 a:not([href^="#"]) {
 	color: var(--link-external);
@@ -2287,15 +2340,30 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			return panel || null;
 		}
 
-		// Scroll a panel to one of its heading ids and briefly highlight it.
-		// Scoped to the given panel because heading ids are only unique within a
-		// single note's rendered HTML (the same note, or two notes with colliding
-		// slugs, may be open in multiple panels at once).
+		// Find a section anchor within root: a heading id (rehype-slug), or a block
+		// for "^id" (data-block-id from the remark-block-ids stage). CSS.escape
+		// guards slugs that start with a digit or contain selector-special
+		// characters (e.g. a "## 2024 plans" heading -> id "2024-plans").
+		function findAnchor(root, slug) {
+			if (!root || !slug) return null;
+			if (slug.charAt(0) === '^') {
+				const el = root.querySelector(`[data-block-id="${CSS.escape(slug.slice(1))}"]`);
+				// A code fence's attributes sit on the inner <code>; the block is its <pre>.
+				if (el && el.tagName === 'CODE' && el.parentElement && el.parentElement.tagName === 'PRE') {
+					return el.parentElement;
+				}
+				return el;
+			}
+			return root.querySelector('#' + CSS.escape(slug));
+		}
+
+		// Scroll a panel to one of its heading ids (or block ids) and briefly
+		// highlight it. Scoped to the given panel because heading ids are only
+		// unique within a single note's rendered HTML (the same note, or two notes
+		// with colliding slugs, may be open in multiple panels at once).
 		function scrollToHeading(panelEl, headingSlug) {
 			if (!panelEl || !headingSlug) return;
-			// CSS.escape guards slugs that start with a digit or contain selector-
-			// special characters (e.g. a "## 2024 plans" heading -> id "2024-plans").
-			const target = panelEl.querySelector('#' + CSS.escape(headingSlug));
+			const target = findAnchor(panelEl, headingSlug);
 			if (!target) return; // missing/renamed heading -> graceful no-op
 			target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 			target.classList.add('heading-target');
@@ -2345,6 +2413,111 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				const checkbox = panel.querySelector('.diff-wrap-toggle input');
 				if (checkbox) checkbox.checked = on;
 				syncDiffRowHeights(panel);
+			});
+		}
+
+		// Copy-to-clipboard button on every code fence under root matching
+		// selector. Mirrors the permanent-link copy handler in createPanel
+		// (navigator.clipboard.writeText). Skips fences that already have one.
+		const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+		const CHECK_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+		function addCopyCodeButtons(root, selector = 'pre') {
+			root.querySelectorAll(selector).forEach(pre => {
+				const code = pre.querySelector('code');
+				if (!code || pre.querySelector(':scope > .copy-code-button')) return;
+				const btn = document.createElement('button');
+				btn.type = 'button';
+				btn.className = 'copy-code-button';
+				btn.setAttribute('aria-label', 'Copy code');
+				btn.innerHTML = COPY_ICON_SVG;
+				let resetTimer = null;
+				btn.addEventListener('click', async () => {
+					// textContent excludes the button (it's a sibling of <code>);
+					// trim the trailing newline the code handler preserves.
+					const text = code.textContent.replace(/\n$/, '');
+					try {
+						await navigator.clipboard.writeText(text);
+						btn.classList.add('copied');
+						btn.innerHTML = CHECK_ICON_SVG;
+						btn.setAttribute('aria-label', 'Copied');
+						clearTimeout(resetTimer);
+						resetTimer = setTimeout(() => {
+							btn.classList.remove('copied');
+							btn.innerHTML = COPY_ICON_SVG;
+							btn.setAttribute('aria-label', 'Copy code');
+						}, 1500);
+					} catch (err) {
+						console.error('Failed to copy code:', err);
+					}
+				});
+				pre.appendChild(btn);
+			});
+		}
+
+		// Bind note-link click handling for every a[href^="#"] under root. `panel`
+		// is the panel the links live in: new panels open after it, and same-note
+		// links scroll within it. Also used on hydrated transclusion content.
+		function bindNoteLinks(root, panel) {
+			root.querySelectorAll('a[href^="#"]').forEach(link => {
+				// Remove any existing click handlers first
+				const newLink = link.cloneNode(true);
+				link.parentNode.replaceChild(newLink, link);
+				
+				newLink.addEventListener('click', (e) => {
+					e.preventDefault();
+					e.stopPropagation(); // Stop event bubbling
+
+					// Section-anchor target (if any), set by remarkObsidianLinks and
+					// preserved across the cloneNode above.
+					const headingSlug = newLink.dataset.heading || null;
+
+					// Same-note link [[#Heading]]: scroll within THIS panel (the one
+					// containing the link). Its href is just "#", so handle it before
+					// the URL-fragment parsing below (which would yield no params).
+					if (newLink.dataset.sameNote === 'true') {
+						if (headingSlug) scrollToHeading(panel, headingSlug);
+						return;
+					}
+
+					const href = newLink.getAttribute('href').slice(1);
+					console.log('Raw href:', href);
+
+					const params = parseURLFragment(href);
+					console.log('Parsed params:', params);
+
+					if (params.length > 0) {
+						const { type, value, params: segParams } = params[0];
+						console.log('Using type:', type, 'value:', value);
+
+						// If panel is already loaded, scroll to it. Key on the full
+						// segment (incl. any ;diff=) so a "diff vs previous" link opens a
+						// distinct diff panel rather than matching the plain note.
+						const panelId = panelKey(type, value, segParams);
+						if (loadedPanels.has(panelId)) {
+							const openPanel = scrollToPanel(panelId);
+							if (headingSlug && openPanel) scrollToHeading(openPanel, headingSlug);
+						} else {
+							// Wrap in setTimeout to ensure it runs after current call stack.
+							// Pass segParams through so ;diff= (and any future per-note param)
+							// carried on the link reaches addPanel.
+							setTimeout(() => {
+								addPanel(type, value, panel, headingSlug, segParams);
+							}, 0);
+						}
+					}
+				});
+			});
+		}
+
+		// Coalesce updateOpenedNoteLinks() calls (one per hydrated embed batch)
+		// into a single pass per frame.
+		let openedLinksRefreshQueued = false;
+		function scheduleOpenedLinksRefresh() {
+			if (openedLinksRefreshQueued) return;
+			openedLinksRefreshQueued = true;
+			requestAnimationFrame(() => {
+				openedLinksRefreshQueued = false;
+				updateOpenedNoteLinks();
 			});
 		}
 
@@ -2523,91 +2696,22 @@ ${closeButton}
 
 			// Copy-to-clipboard button on every rendered code fence. Scoped to
 			// `.content pre`, so it skips inline <code> (no <pre>), error panels,
-			// and diff panels (those use .diff-body / no .content). Mirrors the
-			// permanent-link copy handler below (navigator.clipboard.writeText).
-			const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-			const CHECK_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-			panel.querySelectorAll('.content pre').forEach(pre => {
-				const code = pre.querySelector('code');
-				if (!code) return;
-				const btn = document.createElement('button');
-				btn.type = 'button';
-				btn.className = 'copy-code-button';
-				btn.setAttribute('aria-label', 'Copy code');
-				btn.innerHTML = COPY_ICON_SVG;
-				let resetTimer = null;
-				btn.addEventListener('click', async () => {
-					// textContent excludes the button (it's a sibling of <code>);
-					// trim the trailing newline the code handler preserves.
-					const text = code.textContent.replace(/\n$/, '');
-					try {
-						await navigator.clipboard.writeText(text);
-						btn.classList.add('copied');
-						btn.innerHTML = CHECK_ICON_SVG;
-						btn.setAttribute('aria-label', 'Copied');
-						clearTimeout(resetTimer);
-						resetTimer = setTimeout(() => {
-							btn.classList.remove('copied');
-							btn.innerHTML = COPY_ICON_SVG;
-							btn.setAttribute('aria-label', 'Copy code');
-						}, 1500);
-					} catch (err) {
-						console.error('Failed to copy code:', err);
-					}
-				});
-				pre.appendChild(btn);
-			});
+			// and diff panels (those use .diff-body / no .content).
+			addCopyCodeButtons(panel, '.content pre');
 
 			// Add click handlers for links
-			panel.querySelectorAll('a[href^="#"]').forEach(link => {
-				// Remove any existing click handlers first
-				const newLink = link.cloneNode(true);
-				link.parentNode.replaceChild(newLink, link);
-				
-				newLink.addEventListener('click', (e) => {
-					e.preventDefault();
-					e.stopPropagation(); // Stop event bubbling
+			bindNoteLinks(panel, panel);
 
-					// Section-anchor target (if any), set by remarkObsidianLinks and
-					// preserved across the cloneNode above.
-					const headingSlug = newLink.dataset.heading || null;
-
-					// Same-note link [[#Heading]]: scroll within THIS panel (the one
-					// containing the link). Its href is just "#", so handle it before
-					// the URL-fragment parsing below (which would yield no params).
-					if (newLink.dataset.sameNote === 'true') {
-						if (headingSlug) scrollToHeading(panel, headingSlug);
-						return;
-					}
-
-					const href = newLink.getAttribute('href').slice(1);
-					console.log('Raw href:', href);
-
-					const params = parseURLFragment(href);
-					console.log('Parsed params:', params);
-
-					if (params.length > 0) {
-						const { type, value, params: segParams } = params[0];
-						console.log('Using type:', type, 'value:', value);
-
-						// If panel is already loaded, scroll to it. Key on the full
-						// segment (incl. any ;diff=) so a "diff vs previous" link opens a
-						// distinct diff panel rather than matching the plain note.
-						const panelId = panelKey(type, value, segParams);
-						if (loadedPanels.has(panelId)) {
-							const openPanel = scrollToPanel(panelId);
-							if (headingSlug && openPanel) scrollToHeading(openPanel, headingSlug);
-						} else {
-							// Wrap in setTimeout to ensure it runs after current call stack.
-							// Pass segParams through so ;diff= (and any future per-note param)
-							// carried on the link reaches addPanel.
-							setTimeout(() => {
-								addPanel(type, value, panel, headingSlug, segParams);
-							}, 0);
-						}
-					}
-				});
-			});
+			// Fill ![[embed]] placeholders with the targets' LATEST content (looked
+			// up by uid, so an old #/p revision still shows current embeds). Async
+			// and fire-and-forget: the note's own heading ids exist already, so a
+			// pending heading scroll isn't affected. Error/diff panels have none.
+			if (!isError && !isDiff) {
+				const contentEl = panel.querySelector('.content');
+				if (contentEl) {
+					hydrateTransclusions(contentEl, { panel, ancestors: new Set([noteData.uid]), depth: 0 });
+				}
+			}
 
 			// Add click handler for close button
 			const closeBtn = panel.querySelector('.close-button');
@@ -3626,6 +3730,235 @@ ${closeButton}
 				outputFormat: 'side-by-side'
 			});
 			return { html, leftHash, rightHash };
+		}
+
+		// ====================================================================
+		// Transclusions. remarkObsidianLinks publishes ![[Note]], ![[Note#Heading]]
+		// and ![[Note#^block]] as .cpn-transclusion placeholders carrying only the
+		// target's uid (+ data-heading / data-block), with a plain link inside as
+		// the no-JS fallback. Here each placeholder is resolved to the target's
+		// LATEST revision (uid-to-hash), so old revisions of the embedding note
+		// still show current content, and gating is re-checked per reader.
+		// ====================================================================
+
+		const TRANSCLUSION_MAX_DEPTH = 4;
+		// uid -> Promise<{ note } | { gate } | { forbidden, status } | { missing }>,
+		// shared by every embed of the same note on this page. Failures are
+		// dropped so a later panel can retry.
+		const transclusionNoteCache = new Map();
+
+		function fetchTranscludedNote(uid) {
+			if (!transclusionNoteCache.has(uid)) {
+				const pending = (async () => {
+					let hash;
+					try {
+						hash = await resolveHash('u', uid);
+					} catch (e) {
+						return { missing: true };
+					}
+					const result = await fetchNoteJson(hash);
+					if (result.note) result.note.hash = hash;
+					return result;
+				})().catch(err => {
+					console.error('Error loading embedded note:', err);
+					return { missing: true };
+				});
+				transclusionNoteCache.set(uid, pending);
+				pending.then(result => {
+					if (!result.note) transclusionNoteCache.delete(uid);
+				});
+			}
+			return transclusionNoteCache.get(uid);
+		}
+
+		// The nodes a placeholder embeds from the target note's HTML: everything,
+		// one heading's section (the heading and following siblings up to the next
+		// heading of the same or higher level), or one block. Parsed in a
+		// <template>, so nothing loads or runs until inserted. Null if the heading
+		// or block isn't there (anymore).
+		function extractTransclusion(note, ph) {
+			const tpl = document.createElement('template');
+			tpl.innerHTML = note.content || '';
+			const frag = tpl.content;
+			const block = ph.dataset.block;
+			const heading = ph.dataset.heading;
+
+			if (block) {
+				const el = findAnchor(frag, '^' + block);
+				if (!el) return null;
+				if (el.tagName !== 'LI') return [el];
+				// A list item needs a list around it; an <ol> item keeps its number.
+				const source = el.parentElement;
+				const ordered = !!source && source.tagName === 'OL';
+				const list = document.createElement(ordered ? 'ol' : 'ul');
+				if (ordered) {
+					const items = Array.from(source.children).filter(c => c.tagName === 'LI');
+					const start = parseInt(source.getAttribute('start') || '1', 10) || 1;
+					list.setAttribute('start', String(start + items.indexOf(el)));
+				}
+				list.appendChild(el);
+				return [list];
+			}
+
+			if (heading) {
+				const h = findAnchor(frag, heading);
+				if (!h || !/^H[1-6]$/.test(h.tagName)) return null;
+				const level = Number(h.tagName.charAt(1));
+				const nodes = [h];
+				for (let n = h.nextSibling; n; n = n.nextSibling) {
+					if (n.nodeType === 1 && /^H[1-6]$/.test(n.tagName) && Number(n.tagName.charAt(1)) <= level) break;
+					nodes.push(n);
+				}
+				return nodes;
+			}
+
+			return Array.from(frag.childNodes);
+		}
+
+		// Make embedded nodes safe to drop into another note: move ids, block ids
+		// and line numbers to data-cpn-t* so the host panel's heading/block scroll
+		// (and anything keyed on data-line) only ever sees the host's own, and
+		// point the target's same-note links at the target note.
+		function prepareTranscludedNodes(nodes, targetUid) {
+			const href = '#/u' + encodeURIComponent(targetUid);
+			for (const node of nodes) {
+				if (node.nodeType !== 1) continue;
+				for (const el of [node, ...node.querySelectorAll('*')]) {
+					if (el.id) {
+						el.dataset.cpnTid = el.id;
+						el.removeAttribute('id');
+					}
+					if (el.hasAttribute('data-block-id')) {
+						el.dataset.cpnTblock = el.getAttribute('data-block-id');
+						el.removeAttribute('data-block-id');
+					}
+					if (el.hasAttribute('data-line')) {
+						el.dataset.cpnTline = el.getAttribute('data-line');
+						el.removeAttribute('data-line');
+					}
+					if (el.tagName === 'A' && el.dataset.sameNote === 'true') {
+						el.setAttribute('href', href);
+						delete el.dataset.sameNote;
+					}
+				}
+			}
+		}
+
+		// Link to a placeholder's target (and its section). Built with DOM APIs:
+		// the title comes from note data and is never parsed as HTML.
+		function transclusionLink(ph, text) {
+			const a = document.createElement('a');
+			a.href = '#/u' + encodeURIComponent(ph.dataset.uid);
+			const anchor = ph.dataset.block ? '^' + ph.dataset.block : ph.dataset.heading;
+			if (anchor) a.dataset.heading = anchor;
+			a.textContent = text;
+			return a;
+		}
+
+		// kind: 'unavailable' | 'section-missing' (visible notice + link), or
+		// 'cycle' | 'depth' (keep the published fallback link, explain on hover).
+		function renderTransclusionFallback(ph, kind) {
+			ph.dataset.state = kind;
+			if (kind === 'cycle' || kind === 'depth') {
+				ph.title = kind === 'cycle'
+					? 'Not embedded: this note is already embedded above'
+					: 'Not embedded: too many nested embeds';
+				return;
+			}
+			ph.classList.add('cpn-transclusion--unavailable');
+			const label = document.createElement('span');
+			label.className = 'cpn-transclusion-label';
+			label.textContent = kind === 'section-missing'
+				? 'Embedded section unavailable: '
+				: 'Embedded note unavailable: ';
+			const children = [label, transclusionLink(ph, ph.dataset.title || ph.dataset.uid)];
+			if (kind === 'unavailable' && offerSignIn() && hostedUiLoginUrl()) {
+				const signIn = document.createElement('a');
+				signIn.className = 'comment-signin transclusion-signin';
+				signIn.href = hostedUiLoginUrl();
+				signIn.textContent = 'Sign in';
+				children.push(document.createTextNode(' · '), signIn);
+			}
+			ph.replaceChildren(...children);
+			bindNoteLinks(ph, ph.closest('.panel'));
+		}
+
+		// Swap an element for a new one with another tag, keeping attributes and
+		// children. Returns the replacement.
+		function retagElement(el, tagName) {
+			const next = document.createElement(tagName);
+			for (const attr of Array.from(el.attributes)) next.setAttribute(attr.name, attr.value);
+			next.replaceChildren(...el.childNodes);
+			el.replaceWith(next);
+			return next;
+		}
+
+		function isBlankText(n) {
+			return n.nodeType === 3 && !n.textContent.trim();
+		}
+
+		async function hydrateOne(ph, ctx) {
+			const uid = ph.dataset.uid;
+			if (ctx.ancestors.has(uid)) return renderTransclusionFallback(ph, 'cycle');
+			if (ctx.depth >= TRANSCLUSION_MAX_DEPTH) return renderTransclusionFallback(ph, 'depth');
+
+			ph.dataset.state = 'loading';
+			const result = await fetchTranscludedNote(uid);
+			// gate: cpnAuthGate is reloading the page for sign-in (or already tried).
+			if (!result.note) return renderTransclusionFallback(ph, 'unavailable');
+			const note = result.note;
+
+			const nodes = extractTransclusion(note, ph);
+			if (!nodes) return renderTransclusionFallback(ph, 'section-missing');
+			prepareTranscludedNodes(nodes, uid);
+
+			let content = nodes;
+			if (ph.tagName === 'SPAN') {
+				const meaningful = nodes.filter(n => !isBlankText(n));
+				if (meaningful.length === 1 && meaningful[0].tagName === 'P') {
+					// A single paragraph flows inline into the host sentence.
+					content = Array.from(meaningful[0].childNodes);
+				} else {
+					// Block content can't live in a span: become a div, and if the
+					// embed is alone in its paragraph, that paragraph becomes one too.
+					const host = ph.parentElement;
+					if (host && host.tagName === 'P' &&
+						Array.from(host.childNodes).every(n => n === ph || isBlankText(n))) {
+						retagElement(host, 'div');
+					}
+					ph = retagElement(ph, 'div');
+				}
+			}
+
+			const source = transclusionLink(ph, ph.tagName === 'SPAN' ? '↗' : '↗ ' + (note.title || ph.dataset.title || uid));
+			source.className = 'cpn-transclusion-source';
+			source.title = 'Embedded from: ' + (note.title || ph.dataset.title || uid);
+			ph.replaceChildren(...content, source);
+			ph.classList.add('cpn-transclusion--loaded');
+			if (note.gated) ph.classList.add('cpn-transclusion--gated');
+			ph.dataset.state = 'loaded';
+
+			addCopyCodeButtons(ph);
+			bindNoteLinks(ph, ctx.panel);
+			await hydrateTransclusions(ph, {
+				panel: ctx.panel,
+				ancestors: new Set([...ctx.ancestors, uid]),
+				depth: ctx.depth + 1
+			});
+		}
+
+		// Hydrate every not-yet-handled placeholder under root (in parallel; each
+		// recurses into its own injected content). Never rejects.
+		async function hydrateTransclusions(root, ctx) {
+			const placeholders = Array.from(root.querySelectorAll('.cpn-transclusion[data-uid]:not([data-state])'));
+			if (placeholders.length === 0) return;
+			await Promise.all(placeholders.map(ph =>
+				hydrateOne(ph, ctx).catch(err => {
+					console.error('Error hydrating embed:', err);
+					if (ph.isConnected) renderTransclusionFallback(ph, 'unavailable');
+				})
+			));
+			scheduleOpenedLinksRefresh();
 		}
 
 		// Resolve phase: fetch + build all the data a panel needs WITHOUT touching the

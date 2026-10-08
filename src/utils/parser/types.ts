@@ -130,6 +130,7 @@ export interface ParserLibs {
 	// CPN-internal factories (so overrides can delegate to the originals)
 	remarkObsidianLinks: typeof import('../remarkObsidianLinks').default;
 	remarkLineNumbers: typeof import('../remarkLineNumbers').default;
+	remarkBlockIds: typeof import('../remarkBlockIds').default;
 	remarkCallouts: typeof import('../remarkCallouts').default;
 	// optional plugins — light ones eager
 	rehypeRaw: unknown;

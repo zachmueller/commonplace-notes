@@ -70,12 +70,15 @@ function makeFetch() {
 			return jsonResponse(noteJson(UID));
 		}
 		// config.json and anything else: 404-ish
-		return { ok: false, status: 404, json: async () => ({}) } as any;
+		return { ok: false, status: 404, headers: noHeaders, json: async () => ({}) } as any;
 	};
 }
 
+// cpnAuthGate reads response.headers on every fetch.
+const noHeaders = { get: () => null };
+
 function jsonResponse(obj: any) {
-	return { ok: true, status: 200, json: async () => obj } as any;
+	return { ok: true, status: 200, headers: noHeaders, json: async () => obj } as any;
 }
 
 // ---------------------------------------------------------------------------

@@ -21,7 +21,16 @@ export interface ParsedWikilink {
 	alias: string;
 	/** True for same-note section links like `[[#Heading]]` (no note path, has a heading). */
 	isSameNote: boolean;
+	/**
+	 * Block id for block references (`[[Note#^abc]]` → `'abc'`). Empty unless
+	 * `heading` is `^` followed by a valid Obsidian block id. `heading` itself is
+	 * left untouched (`'^abc'`) so the raw scrubber re-emits it verbatim.
+	 */
+	blockId: string;
 }
+
+/** Obsidian block ids: letters, digits and dashes. */
+const BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 
 /**
  * Parse the inner text of a wikilink (between `[[` and `]]`).
@@ -35,6 +44,7 @@ export interface ParsedWikilink {
  * - `Note#Sec|a|b`       → { notePath: 'Note', heading: 'Sec', alias: 'a|b' }
  * - `Note|a#b`           → { notePath: 'Note', heading: '', alias: 'a#b' }
  * - `#Heading`           → { notePath: '', heading: 'Heading', alias: '', isSameNote: true }
+ * - `Note#^abc`          → { notePath: 'Note', heading: '^abc', alias: '', blockId: 'abc' }
  */
 export function parseWikilinkInner(linkText: string): ParsedWikilink {
 	// Split on the first '|' → [link, alias]. The '#' is parsed from the link
@@ -47,10 +57,13 @@ export function parseWikilinkInner(linkText: string): ParsedWikilink {
 	const notePath = hashIdx === -1 ? link : link.slice(0, hashIdx);
 	const heading = hashIdx === -1 ? '' : link.slice(hashIdx + 1);
 
+	const blockId = heading.startsWith('^') && BLOCK_ID_RE.test(heading.slice(1)) ? heading.slice(1) : '';
+
 	return {
 		notePath,
 		heading,
 		alias,
-		isSameNote: notePath === '' && heading !== ''
+		isSameNote: notePath === '' && heading !== '',
+		blockId
 	};
 }

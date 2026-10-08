@@ -65,6 +65,45 @@ shape the output:
   HTML and search are unaffected. Turn it off if your own tooling consumes the
   raw Markdown and needs literal titles.
 
+## Embeds (transclusions)
+
+Obsidian embeds of other published notes render their content in place:
+
+- `![[Note]]` — the whole note.
+- `![[Note#Heading]]` — that heading's section: the heading and everything
+  after it up to the next heading of the same or higher level.
+- `![[Note#^abc]]` — one block, marked in the target with a trailing ` ^abc`
+  (or a `^abc` line right after a table, list, quote or code block). A
+  numbered-list item keeps its number.
+
+Embeds are **live**. The published note stores only the target's UID; the site
+fetches the target's *latest* published revision when the page is viewed. Editing
+and republishing the target updates every note that embeds it — including old
+revisions opened by permalink — without republishing those notes, and their
+content hashes don't change.
+
+Visibility follows the same rule as links: an embed renders only when every
+reader who can see the embedding note could also see the target. Otherwise it
+appears as an unpublished link, without the target's UID or title. The site also
+re-checks each reader's access when it loads the target, and shows **Embedded
+note unavailable** (or **Embedded section unavailable**, when the heading or
+block no longer exists) instead of the content. A note embedding itself, or a
+chain more than four embeds deep, stops at a plain link.
+
+Limitations:
+
+- Images and other attachments (`![[pic.png]]`) aren't published; they render as
+  unpublished links.
+- Site search and chat index each note's own text only, not embedded content.
+- A target republished while the page is open appears after a reload.
+- `\![[Note]]` (escaped) is still treated as an embed.
+
+> **Upgrading.** Notes published before embeds were supported keep their old
+> HTML until republished, because their content hash doesn't change. Run
+> **Publish all notes** with CloudFront invalidation once after upgrading. For
+> local publishing, delete the cached `local-template.html` so the updated
+> template is downloaded.
+
 ## Publish scope
 
 Four commands publish different sets of notes (all resolve notes for a chosen
