@@ -184,12 +184,12 @@ export class NoteManager {
 							// Per-note access: this HTML is shared by every partition copy
 							// of the current note, so only resolve the link when the target
 							// is visible in all of them. Otherwise it renders like a link to
-							// an unpublished note (no uid, no title leak).
-							if (profile) {
-								const targetAccess = this.resolveNoteAccess(targetFile, profile);
-								if (!targetAccess.ok || !linkVisibleFrom(sourceGroups, targetAccess.groups)) {
-									return null;
-								}
+							// an unpublished note (no uid, no title leak). With no matching
+							// profile the target's access can't be checked, so fail closed.
+							if (!profile) return null;
+							const targetAccess = this.resolveNoteAccess(targetFile, profile);
+							if (!targetAccess.ok || !linkVisibleFrom(sourceGroups, targetAccess.groups)) {
+								return null;
 							}
 							return {
 								uid,

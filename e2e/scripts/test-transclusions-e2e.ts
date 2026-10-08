@@ -22,7 +22,10 @@
  *      rule rather than a fail-closed config).
  *   5. Editing and re-queuing the target changes the target's hash but leaves
  *      the parent's hash and HTML unchanged (embeds are resolved at view time).
- *   6. No plugin errors captured during the run.
+ *   6. A profile ID with no matching profile fails closed: a link or embed to
+ *      a (gated) note published only under that ID renders as an unpublished
+ *      span, without the target's UID.
+ *   7. No plugin errors captured during the run.
  *
  * Run: npx tsx e2e/scripts/test-transclusions-e2e.ts
  */
@@ -38,6 +41,9 @@ const PARENT_NOTE = "Trans-Parent.md";
 const TARGET_NOTE = "Trans-Target.md";
 const UNPUBLISHED_NOTE = "Trans-Unpublished.md";
 const GATED_NOTE = "Trans-Gated.md";
+const ORPHAN_NOTE = "Trans-Orphan.md";
+// Listed in the orphan note's publish contexts but absent from settings.
+const GHOST_PROFILE_ID = "ghost-profile";
 const PROFILE_ID = "public";
 const GROUP = "members";
 
@@ -295,8 +301,45 @@ async function testParentHashStable(ctx: TestContext): Promise<void> {
 	}
 }
 
+async function testMissingProfileFailsClosed(ctx: TestContext): Promise<void> {
+	console.log("\nTest 6: a profile ID with no matching profile resolves no links");
+	const probe = await ctx.page.evaluate(
+		async ({ parentName, orphanName, ghostId }) => {
+			const app = (window as any).app;
+			const plugin = app?.plugins?.plugins?.["commonplace-notes"];
+			if (plugin.settings.publishingProfiles.some((p: any) => p.id === ghostId)) {
+				return { error: `profile ${ghostId} unexpectedly exists` };
+			}
+			const parent = app.vault.getAbstractFileByPath(parentName);
+			const orphan = app.vault.getAbstractFileByPath(orphanName);
+			if (!parent || !orphan) return { error: "fixture note not found" };
+			const orphanUid = plugin.frontmatterManager.getNoteUID(orphan);
+			const html = await plugin.noteManager.markdownToHtml(
+				"Link [[Trans-Orphan]] and embed:\n\n![[Trans-Orphan]]\n", parent, ghostId,
+			);
+			return { html: html as string, orphanUid: orphanUid as string | null };
+		},
+		{ parentName: PARENT_NOTE, orphanName: ORPHAN_NOTE, ghostId: GHOST_PROFILE_ID },
+	);
+	if (probe.error) {
+		ctx.fail("Missing profile fails closed", probe.error);
+		return;
+	}
+	const html = probe.html ?? "";
+	if (!probe.orphanUid) {
+		ctx.fail("Missing profile fails closed", "orphan note has no UID to check against");
+		return;
+	}
+	const spans = (html.match(/<span class="unpublished-link">Trans-Orphan<\/span>/g) || []).length;
+	if (spans === 2 && !html.includes(probe.orphanUid) && !html.includes("cpn-transclusion")) {
+		ctx.pass("Missing profile fails closed", "link and embed render as unpublished spans; UID absent");
+	} else {
+		ctx.fail("Missing profile fails closed", `expected 2 unpublished spans and no UID ${probe.orphanUid}\n--- html ---\n${html}`);
+	}
+}
+
 async function testNoErrors(ctx: TestContext): Promise<void> {
-	console.log("\nTest 6: no plugin errors captured");
+	console.log("\nTest 7: no plugin errors captured");
 	const errors = ctx.collector.getLogsByLevel("error");
 	if (errors.length === 0) {
 		ctx.pass("No plugin errors", "0 error-level log entries");
@@ -318,6 +361,7 @@ async function tests(ctx: TestContext): Promise<void> {
 		await testTargetBlockId(ctx);
 		await testHiddenTargets(ctx);
 		await testParentHashStable(ctx);
+		await testMissingProfileFailsClosed(ctx);
 	} finally {
 		await restoreProfile(ctx);
 	}
@@ -336,8 +380,13 @@ runTest(
 			createTestNote(vaultPath, TARGET_NOTE, PUBLISH_FM + TARGET_BODY);
 			createTestNote(vaultPath, UNPUBLISHED_NOTE, "# Unpublished\n\nNot opted in.\n");
 			createTestNote(vaultPath, GATED_NOTE, GATED_FM + "# Gated\n\nMembers only.\n");
+			createTestNote(
+				vaultPath,
+				ORPHAN_NOTE,
+				`---\ncpn-publish-contexts:\n  - ${GHOST_PROFILE_ID}\ncpn-access-groups:\n  - ${GROUP}\n---\n# Orphan\n\nPublished only to a profile that doesn't exist.\n`,
+			);
 		},
-		cleanupFiles: [PARENT_NOTE, TARGET_NOTE, UNPUBLISHED_NOTE, GATED_NOTE],
+		cleanupFiles: [PARENT_NOTE, TARGET_NOTE, UNPUBLISHED_NOTE, GATED_NOTE, ORPHAN_NOTE],
 	},
 	tests,
 );

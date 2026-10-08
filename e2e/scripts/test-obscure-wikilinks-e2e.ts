@@ -7,7 +7,7 @@
  * published raw Markdown — while leaving the rendered HTML, same-note links,
  * and the author's Markdown structure intact.
  *
- * It drives NoteManager.queueNote('default') on a fixture note and reads the
+ * It drives NoteManager.queueNote('public') on a fixture note and reads the
  * resulting NoteState back out of the pendingNotes map, so it inspects exactly
  * the `raw`/`content`/`currentHash` that would be serialized into the staged
  * JSON — without depending on any AWS upload.
@@ -37,9 +37,9 @@ import { createTestNote } from "../lib/test-helpers";
 
 const SOURCE_NOTE = "Obscure-Source.md";
 const TARGET_NOTE = "Obscure-Target.md";
-const PROFILE_ID = "default";
+const PROFILE_ID = "public";
 
-// Frontmatter that opts a note into the `default` publish profile.
+// Frontmatter that opts a note into the `public` publish profile (the test vault's only profile).
 const PUBLISH_FM = `---\ncpn-publish-contexts:\n  - ${PROFILE_ID}\n---\n`;
 
 // The source note exercises every branch of the scrubber in one body:
