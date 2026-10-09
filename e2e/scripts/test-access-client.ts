@@ -88,8 +88,10 @@ async function boot(config: any, log: string[], viewer: Viewer = 'team') {
 	w.HTMLElement.prototype.scrollIntoView = function () {};
 	w.CSS = w.CSS && typeof w.CSS.escape === 'function' ? w.CSS : { escape: (s: string) => s };
 	w.requestAnimationFrame = (cb: any) => w.setTimeout(() => cb(0), 0);
+	// loadNoteByParameter throws on a failed load (the error panel shows why);
+	// map that to null so "does not load" reads as a plain check below.
 	w.eval(`${SITE_APP_JS}
-		window.__loadNoteByParameter = loadNoteByParameter;
+		window.__loadNoteByParameter = (type, value) => loadNoteByParameter(type, value).catch(() => null);
 		window.__createPanel = createPanel;`);
 	for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
 	return w;

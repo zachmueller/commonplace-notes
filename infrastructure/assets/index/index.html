@@ -832,6 +832,19 @@ body.panel-resizing {
 	margin: 20px 0;
 }
 
+.error-details summary {
+	cursor: pointer;
+}
+
+.error-details pre {
+	margin: 8px 0 0;
+	font-size: 12px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	-webkit-user-select: text;
+	user-select: text;
+}
+
 .backlinks {
 	margin-top: 40px;
 	padding-top: 20px;
@@ -1641,6 +1654,22 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			return true;
 		}
 
+		// Record on an error which fetch it came from (URL, plus status and
+		// content-type when a response arrived) so an error panel's Details can
+		// name the request that broke. The first tag wins, so the innermost and
+		// most specific request is the one reported. Returns the error to rethrow.
+		function tagRequestError(err, url, response) {
+			if (!(err instanceof Error)) err = new Error(String(err));
+			if (!err.cpnRequest) {
+				err.cpnRequest = {
+					url,
+					status: response ? response.status : null,
+					contentType: response ? (response.headers.get('content-type') || '') : null
+				};
+			}
+			return err;
+		}
+
 		// Create a new FlexSearch index
 		const searchIndex = new FlexSearch.Document({
 			document: {
@@ -1888,10 +1917,10 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		function fetchMapping(path) {
 			if (!mappingCache.has(path)) {
 				mappingCache.set(path, fetch(path).then(r => {
-					if (cpnAuthGate(r)) throw new Error('auth');
-					if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
-					return r.json();
-				}).catch(err => { mappingCache.delete(path); throw err; }));
+					if (cpnAuthGate(r)) throw tagRequestError(new Error('auth'), path, r);
+					if (!r.ok) throw tagRequestError(new Error(`HTTP error! status: ${r.status}`), path, r);
+					return r.json().catch(err => { throw tagRequestError(err, path, r); });
+				}).catch(err => { mappingCache.delete(path); throw tagRequestError(err, path); }));
 			}
 			return mappingCache.get(path);
 		}
@@ -2002,6 +2031,8 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 		// Fetch a note revision by content hash from whichever partition holds it:
 		// known partitions first, then public, then each of the viewer's groups.
 		// Resolves { note } | { gate: true } (auth reload in progress) | { forbidden, status }.
+		// gate/forbidden results also carry the url + response of the last request
+		// tried; a network or JSON-parse failure rejects with the request tagged.
 		async function fetchNoteJson(hash) {
 			const groups = await getMyGroups();
 			const hinted = hashPartitions.get(hash) || [];
@@ -2012,14 +2043,27 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			}
 			let forbidden = false;
 			let status = 0;
+			let url = null;
+			let response = null;
 			for (const prefix of order) {
-				const response = await fetch(`/${prefix}notes/${hash}.json`);
-				if (cpnAuthGate(response)) return { gate: true };
-				if (response.ok) return { note: await response.json() };
+				url = `/${prefix}notes/${hash}.json`;
+				try {
+					response = await fetch(url);
+				} catch (err) {
+					throw tagRequestError(err, url);
+				}
+				if (cpnAuthGate(response)) return { gate: true, url, response };
+				if (response.ok) {
+					try {
+						return { note: await response.json() };
+					} catch (err) {
+						throw tagRequestError(err, url, response);
+					}
+				}
 				status = response.status;
 				if (response.headers.get('x-cpn-auth') === 'forbidden') forbidden = true;
 			}
-			return { forbidden, status };
+			return { forbidden, status, url, response };
 		}
 
 		async function resolveHash(type, value) {
@@ -2057,30 +2101,30 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 			return hash;
 		}
 
+		// Throws on any failure (rather than returning null) so resolvePanelData
+		// can show the real cause in the error panel's Details.
 		async function loadNoteByParameter(type, value) {
 			console.log('Loading note with type:', type, 'value:', value);
 
-			try {
-				const hash = await resolveHash(type, value);
+			const hash = await resolveHash(type, value);
 
-				// Load the actual note data (public or an access-group partition)
-				const result = await fetchNoteJson(hash);
-				if (result.gate) return null;
-				if (!result.note) {
-					throw new Error(result.forbidden ? 'Forbidden' : `HTTP error! status: ${result.status}`);
-				}
-				const noteData = result.note;
-				sessionStorage.removeItem('cpn_pw_reload');
-				// Stamp the resolved hash so the comment client has a reliable
-				// revision anchor (it is not otherwise guaranteed on noteData for
-				// u/t loads). Also firms up the permalink UI.
-				noteData.hash = hash;
-				return noteData;
-
-			} catch (error) {
-				console.error('Error loading note:', error);
-				return null;
+			// Load the actual note data (public or an access-group partition)
+			const result = await fetchNoteJson(hash);
+			if (result.gate) {
+				throw tagRequestError(new Error('Sign-in required'), result.url, result.response);
 			}
+			if (!result.note) {
+				throw tagRequestError(
+					new Error(result.forbidden ? 'Forbidden' : `HTTP error! status: ${result.status}`),
+					result.url, result.response);
+			}
+			const noteData = result.note;
+			sessionStorage.removeItem('cpn_pw_reload');
+			// Stamp the resolved hash so the comment client has a reliable
+			// revision anchor (it is not otherwise guaranteed on noteData for
+			// u/t loads). Also firms up the permalink UI.
+			noteData.hash = hash;
+			return noteData;
 		}
 
 
@@ -2547,8 +2591,9 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 ${closeButton}
 <h1>Error Loading Note</h1>
 <div class="error-message">
-	<p>Unable to load the note "${noteData.uid}".</p>
+	<p>Unable to load the note "${escapeHtml(String(noteData.uid))}".</p>
 	<p>${noteData.errorMessage || 'The note might not exist or you may not have permission to view it.'}</p>
+	${noteData.errorDetail ? `<details class="error-details"><summary>Details</summary><pre>${escapeHtml(noteData.errorDetail)}</pre></details>` : ''}
 	${offerSignIn() && hostedUiLoginUrl() ? `<p><a class="comment-signin error-signin" href="${escapeHtml(hostedUiLoginUrl())}">Sign in</a> to see notes shared with you.</p>` : ''}
 </div>
 				`;
@@ -3961,21 +4006,39 @@ ${closeButton}
 			scheduleOpenedLinksRefresh();
 		}
 
+		// Plain-text Details for an error panel: the exception, the request that
+		// failed (see tagRequestError), and the browser. Enough for a reader's
+		// screenshot to tell causes apart that the generic message hides, e.g.
+		// Safari's "The string did not match the expected pattern." is
+		// response.json() choking on a non-JSON body, and "Load failed" is a
+		// network-level fetch failure.
+		function describeLoadError(error) {
+			const name = (error && error.name) || 'Error';
+			const message = error && error.message !== undefined ? error.message : String(error);
+			const lines = [`${name}: ${message}`];
+			const req = error && error.cpnRequest;
+			if (req) {
+				lines.push(`Request: ${req.url}`);
+				if (req.status !== null) {
+					lines.push(`Response: HTTP ${req.status}${req.contentType ? `, ${req.contentType}` : ''}`);
+				}
+			}
+			lines.push(`Browser: ${navigator.userAgent}`);
+			return lines.join('\n');
+		}
+
 		// Resolve phase: fetch + build all the data a panel needs WITHOUT touching the
 		// DOM or the URL. Never throws — a failure returns an object with `error: true`
 		// so a single bad note can't reject a whole batch of concurrent resolves (see
 		// loadPanelsFromURL's Promise.all fan-out). Returns:
 		//   { paramType, paramValue, params, panelId, noteData }   on success
-		//   { paramType, paramValue, params, panelId, error: true } on failure
+		//   { paramType, paramValue, params, panelId, error: true, errorDetail } on failure
 		async function resolvePanelData(paramType, paramValue, params = null) {
 			// Unique identifier for the panel. Folds in any ;diff= target so a diffed
 			// view of a note is distinct from the plain note (see panelKey).
 			const panelId = panelKey(paramType, paramValue, params);
 			try {
 				const noteData = await loadNoteByParameter(paramType, paramValue);
-				if (!noteData) {
-					throw new Error('Note not found');
-				}
 
 				// If a diff was requested, build it in its own try/catch so a bad or
 				// unresolvable ;diff= degrades to the plain note rather than erroring
@@ -3999,7 +4062,7 @@ ${closeButton}
 				return { paramType, paramValue, params, panelId, noteData };
 			} catch (error) {
 				console.error('Error resolving panel:', error);
-				return { paramType, paramValue, params, panelId, error: true };
+				return { paramType, paramValue, params, panelId, error: true, errorDetail: describeLoadError(error) };
 			}
 		}
 
@@ -4027,7 +4090,8 @@ ${closeButton}
 					uid: panelId,
 					title: 'Error Loading Note',
 					paramType,
-					paramValue
+					paramValue,
+					errorDetail: resolved.errorDetail
 				};
 				const panel = createPanel(errorNoteData, loadedPanels.size, true);
 				panel.dataset.paramType = paramType;

@@ -21,6 +21,7 @@
 		"test:note-params": "npx tsx e2e/scripts/test-note-params.ts",
 		"test:diff-params": "npx tsx e2e/scripts/test-diff-params.ts",
 		"test:diff-wrap-layout": "npx tsx e2e/scripts/test-diff-wrap-layout.ts",
+		"test:error-details": "npx tsx e2e/scripts/test-error-details.ts",
 		"test:comment-sanitizer": "npx tsx e2e/scripts/test-comment-sanitizer.ts",
 		"test:comment-loading": "npx tsx e2e/scripts/test-comment-loading.ts",
 		"test:comment-identity": "npx tsx e2e/scripts/test-comment-identity.ts",
