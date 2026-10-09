@@ -73,6 +73,23 @@ async function uploadConfigJson(plugin: CommonplaceNotesPlugin, profile: Publish
 		CacheControl: 'no-cache',
 	}));
 	Logger.debug(`Uploaded site asset: ${s3Prefix}config.json`);
+	await recordPublishedHomeNoteUid(plugin, profile, homeNoteUid);
+}
+
+/**
+ * Remember the home note UID the site was just given, so the audit and delete
+ * can protect the UID the live home page opens even after the vault's home
+ * note changes (renamed, new UID, setting cleared).
+ */
+async function recordPublishedHomeNoteUid(
+	plugin: CommonplaceNotesPlugin,
+	profile: PublishingProfile,
+	homeNoteUid: string | undefined,
+): Promise<void> {
+	const uid = homeNoteUid ?? '';
+	if (profile.publishedHomeNoteUid === uid) return;
+	profile.publishedHomeNoteUid = uid;
+	await plugin.saveSettings();
 }
 
 export async function pushLocalJsonsToS3(
@@ -626,7 +643,7 @@ async function renderProfileSiteAssets(plugin: CommonplaceNotesPlugin, profile: 
 		parseYaml,
 	);
 	const rendered = await renderSiteAssets(profile, homeNoteUid, customizations);
-	return { ...rendered, customizations, customizationErrors: errors };
+	return { ...rendered, homeNoteUid, customizations, customizationErrors: errors };
 }
 
 export async function pushSiteAssetsToS3(
@@ -648,7 +665,7 @@ export async function pushSiteAssetsToS3(
 		const bucket = profile.awsSettings.bucketName;
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
-		const { files, fingerprint, customizations, customizationErrors } = await renderProfileSiteAssets(plugin, profile);
+		const { files, fingerprint, homeNoteUid, customizations, customizationErrors } = await renderProfileSiteAssets(plugin, profile);
 		if (customizationErrors.length > 0) {
 			for (const err of customizationErrors) {
 				Logger.warn(`Asset customization skipped: ${err.filePath} — ${err.message}`);
@@ -690,6 +707,7 @@ export async function pushSiteAssetsToS3(
 		}
 
 		profile.siteAssetsFingerprint = siteAssetsTarget(profile, fingerprint);
+		profile.publishedHomeNoteUid = homeNoteUid ?? '';
 		await plugin.saveSettings();
 		return true;
 	} catch (error) {

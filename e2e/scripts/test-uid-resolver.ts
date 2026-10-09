@@ -37,6 +37,9 @@ const generateUID = pick<UidModule['generateUID']>(uidModule, 'generateUID');
 const isYamlAmbiguous = pick<UidModule['isYamlAmbiguous']>(uidModule, 'isYamlAmbiguous');
 const auditPublishedUids = pick<AuditModule['auditPublishedUids']>(auditModule, 'auditPublishedUids');
 const formatUidAudit = pick<AuditModule['formatUidAudit']>(auditModule, 'formatUidAudit');
+const homeUidsOf = pick<AuditModule['homeUidsOf']>(auditModule, 'homeUidsOf');
+
+const NO_HOME = { notePath: null, note: null, publishedUid: null };
 
 // ---------------------------------------------------------------------------
 // Tiny assertion helpers
@@ -244,6 +247,7 @@ function testAudit(): void {
 			{ path: 'NoUid.md', uid: null, nonStringUid: false, publishable: true },
 		],
 		8,
+		NO_HOME,
 	);
 
 	eq('Audit: orphans (stale UID and deleted note), sorted by label',
@@ -260,6 +264,61 @@ function testAudit(): void {
 	const lines = formatUidAudit(report).join('\n');
 	check('Audit: console report names the stale UID and its twin',
 		lines.includes('OLD00001 "Dup": no vault note; current copy is likely NEW00001'), lines);
+	eq('Audit: no home note set, no home issues', report.homeIssues, []);
+}
+
+function testAuditHome(): void {
+	const ledger = {
+		slugToUid: { Home: 'HOME0001', Other: 'OTHR0001' },
+		uidToHash: { HOME0001: 'h1', OLDHOME1: 'h2', OTHR0001: 'h3', GONE0001: 'h4' },
+		contentIndex: { HOME0001: { title: 'Home' }, OLDHOME1: { title: 'Home' } },
+	};
+	const other = { path: 'Other.md', uid: 'OTHR0001', nonStringUid: false, publishable: true };
+
+	// The home note no longer lists the profile: previously flagged "no longer published".
+	const homeNote = { path: 'Home.md', uid: 'HOME0001', nonStringUid: false, publishable: false };
+	let report = auditPublishedUids(ledger, [homeNote, other], 8,
+		{ notePath: 'Home.md', note: homeNote, publishedUid: 'HOME0001' });
+	const home = report.published.find((e) => e.uid === 'HOME0001');
+	eq('Audit home: home note that stopped publishing is not flagged',
+		[home?.home, home?.unpublishedInVault, report.unpublishedInVault.map((e) => e.uid)], [true, false, []]);
+	check('Audit home: reported as a home issue instead',
+		report.homeIssues.some((i) => i.includes('"Home.md" does not publish to this profile')), JSON.stringify(report.homeIssues));
+	eq('Audit home: other orphans still flagged, home sorts before unflagged',
+		report.published.map((e) => e.uid), ['GONE0001', 'OLDHOME1', 'HOME0001', 'OTHR0001']);
+	eq('Audit home: stale home UID names the live home as its twin',
+		report.orphans.find((e) => e.uid === 'OLDHOME1')?.twins, ['HOME0001']);
+
+	// The site still opens the old UID as home (home note's UID changed, not published since).
+	const renewed = { path: 'Home.md', uid: 'HOME0001', nonStringUid: false, publishable: true };
+	report = auditPublishedUids(ledger, [renewed, other], 8,
+		{ notePath: 'Home.md', note: renewed, publishedUid: 'oldhome1' });
+	eq('Audit home: both the pushed and the vault home UID are protected',
+		[report.orphans.map((e) => e.uid), report.published.filter((e) => e.home).map((e) => e.uid).sort()],
+		[['GONE0001'], ['HOME0001', 'OLDHOME1']]);
+	check('Audit home: pushed home UID that differs is reported',
+		report.homeIssues.some((i) => i.includes('still opens oldhome1') && i.includes('point it at HOME0001')), JSON.stringify(report.homeIssues));
+
+	// The home note setting points at a missing note (renamed or deleted).
+	report = auditPublishedUids(ledger, [renewed, other], 8,
+		{ notePath: 'Old Home.md', note: null, publishedUid: 'HOME0001' });
+	check('Audit home: missing home note path reported',
+		report.homeIssues.some((i) => i.includes('"Old Home.md" is not in the vault')), JSON.stringify(report.homeIssues));
+	check('Audit home: UID the site opens as home stays unflagged',
+		!report.orphans.some((e) => e.uid === 'HOME0001') && report.published.some((e) => e.uid === 'HOME0001' && e.home));
+
+	// A home note with a UID that was never published.
+	const fresh = { path: 'New Home.md', uid: 'NEWHOME1', nonStringUid: false, publishable: true };
+	report = auditPublishedUids(ledger, [fresh, other], 8,
+		{ notePath: 'New Home.md', note: fresh, publishedUid: null });
+	check('Audit home: unpublished home UID reported',
+		report.homeIssues.some((i) => i.includes('NEWHOME1 is not in this profile')), JSON.stringify(report.homeIssues));
+
+	eq('Audit home: homeUidsOf normalizes and de-duplicates',
+		homeUidsOf({ notePath: 'Home.md', note: { ...renewed, uid: 'home0001 ' }, publishedUid: 'HOME0001' }), ['HOME0001']);
+	eq('Audit home: homeUidsOf ignores empty values', homeUidsOf({ notePath: null, note: null, publishedUid: '' }), []);
+	const lines = formatUidAudit(report).join('\n');
+	check('Audit home: console report has a home section', lines.includes('Home note issues (1):'), lines);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +335,7 @@ testUidFromRaw();
 testYamlAmbiguity();
 testGenerateUID();
 testAudit();
+testAuditHome();
 
 console.log('');
 if (failures === 0) {

@@ -21,7 +21,11 @@
  *   4. A UID changed outside CPN leaves a stale UID: the audit flags it with
  *      its live twin, the delete picker lists it, and deleting it removes its
  *      revisions from S3 and it from the uploaded mappings and content index.
- *   5. No unexpected plugin errors logged.
+ *   5. The home note is never flagged or deleted: a publish records the home
+ *      UID pushed to the site; with the home note no longer publishing, or
+ *      the home note setting pointing at a missing note, the audit reports a
+ *      home issue instead of flagging it, and deleting it is refused.
+ *   6. No unexpected plugin errors logged.
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
@@ -381,8 +385,90 @@ async function testAuditAndDeleteStaleUid(ctx: TestContext): Promise<void> {
 	}
 }
 
+async function testHomeNoteProtected(ctx: TestContext): Promise<void> {
+	console.log("\nTest 5: the home note is never flagged or deleted");
+	await ctx.page.evaluate(({ profileId, noteA }) => {
+		const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === profileId);
+		profile.homeNotePath = noteA;
+	}, { profileId: PROFILE_ID, noteA: NOTE_A });
+	const r = await publish(ctx, [NOTE_A]);
+	const recorded = await ctx.page.evaluate(({ profileId }) => {
+		const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+		return plugin.settings.publishingProfiles.find((p: any) => p.id === profileId).publishedHomeNoteUid ?? null;
+	}, { profileId: PROFILE_ID });
+	const homeUid = r.uidA;
+	if (!r.error && homeUid && recorded === homeUid) {
+		ctx.pass("Publish records the home UID pushed to the site", homeUid);
+	} else {
+		ctx.fail("Publish records the home UID pushed to the site", `error=${r.error}, A=${homeUid}, recorded=${recorded}`);
+		return;
+	}
+
+	// Stop the home note publishing to this profile: before the fix the audit
+	// flagged it "no longer published" and offered it for deletion.
+	await ctx.page.evaluate(async ({ noteA }) => {
+		const app = (window as any).app;
+		await app.fileManager.processFrontMatter(app.vault.getAbstractFileByPath(noteA), (fm: any) => {
+			fm["cpn-publish-contexts"] = ["some-other-profile"];
+		});
+		await new Promise((r) => setTimeout(r, 1_500));
+	}, { noteA: NOTE_A });
+
+	const auditHome = (homeNotePath: string) => ctx.page.evaluate(async ({ profileId, homeUid, homeNotePath }) => {
+		const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === profileId);
+		profile.homeNotePath = homeNotePath;
+		const report = await plugin.publisher.auditUids(profile);
+		const entry = report?.published.find((e: any) => e.uid === homeUid);
+		return {
+			ran: !!report,
+			home: entry?.home ?? null,
+			flagged: !!report && [...report.orphans, ...report.unpublishedInVault].some((e: any) => e.uid === homeUid),
+			issues: report?.homeIssues ?? [],
+		};
+	}, { profileId: PROFILE_ID, homeUid, homeNotePath });
+
+	const unpublished = await auditHome(NOTE_A);
+	if (unpublished.ran && unpublished.home === true && !unpublished.flagged
+		&& unpublished.issues.some((i: string) => i.includes("does not publish to this profile"))) {
+		ctx.pass("Audit: home note that stopped publishing is not flagged", unpublished.issues.join(" | "));
+	} else {
+		ctx.fail("Audit: home note that stopped publishing is not flagged", JSON.stringify(unpublished));
+	}
+
+	// A renamed/cleared home setting: the site still opens the old UID as home.
+	const missing = await auditHome("Missing Home.md");
+	if (missing.ran && missing.home === true && !missing.flagged
+		&& missing.issues.some((i: string) => i.includes("is not in the vault"))
+		&& missing.issues.some((i: string) => i.includes(`still opens ${homeUid}`))) {
+		ctx.pass("Audit: UID the site still opens as home is not flagged", missing.issues.join(" | "));
+	} else {
+		ctx.fail("Audit: UID the site still opens as home is not flagged", JSON.stringify(missing));
+	}
+
+	const del = await ctx.page.evaluate(async ({ profileId, homeUid }) => {
+		const w = window as any;
+		const plugin = w.app.plugins.plugins["commonplace-notes"];
+		const profile = plugin.settings.publishingProfiles.find((p: any) => p.id === profileId);
+		const start = w.__cpnUidUploads.length;
+		const ok = await plugin.publisher.deletePublishedUid(profile, homeUid.toLowerCase(), "UID Stability A");
+		await plugin.mappingManager.loadProfileMappings(profile.id);
+		return {
+			ok,
+			s3Calls: w.__cpnUidUploads.length - start,
+			stillInLedger: !!plugin.mappingManager.getUidToHashMap(profile.id)[homeUid],
+		};
+	}, { profileId: PROFILE_ID, homeUid });
+	if (!del.ok && del.s3Calls === 0 && del.stillInLedger) {
+		ctx.pass("Deleting the home UID is refused", "no S3 calls; still in uid-to-hash");
+	} else {
+		ctx.fail("Deleting the home UID is refused", JSON.stringify(del));
+	}
+}
+
 async function testNoPluginErrors(ctx: TestContext, baseline: number): Promise<void> {
-	console.log("\nTest 5: no plugin errors logged");
+	console.log("\nTest 6: no plugin errors logged");
 	const errors = ctx.collector.getLogsByLevel("error").filter((e) => e.source === "plugin").slice(baseline);
 	if (errors.length) {
 		ctx.fail("No plugin errors", errors.map((e) => e.message).join(" | "));
@@ -415,6 +501,7 @@ async function tests(ctx: TestContext): Promise<void> {
 		await testSecondPublish(ctx);
 		await testCopyUrlDoesNotMint(ctx);
 		await testAuditAndDeleteStaleUid(ctx);
+		await testHomeNoteProtected(ctx);
 	} finally {
 		await page.evaluate(async ({ profileId }) => {
 			const w = window as any;

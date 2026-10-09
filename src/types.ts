@@ -35,6 +35,8 @@ export interface PublishingProfile {
     lastFullPublishTimestamp: number;
 	/** `<bucket>/<prefix>:<fingerprint>` of the site files last pushed (see renderSiteAssets); publish re-pushes when it changes. */
 	siteAssetsFingerprint?: string;
+	/** Home note UID last pushed to the site (config.json / index.html; '' = none). The audit and delete never touch it. */
+	publishedHomeNoteUid?: string;
     excludedDirectories: string[];
     baseUrl: string;
 	homeNotePath: string;

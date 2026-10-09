@@ -31,6 +31,23 @@ Symptom → cause → fix, grouped by area. For AWS infrastructure issues
   copy named; pick it and confirm to delete it from the site. Then run **Publish
   all notes** so notes that linked to the stale UID re-render. Links that were
   shared with the stale UID stop working.
+- **The audit reports "Home note issues".** The audit never offers the site's
+  home page for deletion, since the site opens it by UID. It protects both the
+  home note's UID and the UID last pushed to the site as home. It lists what to
+  fix instead:
+  - *is not in the vault*: the profile's home note setting points at a renamed
+    or deleted note. Pick the note again in the profile's settings, then publish.
+  - *does not publish to this profile*: the home note's `cpn-publish-contexts`
+    doesn't list the profile, or it's in an excluded directory. Fix that and
+    publish it.
+  - *has no cpn-uid yet* or *is not in this profile's published ledger*: the home
+    note was never published. Publish it.
+  - *The site still opens X as its home page*: the home note changed since the
+    last publish. Publish to point the site at the new one; X stays protected
+    until then.
+- **The audit says "Obsidian is still indexing".** Notes that aren't indexed yet
+  look like they have no UID, so the audit waits rather than flag their UIDs as
+  stale. Run it again in a moment.
 - **"The cpn-uid of <note> changed while publishing. Nothing was published."**
   The note got a different `cpn-uid` on disk (a sync or an edit) while CPN was
   publishing it. CPN stops so the note isn't published under the wrong UID.

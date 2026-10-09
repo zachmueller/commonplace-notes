@@ -7,11 +7,13 @@ import { PathUtils } from '../utils/path';
 import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { restrictedPrefix } from '../utils/access';
-import { UID_KEY } from '../utils/uidResolver';
+import { UID_KEY, normalizeUID } from '../utils/uidResolver';
 import {
 	auditPublishedUids,
 	describePublishedUid,
 	formatUidAudit,
+	homeUidsOf,
+	type AuditHome,
 	type AuditVaultNote,
 	type PublishedUid,
 	type UidAuditReport,
@@ -542,24 +544,55 @@ export class Publisher {
 		await this.publishNotes(allNotes, profile, true, triggerInvalidation);
 	}
 
+	/** One vault note as the audit sees it. */
+	private auditVaultNote(file: TFile, profile: PublishingProfile): AuditVaultNote {
+		const fm = this.plugin.frontmatterManager;
+		const raw = fm.getFrontmatterValue(file, UID_KEY);
+		return {
+			path: file.path,
+			uid: fm.peekNoteUID(file),
+			nonStringUid: raw !== null && raw !== undefined && typeof raw !== 'string',
+			publishable: !this.isFileExcluded(file, profile)
+				&& fm.normalizePublishContexts(file).includes(profile.id),
+		};
+	}
+
+	/** The profile's home note: its setting, its vault note, and the home UID last pushed to the site. */
+	private auditHome(profile: PublishingProfile): AuditHome {
+		const notePath = profile.homeNotePath || null;
+		const file = notePath ? this.plugin.app.vault.getAbstractFileByPath(notePath) : null;
+		return {
+			notePath,
+			note: file instanceof TFile ? this.auditVaultNote(file, profile) : null,
+			publishedUid: profile.publishedHomeNoteUid || null,
+		};
+	}
+
+	/**
+	 * The UIDs the site's home page uses (now, or after the next publish),
+	 * normalized. These are never flagged and never deleted.
+	 */
+	homeUids(profile: PublishingProfile): string[] {
+		return homeUidsOf(this.auditHome(profile));
+	}
+
 	/**
 	 * Every UID this profile's local ledger says is published, checked against
-	 * the vault. Reads local files only (no S3 calls).
+	 * the vault. Reads local files only (no S3 calls). Returns null (after a
+	 * notice) while Obsidian is still indexing: an unindexed note looks like it
+	 * has no UID, so its published UID would be wrongly flagged as stale.
 	 */
-	async auditUids(profile: PublishingProfile): Promise<UidAuditReport> {
+	async auditUids(profile: PublishingProfile): Promise<UidAuditReport | null> {
+		const files = this.plugin.app.vault.getMarkdownFiles();
+		const unindexed = files.filter((file) => this.plugin.app.metadataCache.getFileCache(file) === null).length;
+		if (unindexed > 0) {
+			NoticeManager.showNotice(`Obsidian is still indexing ${unindexed} note(s). Try again in a moment.`);
+			return null;
+		}
+
 		await this.plugin.mappingManager.loadProfileMappings(profile.id);
 		const contentIndex = await this.plugin.contentIndexManager.loadIndex(profile.id);
-		const fm = this.plugin.frontmatterManager;
-		const vault: AuditVaultNote[] = this.plugin.app.vault.getMarkdownFiles().map((file) => {
-			const raw = fm.getFrontmatterValue(file, UID_KEY);
-			return {
-				path: file.path,
-				uid: fm.peekNoteUID(file),
-				nonStringUid: raw !== null && raw !== undefined && typeof raw !== 'string',
-				publishable: !this.isFileExcluded(file, profile)
-					&& fm.normalizePublishContexts(file).includes(profile.id),
-			};
-		});
+		const vault = files.map((file) => this.auditVaultNote(file, profile));
 		return auditPublishedUids(
 			{
 				slugToUid: this.plugin.mappingManager.getSlugToUidMap(profile.id),
@@ -568,6 +601,7 @@ export class Publisher {
 			},
 			vault,
 			this.plugin.settings.uidLength ?? 8,
+			this.auditHome(profile),
 		);
 	}
 
@@ -583,6 +617,7 @@ export class Publisher {
 		if (!profile) return;
 
 		const report = await this.auditUids(profile);
+		if (!report) return;
 		Logger.info(`Audit of published notes for profile '${profile.id}':\n${formatUidAudit(report).join('\n')}`);
 
 		const flagged = report.orphans.length + report.unpublishedInVault.length;
@@ -591,8 +626,11 @@ export class Publisher {
 			`${report.orphans.length} with no vault note.`,
 			`${report.unpublishedInVault.length} whose note no longer publishes here.`,
 			`${report.sharedUids.length} UID(s) shared by more than one note.`,
-			'Details are in the developer console.',
 		];
+		if (report.homeIssues.length > 0) {
+			summary.push(`Home note: ${report.homeIssues.length} issue(s).`);
+		}
+		summary.push('Details are in the developer console.');
 		const canDelete = profile.publishMechanism === 'AWS' && !!profile.awsSettings;
 		if (flagged > 0 && !canDelete) {
 			summary.push('Deleting published notes is only supported for AWS profiles.');
@@ -622,6 +660,7 @@ export class Publisher {
 
 		// Step 2: List published UIDs (flagged ones first) and pick one
 		const report = await this.auditUids(profile);
+		if (!report) return;
 		const entries = flaggedOnly
 			? report.published.filter(e => e.orphan || e.unpublishedInVault)
 			: report.published;
@@ -668,6 +707,11 @@ export class Publisher {
 	async deletePublishedUid(profile: PublishingProfile, uid: string, label: string = uid): Promise<boolean> {
 		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
 			NoticeManager.showNotice('Delete is only supported for AWS publishing profiles');
+			return false;
+		}
+		// The site opens its home page by UID, so deleting it breaks the front page.
+		if (this.homeUids(profile).includes(normalizeUID(uid))) {
+			NoticeManager.showNotice(`'${label}' is this site's home page and can't be deleted. Change the profile's home note and publish first.`, 10000);
 			return false;
 		}
 		const selectedNote = { uid, label };
