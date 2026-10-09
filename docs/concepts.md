@@ -23,8 +23,8 @@ that profile's ID appears in its contexts. Toggle it with the per-profile
 A stable per-note identifier, drawn from the
 [Crockford Base32](https://www.crockford.com/base32.html) alphabet (digits and
 uppercase letters excluding I, L, O, U). Default length is 8 characters. CPN
-generates it **automatically** the first time a note gains a publish context, and
-it drives the note's site URL — so don't edit it by hand. See the
+generates it **automatically** the first time the note is published and never
+replaces it afterwards. It drives the note's site URL — so don't edit it by hand. See the
 [publishing model](publishing-model.md#note-identity).
 
 ### Display title (`cpn-title`)

@@ -19,8 +19,27 @@ Symptom → cause → fix, grouped by area. For AWS infrastructure issues
 - **"No baseUrl defined for profile."** Copying a link needs the profile's **Base
   URL**. Set it under Destination, or **Sync settings from stack** after deploying
   infrastructure.
-- **"Did not find UID for note."** A `cpn-uid` is generated only once a note has a
-  publish context — opt the note in first, then retry.
+- **"'<note>' has no UID yet. Publish it first."** A `cpn-uid` is generated the
+  first time a note is published, so a link can't be copied before then. Opt the
+  note in (if needed), publish it, then copy the link.
+- **A note appears twice on the site, one copy out of date.** The note was
+  published under two UIDs. Earlier plugin versions could do this when a note was
+  first published together with a note that links to it. It also happens when
+  a `cpn-uid` is changed by hand, by a Templater template, or by a sync conflict.
+  To clean up, run **Audit published notes for stale or duplicate UIDs** for the
+  profile. Each stale UID is listed as "no vault note", with the likely current
+  copy named; pick it and confirm to delete it from the site. Then run **Publish
+  all notes** so notes that linked to the stale UID re-render. Links that were
+  shared with the stale UID stop working.
+- **"The cpn-uid of <note> changed while publishing. Nothing was published."**
+  The note got a different `cpn-uid` on disk (a sync or an edit) while CPN was
+  publishing it. CPN stops so the note isn't published under the wrong UID.
+  Publish again.
+- **Console warning "Kept cpn-uid … refused to replace it".** Something asked CPN
+  to give a note that already has a UID a different one (for example a routing
+  `set-frontmatter` step). CPN keeps the existing UID so the note isn't published
+  twice. To change a UID on purpose, edit it by hand, publish, then delete the old
+  UID with the audit command.
 - **Published content looks stale.** CloudFront cached the old version. Check the
   profile's [CloudFront invalidation scheme](publishing-model.md#publish-mechanism-and-cache-invalidation):
   if it's `manual`, or narrower than the publish command you ran, no invalidation

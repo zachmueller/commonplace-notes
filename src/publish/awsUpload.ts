@@ -44,7 +44,9 @@ function resolveHomeNoteUid(plugin: CommonplaceNotesPlugin, profile: PublishingP
 	if (!profile.homeNotePath) return undefined;
 	const homeFile = plugin.app.vault.getAbstractFileByPath(profile.homeNotePath);
 	if (homeFile instanceof TFile) {
-		return plugin.frontmatterManager.getNoteUID(homeFile) || undefined;
+		// Peek, never mint: a home note published in this batch already has its
+		// UID, and one that was never published has no page to point at.
+		return plugin.frontmatterManager.peekNoteUID(homeFile) || undefined;
 	}
 	return undefined;
 }

@@ -125,7 +125,7 @@ async function processTemplate(
 	if (profile?.homeNotePath) {
 		const homeFile = plugin.app.vault.getAbstractFileByPath(profile.homeNotePath);
 		if (homeFile instanceof TFile) {
-			defaultUid = plugin.frontmatterManager.getNoteUID(homeFile) || '';
+			defaultUid = plugin.frontmatterManager.peekNoteUID(homeFile) || '';
 		}
 	}
 

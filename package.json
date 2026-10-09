@@ -17,6 +17,8 @@
 		"test:obscure-wikilinks-e2e": "npx tsx e2e/scripts/test-obscure-wikilinks-e2e.ts",
 		"test:section-anchors": "npx tsx e2e/scripts/test-section-anchors.ts",
 		"test:transclusions-runtime": "npx tsx e2e/scripts/test-transclusions-runtime.ts",
+		"test:uid-resolver": "npx tsx e2e/scripts/test-uid-resolver.ts",
+		"test:uid-stability-e2e": "npx tsx e2e/scripts/test-uid-stability-e2e.ts",
 		"test:transclusions-e2e": "npx tsx e2e/scripts/test-transclusions-e2e.ts",
 		"test:note-params": "npx tsx e2e/scripts/test-note-params.ts",
 		"test:diff-params": "npx tsx e2e/scripts/test-diff-params.ts",

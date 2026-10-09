@@ -39,10 +39,14 @@ The easiest way to set this is the per-profile **Toggle publishing context:
 - **`cpn-uid`** — a stable per-note identifier that drives the note's site URL.
   It uses the [Crockford Base32](https://www.crockford.com/base32.html) alphabet
   (digits + uppercase, excluding I/L/O/U) and defaults to 8 characters. CPN
-  generates it **automatically the first time a note gains a publish context** —
-  so a note with no publish context has no UID. Don't edit it by hand; changing
-  it changes the note's URL and breaks existing links. (Adjust the length for
-  *new* UIDs via the UID length setting; existing notes are untouched.)
+  generates it **the first time the note is published** (or when a published
+  note links to it), so a note that has never been published has no UID yet.
+  Once a note has a `cpn-uid`, CPN never replaces it. Don't edit it by hand
+  either: a new UID publishes the note again under a new URL, and the old copy
+  stays on the site until you remove it with **Audit published notes for stale
+  or duplicate UIDs** (see [Troubleshooting](troubleshooting.md#publishing)).
+  (Adjust the length for *new* UIDs via the UID length setting; existing notes
+  are untouched.)
 - **`cpn-access-groups`** — optional list of access groups that may read the
   note. Absent or empty means the note uses the site-wide read access. See
   [per-note access groups](auth-and-access.md#per-note-access-groups).

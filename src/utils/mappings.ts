@@ -181,15 +181,19 @@ export class MappingManager {
 		return this.mappingData[profileId]?.slugToUid ?? {};
 	}
 
+	getUidToHashMap(profileId: string): Record<string, string> {
+		return this.mappingData[profileId]?.uidToHash ?? {};
+	}
+
 	removeUidFromMappings(profileId: string, uid: string) {
 		const data = this.mappingData[profileId];
 		if (!data) return;
 
-		// Remove slug entry where value matches the uid
+		// Remove every slug pointing at the uid (a renamed note leaves its old
+		// slug behind, so there can be more than one)
 		for (const [slug, mappedUid] of Object.entries(data.slugToUid)) {
 			if (mappedUid === uid) {
 				delete data.slugToUid[slug];
-				break;
 			}
 		}
 

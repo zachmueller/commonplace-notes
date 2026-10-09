@@ -13,6 +13,7 @@ import { moment, parseYaml, type TFile } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { extractFrontmatter } from '../utils/vaultScan';
 import { generateUID } from '../utils/uid';
+import { uidFromRaw } from '../utils/uidResolver';
 import { RK } from './frontmatterKeys';
 import type { RoutingLibs } from './types';
 
@@ -83,8 +84,8 @@ export function buildRoutingLibs(plugin: CommonplaceNotesPlugin): RoutingLibs {
 		async ensureUid(file: TFile): Promise<string> {
 			// Never clobber an existing (published-URL-backing) id — return it as-is.
 			const fm = await readFrontmatterInternal(file);
-			const existing = fm?.[RK.UID];
-			if (typeof existing === 'string' && existing.trim() !== '') return existing;
+			const existing = uidFromRaw(fm?.[RK.UID]);
+			if (existing !== null) return existing;
 
 			// Mint + write immediately via mergeFrontmatter (bypasses the batch
 			// queue), so the id is durably on disk before any later routing step.

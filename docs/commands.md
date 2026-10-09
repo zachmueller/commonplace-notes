@@ -16,7 +16,8 @@ Some are context-sensitive and only appear when a Markdown note is active.
 | **Publish active and connected notes** | Publishes the active note plus the notes it links to and that link to it. | Active Markdown note. |
 | **Publish updates since last full publish** | Publishes notes modified since the profile's last full publish. | — (prompts for profile). |
 | **Publish all notes** | Publishes every note in the chosen profile's publish context. | — (prompts for profile). |
-| **Delete a published note** | Removes a published note from the site (choose it from a list). | AWS profile. |
+| **Delete a published note** | Removes a published note from the site (choose it from a list). The list also shows stale UIDs that no vault note carries, marked "no vault note". | AWS profile. |
+| **Audit published notes for stale or duplicate UIDs** | Compares the profile's local publish records with the vault. Reports published UIDs no note carries (such as a stale copy left after a note's UID changed), notes that stopped publishing but are still live, and UIDs shared by several notes. Details go to the developer console; on AWS profiles it then offers the flagged UIDs for deletion. | — (prompts for profile). Reads local files only. |
 | **Copy link to current note URL** | Copies the active note's site URL to the clipboard. Invoked repeatedly within the URL-stack window, it appends each note to a growing [stacked URL](publishing-model.md#url-scheme-and-stacked-urls). | Active note in a publish context; profile needs a Base URL. |
 | **Copy open notes as stacked URL** | Builds one stacked URL from all notes open in the main editor area, in tab order. | Requires the `current` URL scheme; needs open notes with publish contexts. |
 | **Deploy publishing infrastructure** | Opens the deployment wizard to provision AWS infra (S3 + CloudFront, optional domain/auth/comments). See [Infrastructure deployment](infrastructure-deployment.md). | — (prompts for profile). |

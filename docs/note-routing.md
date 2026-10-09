@@ -215,6 +215,8 @@ Things to know:
 - **Frontmatter merge.** List-valued keys (like `cpn-publish-contexts`) are
   unioned and de-duped, so values set by earlier steps survive. Scalar keys the
   template also sets are overwritten by the template — order the step accordingly.
+  Keep `cpn-uid` out of templates: Templater writes the note itself, so CPN can't
+  stop a template from replacing a note's UID (which would publish it twice).
 - **Titles.** If the template renames the note itself, pair the option with
   `cpn-routing-title-prompt: off` so CPN's title prompt doesn't fight it.
 - **Update mode.** Defaults to `cpn-routing-new-note-only: true`, so re-routing an
@@ -239,7 +241,9 @@ Things to know:
 
 - **Never overwrites.** If the note already has a `cpn-uid`, it's left untouched
   (the id must stay stable). So re-routing an existing note is a no-op when one is
-  already present.
+  already present. The same rule applies to every frontmatter write CPN makes,
+  including `set-frontmatter` steps: setting `cpn-uid` on a note that already has
+  one is ignored, with a console warning.
 - **Unconditional.** The id is minted whenever the step runs, regardless of
   publish contexts. Place `ensure-uid` **before** `set-publish-contexts` if you
   want the id to exist by the time the note is opted into publishing.

@@ -202,7 +202,8 @@ export interface NoteConnection {
     file: TFile;
     isBacklink: boolean;
     isOutgoingLink: boolean;
-    uid: string;
+    /** The connected note's UID, or null if it has none yet (never published). */
+    uid: string | null;
     slug: string;
     title: string;
     /** The connected note's access groups ([] = public). */

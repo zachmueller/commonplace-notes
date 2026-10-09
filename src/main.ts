@@ -406,6 +406,14 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'audit-published-notes',
+			name: 'Audit published notes for stale or duplicate UIDs',
+			callback: async () => {
+				await this.publisher.auditPublishedNotes();
+			}
+		});
+
+		this.addCommand({
 			id: 'sync-chat-knowledge-base',
 			name: 'Sync chat knowledge base (re-index published notes)',
 			callback: async () => {
@@ -455,9 +463,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					}
 
 					// Resolve the UID; skip (but keep the stack alive) if missing.
-					const uid = this.frontmatterManager.getNoteUID(file);
+					// Peek, never mint: a UID is only created by publishing the note.
+					const uid = this.frontmatterManager.peekNoteUID(file);
 					if (!uid) {
-						NoticeManager.showNotice(`Did not find UID for note '${file.basename}'`);
+						NoticeManager.showNotice(`'${file.basename}' has no UID yet. Publish it first.`);
 						this.resetUrlStackWindow();
 						return;
 					}
@@ -502,10 +511,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
 					return;
 				}
 
-				// craft URL
-				const uid = this.frontmatterManager.getNoteUID(file);
+				// craft URL (peek, never mint: a UID is only created by publishing the note)
+				const uid = this.frontmatterManager.peekNoteUID(file);
 				if (!uid) {
-					NoticeManager.showNotice(`Did not find UID for note '${file.basename}'`);
+					NoticeManager.showNotice(`'${file.basename}' has no UID yet. Publish it first.`);
 					return;
 				}
 				const base = profile.baseUrl.replace(/\/?$/, '/');
@@ -596,7 +605,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 						skipped.push(file.basename);
 						continue;
 					}
-					const uid = this.frontmatterManager.getNoteUID(file);
+					const uid = this.frontmatterManager.peekNoteUID(file);
 					if (!uid) {
 						skipped.push(file.basename);
 						continue;
@@ -1345,7 +1354,9 @@ cpn.rebuildContentIndex();
 				const rawWithFrontmatter = await this.app.vault.read(file);
 				const raw = await this.noteManager.stripFrontmatter(file, rawWithFrontmatter);
 				const title = this.frontmatterManager.getNoteTitle(file);
-				const uid = this.frontmatterManager.getNoteUID(file);
+				// Peek: a note without a UID has never been published, so it has no
+				// place in the index yet.
+				const uid = this.frontmatterManager.peekNoteUID(file);
 				// Gated (or unpublishable) notes never enter the site-wide index/corpus.
 				const access = this.noteManager.resolveNoteAccess(file, profile);
 				if (uid && (!access.ok || access.groups.length > 0)) {
@@ -1374,6 +1385,11 @@ cpn.rebuildContentIndex();
 		// apply queued updates
 		await this.contentIndexManager.applyQueuedUpdates(profile.id);
 		await this.kbCorpusManager.applyQueuedUpdates(profile.id);
+		// The wikilink scrub can mint UIDs for link targets that have none yet;
+		// write them now rather than leave them queued until the next publish.
+		if (this.frontmatterManager.hasUpdates()) {
+			await this.frontmatterManager.process();
+		}
 		NoticeManager.showNotice(`Reprocessed contentIndex.json for profile ${profile.id}`);
 	}
 

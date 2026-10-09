@@ -7,6 +7,15 @@ import { PathUtils } from '../utils/path';
 import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { restrictedPrefix } from '../utils/access';
+import { UID_KEY } from '../utils/uidResolver';
+import {
+	auditPublishedUids,
+	describePublishedUid,
+	formatUidAudit,
+	type AuditVaultNote,
+	type PublishedUid,
+	type UidAuditReport,
+} from '../utils/uidAudit';
 
 class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	profiles: PublishingProfile[];
@@ -33,34 +42,33 @@ class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	}
 }
 
-interface NoteEntry {
-	slug: string;
-	uid: string;
-}
+class NoteSuggestModal extends SuggestModal<PublishedUid> {
+	entries: PublishedUid[];
+	onChoose: (entry: PublishedUid) => void;
 
-class NoteSuggestModal extends SuggestModal<NoteEntry> {
-	entries: NoteEntry[];
-	onChoose: (entry: NoteEntry) => void;
-
-	constructor(app: App, slugToUid: Record<string, string>, onChoose: (entry: NoteEntry) => void) {
+	constructor(app: App, entries: PublishedUid[], placeholder: string, onChoose: (entry: PublishedUid) => void) {
 		super(app);
-		this.entries = Object.entries(slugToUid).map(([slug, uid]) => ({ slug, uid }));
+		this.entries = entries;
 		this.onChoose = onChoose;
-		this.setPlaceholder('Search for a published note to delete...');
+		this.setPlaceholder(placeholder);
 	}
 
-	getSuggestions(query: string): NoteEntry[] {
+	getSuggestions(query: string): PublishedUid[] {
+		const q = query.toLowerCase();
 		return this.entries.filter(entry =>
-			entry.slug.toLowerCase().includes(query.toLowerCase())
+			entry.label.toLowerCase().includes(q)
+			|| entry.uid.toLowerCase().includes(q)
+			|| (entry.title ?? '').toLowerCase().includes(q)
 		);
 	}
 
-	renderSuggestion(entry: NoteEntry, el: HTMLElement) {
-		el.createEl("div", { text: entry.slug });
-		el.createEl("small", { text: entry.uid, cls: 'suggestion-note' });
+	renderSuggestion(entry: PublishedUid, el: HTMLElement) {
+		el.createEl("div", { text: entry.label });
+		const detail = describePublishedUid(entry);
+		el.createEl("small", { text: detail ? `${entry.uid} · ${detail}` : entry.uid, cls: 'suggestion-note' });
 	}
 
-	onChooseSuggestion(entry: NoteEntry, evt: MouseEvent | KeyboardEvent) {
+	onChooseSuggestion(entry: PublishedUid, evt: MouseEvent | KeyboardEvent) {
 		this.onChoose(entry);
 	}
 }
@@ -155,8 +163,11 @@ export class Publisher {
 			if (connectedFile instanceof TFile && !this.isFileExcluded(connectedFile, profile)) {
 				const contexts = await this.getPublishContextsForFile(connectedFile);
 				if (contexts.includes(profileId)) {
-					const uid = this.plugin.frontmatterManager.getNoteUID(connectedFile);
-					if (uid === null) continue;
+					// Peek, never mint. Minting here runs after the batch's frontmatter
+					// was written and before Obsidian re-indexed it, which is how one
+					// note used to get a second UID. A connected note without a UID is
+					// still returned, so "Publish active and connected notes" includes it.
+					const uid = this.plugin.frontmatterManager.peekNoteUID(connectedFile);
 					// A note that can't publish (e.g. undefined access group) is not
 					// on the site, so it's not a connection either.
 					const access = this.plugin.noteManager.resolveNoteAccess(connectedFile, profile);
@@ -181,8 +192,7 @@ export class Publisher {
 				if (connectedFile instanceof TFile && !this.isFileExcluded(connectedFile, profile)) {
 					const contexts = await this.getPublishContextsForFile(connectedFile);
 					if (contexts.includes(profileId)) {
-						const uid = this.plugin.frontmatterManager.getNoteUID(connectedFile);
-						if (uid === null) continue;
+						const uid = this.plugin.frontmatterManager.peekNoteUID(connectedFile);
 						const access = this.plugin.noteManager.resolveNoteAccess(connectedFile, profile);
 						if (!access.ok) continue;
 						if (connections.has(sourcePath)) {
@@ -232,6 +242,15 @@ export class Publisher {
 					// pipeline from these cached, compiled stages.
 					await this.plugin.parserExtensionManager.loadExtensions(profile.id);
 
+					// Start from a clean slate: drop notes an earlier, failed publish
+					// queued but never committed, and write any frontmatter it minted
+					// but never wrote. Those UIDs were never published, and a note
+					// that has since got a UID on disk keeps it.
+					this.plugin.noteManager.discardQueued(profile.id);
+					if (this.plugin.frontmatterManager.hasUpdates()) {
+						await this.plugin.frontmatterManager.process();
+					}
+
 					// Queue all notes for processing
 					for (const file of files) {
 						await this.plugin.noteManager.queueNote(file, profile.id);
@@ -250,11 +269,28 @@ export class Publisher {
 					// Commit any pending frontmatter updates
 					if (this.plugin.frontmatterManager.hasUpdates()) {
 						Logger.debug(`Processing frontmatter updates`);
-						await this.plugin.frontmatterManager.process();
+						const { uidConflicts } = await this.plugin.frontmatterManager.process();
+						if (uidConflicts.length > 0) {
+							// A note got a different cpn-uid on disk (sync, a hand edit)
+							// after this batch minted one for it. Publishing now would put
+							// the note on the site under the minted UID while the vault
+							// keeps the other one, so stop before anything is staged.
+							this.plugin.noteManager.discardQueued(profile.id);
+							throw new Error(
+								`The cpn-uid of ${uidConflicts.join(', ')} changed while publishing. Nothing was published; publish again.`,
+							);
+						}
 					}
 
 					// Commit all queued notes to staging
 					await this.plugin.noteManager.commitPendingNotes(profile.id);
+
+					// Staging only looks UIDs up, so nothing should be queued now. If
+					// something was, write it rather than leave it for a later publish.
+					if (this.plugin.frontmatterManager.hasUpdates()) {
+						Logger.warn('Frontmatter edits were queued while staging notes; writing them now');
+						await this.plugin.frontmatterManager.process();
+					}
 				})(),
 				`${files.length} notes staged`
 			);
@@ -506,9 +542,77 @@ export class Publisher {
 		await this.publishNotes(allNotes, profile, true, triggerInvalidation);
 	}
 
-	async deletePublishedNote() {
-		// Step 1: Select profile
+	/**
+	 * Every UID this profile's local ledger says is published, checked against
+	 * the vault. Reads local files only (no S3 calls).
+	 */
+	async auditUids(profile: PublishingProfile): Promise<UidAuditReport> {
+		await this.plugin.mappingManager.loadProfileMappings(profile.id);
+		const contentIndex = await this.plugin.contentIndexManager.loadIndex(profile.id);
+		const fm = this.plugin.frontmatterManager;
+		const vault: AuditVaultNote[] = this.plugin.app.vault.getMarkdownFiles().map((file) => {
+			const raw = fm.getFrontmatterValue(file, UID_KEY);
+			return {
+				path: file.path,
+				uid: fm.peekNoteUID(file),
+				nonStringUid: raw !== null && raw !== undefined && typeof raw !== 'string',
+				publishable: !this.isFileExcluded(file, profile)
+					&& fm.normalizePublishContexts(file).includes(profile.id),
+			};
+		});
+		return auditPublishedUids(
+			{
+				slugToUid: this.plugin.mappingManager.getSlugToUidMap(profile.id),
+				uidToHash: this.plugin.mappingManager.getUidToHashMap(profile.id),
+				contentIndex,
+			},
+			vault,
+			this.plugin.settings.uidLength ?? 8,
+		);
+	}
+
+	/**
+	 * "Audit published notes": report published UIDs that no vault note
+	 * carries (typically a stale copy left after a note's UID changed), UIDs
+	 * whose note stopped publishing, and UIDs shared by several notes. Details
+	 * go to the console; on AWS profiles the delete picker then opens on the
+	 * flagged UIDs.
+	 */
+	async auditPublishedNotes(): Promise<void> {
 		const profile = await this.promptForProfile();
+		if (!profile) return;
+
+		const report = await this.auditUids(profile);
+		Logger.info(`Audit of published notes for profile '${profile.id}':\n${formatUidAudit(report).join('\n')}`);
+
+		const flagged = report.orphans.length + report.unpublishedInVault.length;
+		const summary = [
+			`Audit of "${profile.name}": ${report.published.length} published UID(s).`,
+			`${report.orphans.length} with no vault note.`,
+			`${report.unpublishedInVault.length} whose note no longer publishes here.`,
+			`${report.sharedUids.length} UID(s) shared by more than one note.`,
+			'Details are in the developer console.',
+		];
+		const canDelete = profile.publishMechanism === 'AWS' && !!profile.awsSettings;
+		if (flagged > 0 && !canDelete) {
+			summary.push('Deleting published notes is only supported for AWS profiles.');
+		}
+		NoticeManager.showNotice(summary.join('\n'), 15000);
+
+		if (flagged > 0 && canDelete) {
+			await this.deletePublishedNote(profile, true);
+		}
+	}
+
+	/**
+	 * "Delete a published note": pick a published UID and remove it from the
+	 * site. The list comes from the local ledger, not just the slug map, so a
+	 * stale UID left behind by a UID change can be picked too. With
+	 * `flaggedOnly`, only UIDs the audit flagged are listed.
+	 */
+	async deletePublishedNote(preselected?: PublishingProfile, flaggedOnly = false) {
+		// Step 1: Select profile
+		const profile = preselected ?? await this.promptForProfile();
 		if (!profile) return;
 
 		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
@@ -516,25 +620,34 @@ export class Publisher {
 			return;
 		}
 
-		// Step 2: Load mappings and present note selection
-		await this.plugin.mappingManager.loadProfileMappings(profile.id);
-		const slugToUid = this.plugin.mappingManager.getSlugToUidMap(profile.id);
+		// Step 2: List published UIDs (flagged ones first) and pick one
+		const report = await this.auditUids(profile);
+		const entries = flaggedOnly
+			? report.published.filter(e => e.orphan || e.unpublishedInVault)
+			: report.published;
 
-		if (Object.keys(slugToUid).length === 0) {
-			NoticeManager.showNotice('No published notes found for this profile');
+		if (entries.length === 0) {
+			NoticeManager.showNotice(flaggedOnly
+				? 'No stale published UIDs found for this profile'
+				: 'No published notes found for this profile');
 			return;
 		}
 
-		const selectedNote = await new Promise<NoteEntry | null>((resolve) => {
-			new NoteSuggestModal(this.plugin.app, slugToUid, (entry) => {
-				resolve(entry);
-			}).open();
+		const selectedNote = await new Promise<PublishedUid | null>((resolve) => {
+			new NoteSuggestModal(
+				this.plugin.app,
+				entries,
+				flaggedOnly
+					? 'Pick a stale published UID to delete (Esc to close)...'
+					: 'Search for a published note to delete...',
+				(entry) => resolve(entry),
+			).open();
 		});
 		if (!selectedNote) return;
 
 		// Step 3: Confirmation
 		const confirmed = await new Promise<boolean>((resolve) => {
-			new ConfirmSuggestModal(this.plugin.app, selectedNote.slug, (choice) => {
+			new ConfirmSuggestModal(this.plugin.app, `${selectedNote.label} (${selectedNote.uid})`, (choice) => {
 				resolve(choice === 'Yes');
 			}).open();
 		});
@@ -543,6 +656,22 @@ export class Publisher {
 			return;
 		}
 
+		await this.deletePublishedUid(profile, selectedNote.uid, selectedNote.label);
+	}
+
+	/**
+	 * Remove one published UID from an AWS profile's site: every revision in
+	 * every partition, its chat corpus object, and its entries in the local
+	 * mappings, access map and content index (then re-push those). Publish
+	 * history is kept. Returns true on success.
+	 */
+	async deletePublishedUid(profile: PublishingProfile, uid: string, label: string = uid): Promise<boolean> {
+		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
+			NoticeManager.showNotice('Delete is only supported for AWS publishing profiles');
+			return false;
+		}
+		const selectedNote = { uid, label };
+		await this.plugin.mappingManager.loadProfileMappings(profile.id);
 		try {
 			// Step 4: Collect all hashes to delete
 			const history = await this.plugin.noteManager.loadPublishHistory(profile.id);
@@ -582,7 +711,7 @@ export class Publisher {
 
 					if (!deleteSuccess.success || !deleteSuccess.result) {
 						// Permission error or failure — stop without modifying local files
-						return;
+						return false;
 					}
 				}
 			}
@@ -604,7 +733,7 @@ export class Publisher {
 				const kbDeleteSuccess = await deleteKbCorpusFromS3(this.plugin, profile.id, selectedNote.uid);
 				if (!kbDeleteSuccess) {
 					// Credential error — stop before re-pushing / invalidating.
-					return;
+					return false;
 				}
 			}
 
@@ -614,10 +743,12 @@ export class Publisher {
 			// Step 9: Trigger CloudFront invalidation
 			await createCloudFrontInvalidation(this.plugin, profile.id);
 
-			NoticeManager.showNotice(`Successfully deleted published note: ${selectedNote.slug}`);
+			NoticeManager.showNotice(`Successfully deleted published note: ${selectedNote.label}`);
+			return true;
 		} catch (error) {
 			Logger.error('Error deleting published note:', error);
 			NoticeManager.showNotice(`Error deleting note: ${errorMessage(error)}`);
+			return false;
 		}
 	}
 }

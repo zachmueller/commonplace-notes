@@ -48,9 +48,26 @@ function generateCrockfordUID(): string {
  * @param length Number of characters in the resulting UID (default 8)
  */
 export function generateUID(length = 8): string {
-	let pool = "";
-	while (pool.length < length) {
-		pool += generateCrockfordUID();
+	// Re-draw the rare candidate that YAML would read as a number (e.g.
+	// `12E45678` -> a float, `00123456` -> an int). Obsidian quotes such strings
+	// when it writes frontmatter, but other tools may not, and an unquoted one
+	// would come back as a different value than the one published.
+	for (;;) {
+		let pool = "";
+		while (pool.length < length) {
+			pool += generateCrockfordUID();
+		}
+		const candidate = pool.slice(0, length);
+		if (!isYamlAmbiguous(candidate)) return candidate;
 	}
-	return pool.slice(0, length);
+}
+
+/**
+ * True if an unquoted YAML scalar with this text would parse as a number
+ * rather than a string. Covers the shapes a Crockford Base32 UID can take:
+ * all digits, or digits with a single `E` exponent (Crockford has no `.`,
+ * `+`, `-` or lowercase letters).
+ */
+export function isYamlAmbiguous(uid: string): boolean {
+	return /^\d+$/.test(uid) || /^\d+E\d+$/.test(uid);
 }

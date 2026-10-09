@@ -132,15 +132,19 @@ export class NoteManager {
 	async getBacklinks(targetFile: TFile, profileId: string): Promise<BacklinkInfo[]> {
 		const connections = await this.plugin.publisher.getConnectedNotes(targetFile, profileId);
 
-		// Filter to only include backlinks
-		return connections
-			.filter(connection => connection.isBacklink)
-			.map(connection => ({
+		// Backlinks from notes that have a UID (a note without one has never
+		// been published, so there is no page to link to).
+		const backlinks: BacklinkInfo[] = [];
+		for (const connection of connections) {
+			if (!connection.isBacklink || connection.uid === null) continue;
+			backlinks.push({
 				uid: connection.uid,
 				slug: connection.slug,
 				title: connection.title,
 				access: connection.access,
-			}));
+			});
+		}
+		return backlinks;
 	}
 
 	/**
@@ -249,6 +253,21 @@ export class NoteManager {
 			}
 			return null;
 		});
+	}
+
+	/**
+	 * Drop notes queued (or blocked) for a profile by an earlier publish that
+	 * stopped before committing them, so a later publish can't commit them
+	 * under a UID they no longer have.
+	 */
+	discardQueued(profileId: string): void {
+		const prefix = `${profileId}:`;
+		for (const key of [...this.pendingNotes.keys()]) {
+			if (key.startsWith(prefix)) this.pendingNotes.delete(key);
+		}
+		for (const key of [...this.blockedNotes.keys()]) {
+			if (key.startsWith(prefix)) this.blockedNotes.delete(key);
+		}
 	}
 
 	async queueNote(file: TFile, profileId: string) {
