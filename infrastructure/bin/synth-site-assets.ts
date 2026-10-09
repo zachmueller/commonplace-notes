@@ -202,6 +202,7 @@ const indexTemplate = `<!DOCTYPE html>
 \t\t</div>
 \t\t<div class="header-right">
 \t\t\t<div class="search-container">
+\t\t\t\t<button type="button" id="search-toggle" class="search-toggle" aria-label="Search notes" aria-expanded="false">🔍</button>
 \t\t\t\t<input type="text" id="search-input" placeholder="Search notes..." aria-label="Search notes">
 \t\t\t\t<div id="search-results" class="search-results"></div>
 \t\t\t</div>

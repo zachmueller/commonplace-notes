@@ -1428,6 +1428,11 @@ div.comment-input:empty:before {
 	box-shadow: 0 4px 20px rgba(0,0,0,0.25);
 	overflow: hidden;
 }
+/* The display: flex above outranks the browser's [hidden] rule, which left the
+   panel showing (and covering notes) before the reader opened it. */
+.cpn-chat-panel[hidden] {
+	display: none;
+}
 /* Drag-to-resize grip. The panel is anchored bottom-right, so the free corner
    is top-left; dragging it up/left grows the box (see the resize handler). */
 .cpn-chat-resize {
@@ -1521,6 +1526,134 @@ body.cpn-chat-resizing { cursor: nwse-resize; user-select: none; }
 }
 .cpn-chat-send:disabled { opacity: 0.5; cursor: default; }
 
+/* Header search toggle: hidden on wide screens, where the input is always shown. */
+.search-toggle {
+	display: none;
+}
+
+/* ===== Narrow screens: panels ===========================================
+   When the screen is narrower than a panel, each panel becomes exactly the
+   screen width and the stack snaps one note per swipe. The 600px below is the
+   default panel width: renderStylesCss rewrites every `width: 600px` to the
+   profile's panelWidth, so this breakpoint follows a custom width too.
+   !important beats the inline width a `;width=` link or a drag sets (kept on
+   the dataset, so the URL still round-trips it); .panel.collapsing has higher
+   specificity, so the close animation still wins. */
+@media (max-width: 600px) {
+	:root {
+		--cpn-narrow-panels: 1; /* read by setupPanelResizing to disable drag */
+	}
+	.panels-container {
+		scroll-snap-type: x mandatory;
+		overscroll-behavior-x: contain;
+	}
+	.panel {
+		flex: 0 0 100% !important;
+		width: 100% !important;
+		scroll-snap-align: start;
+		scroll-snap-stop: always;
+	}
+}
+
+/* ===== Narrow screens: header and chat ==================================
+   A fixed phone breakpoint (not tied to panel width): what crowds the header
+   is its own contents. Search collapses to a 🔍 button that expands the input
+   across the header (see setupSearchToggle). Inputs use 16px text because
+   iOS Safari zooms the page into any focused input with smaller text. */
+@media (max-width: 640px) {
+	.header {
+		padding: 0 12px;
+		gap: 12px;
+	}
+	.header-left {
+		min-width: 0;
+		gap: 14px;
+		overflow-x: auto;
+		white-space: nowrap;
+		scrollbar-width: none;
+	}
+	.header-left::-webkit-scrollbar {
+		display: none;
+	}
+	.header-right {
+		gap: 10px;
+	}
+	.search-toggle {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		padding: 0;
+		background: none;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		font-size: 16px;
+		cursor: pointer;
+	}
+	#search-input {
+		display: none;
+	}
+	.header.search-open .header-left,
+	.header.search-open .header-right > :not(.search-container) {
+		display: none;
+	}
+	.header.search-open .header-right,
+	.header.search-open .search-container {
+		flex: 1;
+	}
+	.header.search-open .search-toggle {
+		display: none;
+	}
+	.header.search-open #search-input,
+	.header.search-open #search-input:focus {
+		display: block;
+		width: 100%;
+		box-sizing: border-box;
+		font-size: 16px;
+	}
+	.search-results {
+		position: fixed;
+		top: 50px;
+		left: 0;
+		right: 0;
+		width: auto;
+		max-height: calc(100vh - 50px);
+		margin-top: 0;
+		border-radius: 0;
+		border-left: none;
+		border-right: none;
+	}
+
+	/* Chat opens as a full-width bottom sheet. !important beats any inline size
+	   left by a desktop drag; the collapsed bar keeps its natural height. */
+	.cpn-chat-launcher {
+		right: 12px;
+		bottom: 12px;
+	}
+	.cpn-chat-panel {
+		left: 0;
+		right: 0;
+		bottom: 0;
+		width: auto !important;
+		max-width: none;
+		border-left: none;
+		border-right: none;
+		border-bottom: none;
+		border-radius: 12px 12px 0 0;
+	}
+	.cpn-chat-panel:not(.cpn-chat-collapsed) {
+		height: 75vh !important;
+		max-height: calc(100vh - 60px);
+	}
+	.cpn-chat-resize {
+		display: none;
+	}
+	.cpn-chat-input {
+		font-size: 16px;
+	}
+}
+
 	</style>
 </head>
 <body>
@@ -1530,6 +1663,7 @@ body.cpn-chat-resizing { cursor: nwse-resize; user-select: none; }
 		</div>
 		<div class="header-right">
 			<div class="search-container">
+				<button type="button" id="search-toggle" class="search-toggle" aria-label="Search notes" aria-expanded="false">🔍</button>
 				<input type="text" id="search-input" placeholder="Search notes..." aria-label="Search notes">
 				<div id="search-results" class="search-results"></div>
 			</div>
@@ -1848,6 +1982,46 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
             console.error('Initialization failed:', error);
         }
     }
+
+		// Narrow-screen header: the 🔍 button (only visible under the phone
+		// breakpoint) expands the search input across the header; tapping
+		// outside, Escape, or picking a result collapses it again. Wired
+		// separately from setupSearch, which only runs once the content index
+		// loads. The class has no effect on wide screens.
+		(function setupSearchToggle() {
+			const header = document.querySelector('.header');
+			const toggle = document.getElementById('search-toggle');
+			const input = document.getElementById('search-input');
+			const results = document.getElementById('search-results');
+			if (!header || !toggle || !input) return;
+
+			function setOpen(open) {
+				header.classList.toggle('search-open', open);
+				toggle.setAttribute('aria-expanded', String(open));
+				if (open) {
+					input.focus();
+				} else {
+					input.blur();
+					if (results) results.classList.remove('active');
+				}
+			}
+
+			toggle.addEventListener('click', () => setOpen(true));
+			input.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape' && header.classList.contains('search-open')) setOpen(false);
+			});
+			if (results) {
+				results.addEventListener('click', (e) => {
+					const item = e.target.closest('.search-result-item');
+					if (item && item.dataset.uid) setOpen(false);
+				});
+			}
+			document.addEventListener('click', (e) => {
+				if (header.classList.contains('search-open') && !e.target.closest('.search-container')) {
+					setOpen(false);
+				}
+			});
+		})();
 
 		// Initialize
 		initializeSearch().catch(error => {console.error('Top-level initialization error:', error);});
@@ -4203,6 +4377,14 @@ ${closeButton}
 			let startWidth = 0;       // panel width at drag start
 			let hoverPanel = null;    // panel currently showing the hover affordance
 
+			// Under the narrow-panels breakpoint every panel is forced to the
+			// screen width, so a drag would do nothing but write the screen width
+			// into the URL. The stylesheet flags that mode with a CSS variable.
+			function narrowPanels() {
+				return getComputedStyle(document.documentElement)
+					.getPropertyValue('--cpn-narrow-panels').trim() === '1';
+			}
+
 			// Find the panel (if any) whose right-edge grab zone contains the
 			// pointer. We iterate and measure rather than using e.target, because
 			// at a boundary between two panels the pointer sits over the NEXT
@@ -4215,6 +4397,7 @@ ${closeButton}
 			// is 0 with overlay scrollbars) so the grab zone hugs the content edge
 			// and doesn't fight the scrollbar.
 			function panelAt(clientX, clientY) {
+				if (narrowPanels()) return null;
 				const panels = container.querySelectorAll('.panel');
 				for (const panel of panels) {
 					if (panel.classList.contains('collapsing')) continue;

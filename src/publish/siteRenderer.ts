@@ -109,6 +109,8 @@ export function renderStylesCss(
 
 	let css = SITE_STYLES_CSS;
 	css = css.replace(/flex: 0 0 600px/g, `flex: 0 0 ${panelWidth}px`);
+	// Also moves the narrow-panels breakpoint, `@media (max-width: 600px)`, so
+	// panels go full-width exactly when the screen is narrower than one panel.
 	css = css.replace(/width: 600px/g, `width: ${panelWidth}px`);
 	css = applyStylesCssSlots(css, customizations);
 	return css;
