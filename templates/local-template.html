@@ -94,6 +94,39 @@
 			opacity: 0.65;
 		}
 
+		/* highlights (==text==); a leading color emoji (==🔴text==) becomes
+		   data-highlight="<color>". Same palette as the published site's light theme. */
+		mark {
+			background-color: rgba(255, 208, 0, 0.35);
+			color: inherit;
+			border-radius: 2px;
+			padding: 0 0.1em;
+		}
+
+		mark[data-highlight="red"] {
+			background-color: rgba(233, 49, 71, 0.35);
+		}
+
+		mark[data-highlight="orange"] {
+			background-color: rgba(236, 117, 0, 0.35);
+		}
+
+		mark[data-highlight="yellow"] {
+			background-color: rgba(224, 172, 0, 0.35);
+		}
+
+		mark[data-highlight="green"] {
+			background-color: rgba(8, 185, 78, 0.35);
+		}
+
+		mark[data-highlight="blue"] {
+			background-color: rgba(8, 109, 221, 0.35);
+		}
+
+		mark[data-highlight="purple"] {
+			background-color: rgba(120, 82, 238, 0.35);
+		}
+
 		/* GFM task list checkboxes */
 		input[type="checkbox"] {
 			margin-right: 6px;

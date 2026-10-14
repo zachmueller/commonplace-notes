@@ -32,7 +32,8 @@ import { Text } from 'mdast';
  * 🔗 Coupling: the emitted `data-highlight` values MUST match the
  * `mark[data-highlight="…"]` CSS in the published site (the source of truth is
  * `infrastructure/assets/index/index.html`, regenerated into
- * `src/publish/siteAssets.ts` via `npm run synth:site`). Keep PALETTE in sync
+ * `src/publish/siteAssets.ts` via `npm run synth:site`), and the matching rules
+ * in `templates/local-template.html` for local publishing. Keep PALETTE in sync
  * with that CSS.
  */
 
