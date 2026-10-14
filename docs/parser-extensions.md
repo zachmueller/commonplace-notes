@@ -4,7 +4,7 @@
 > Markdown→HTML pipeline out of the box; this guide is for customizing it.
 
 CPN turns each note's Markdown into HTML by running it through an ordered list of
-**parser stages**. Every stage — including the nine built-ins — is defined as a
+**parser stages**. Every stage — including the ten built-ins — is defined as a
 Markdown file, so you can override a built-in or add your own by authoring a note
 in your vault. No plugin rebuild required.
 
@@ -22,13 +22,13 @@ The default order is:
 
 ```
 010 remark-parse → 020 remark-gfm → 030 line-numbers → 035 remark-block-ids →
-040 remark-obsidian-links → 045 remark-callouts → 050 remark-rehype →
-055 rehype-slug → 060 rehype-stringify
+040 remark-obsidian-links → 045 remark-callouts → 047 remark-highlights →
+050 remark-rehype → 055 rehype-slug → 060 rehype-stringify
 ```
 
 ## The built-in stages
 
-There are **nine** built-in stages:
+There are **ten** built-in stages:
 
 | Order | Name | Tree | What it does |
 |-------|------|------|--------------|
@@ -38,6 +38,7 @@ There are **nine** built-in stages:
 | 35 | `remark-block-ids` | remark | Turns Obsidian `^block-id` markers into `data-block-id` attributes. |
 | 40 | `remark-obsidian-links` | remark | Resolves `[[wikilinks]]` to published-note URLs (or unpublished spans), and `![[embeds]]` to transclusion placeholders. |
 | 45 | `remark-callouts` | remark | Renders Obsidian `[!type]` callout blockquotes as styled callout boxes. |
+| 47 | `remark-highlights` | remark | Renders `==highlights==` as `<mark>`; a leading color emoji (`==🔴text==`) sets `data-highlight="red"` etc. |
 | 50 | `remark-rehype` | rehype | Converts the MDAST (Markdown) tree into a HAST (HTML) tree. |
 | 55 | `rehype-slug` | rehype | Assigns GitHub-style slug `id`s to every heading. |
 | 60 | `rehype-stringify` | rehype | Serializes the HAST (HTML) tree to the final HTML string. |
@@ -61,6 +62,10 @@ A few couplings to respect if you override these:
 - **Callout CSS.** `remark-callouts` emits `data-callout-type` values that must
   match the published site's `[data-callout-type="…"]` CSS. Keep the type list in
   sync if you customize it.
+- **Highlight CSS.** `remark-highlights` emits `data-highlight` values (`red`,
+  `orange`, `yellow`, `green`, `blue`, `purple`) that must match the published
+  site's `mark[data-highlight="…"]` CSS. Keep the emoji→color palette in sync if
+  you customize it.
 - **`remark-parse` is the frontend.** It must stay order 10 / stage `remark`;
   overriding it replaces the *entire* Markdown parser.
 
@@ -111,7 +116,7 @@ The single approved channel for building blocks (since you can't `import`):
 - **canonical pipeline stages** (so overrides can delegate to the originals):
   `remarkParse`, `remarkGfm`, `remarkRehype`, `rehypeSlug`, `rehypeStringify`
 - **CPN-internal factories:** `remarkObsidianLinks`, `remarkLineNumbers`,
-  `remarkCallouts`
+  `remarkBlockIds`, `remarkCallouts`, `remarkHighlights`
 - **optional plugins (eager):** `rehypeRaw`, `rehypeAutolinkHeadings`, `remarkMath`
 - **heavy math renderers (lazy thunks — `await` them):** `rehypeKatex()`,
   `rehypeMathjax()`

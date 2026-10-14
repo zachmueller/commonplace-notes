@@ -46,6 +46,7 @@ import remarkObsidianLinks from '../remarkObsidianLinks';
 import remarkLineNumbers from '../remarkLineNumbers';
 import remarkBlockIds from '../remarkBlockIds';
 import remarkCallouts from '../remarkCallouts';
+import remarkHighlights from '../remarkHighlights';
 import type { ParserLibs, Plugin } from './types';
 import type { Node } from 'unist';
 import type { VFile } from 'vfile';
@@ -90,6 +91,7 @@ export function buildParserLibs(): ParserLibs {
 		remarkLineNumbers,
 		remarkBlockIds,
 		remarkCallouts,
+		remarkHighlights,
 		// optional plugins — light ones eager
 		rehypeRaw,
 		rehypeAutolinkHeadings,

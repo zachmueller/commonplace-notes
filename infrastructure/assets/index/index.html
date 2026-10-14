@@ -57,6 +57,16 @@
 	--callout-example: 120, 82, 238;
 	--callout-quote: 158, 158, 158;
 	--callout-bg-opacity: 0.05;
+
+	/* Highlight colors (==text==, ==🔴text==) */
+	--highlight-default: 255, 208, 0;
+	--highlight-red: 233, 49, 71;
+	--highlight-orange: 236, 117, 0;
+	--highlight-yellow: 224, 172, 0;
+	--highlight-green: 8, 185, 78;
+	--highlight-blue: 8, 109, 221;
+	--highlight-purple: 120, 82, 238;
+	--highlight-bg-opacity: 0.35;
 }
 
 /* Dark theme colors */
@@ -111,6 +121,16 @@
 		--callout-example: 163, 139, 255;
 		--callout-quote: 158, 158, 158;
 		--callout-bg-opacity: 0.1;
+
+		/* Highlight colors (==text==, ==🔴text==) - dark mode */
+		--highlight-default: 255, 208, 0;
+		--highlight-red: 255, 99, 120;
+		--highlight-orange: 255, 158, 67;
+		--highlight-yellow: 255, 213, 67;
+		--highlight-green: 73, 204, 121;
+		--highlight-blue: 88, 166, 255;
+		--highlight-purple: 163, 139, 255;
+		--highlight-bg-opacity: 0.4;
 	}
 }
 
@@ -165,6 +185,16 @@
 	--callout-example: 163, 139, 255;
 	--callout-quote: 158, 158, 158;
 	--callout-bg-opacity: 0.1;
+
+	/* Highlight colors (==text==, ==🔴text==) */
+	--highlight-default: 255, 208, 0;
+	--highlight-red: 255, 99, 120;
+	--highlight-orange: 255, 158, 67;
+	--highlight-yellow: 255, 213, 67;
+	--highlight-green: 73, 204, 121;
+	--highlight-blue: 88, 166, 255;
+	--highlight-purple: 163, 139, 255;
+	--highlight-bg-opacity: 0.4;
 }
 
 /* Manual light theme override */
@@ -218,6 +248,16 @@
 	--callout-example: 120, 82, 238;
 	--callout-quote: 158, 158, 158;
 	--callout-bg-opacity: 0.05;
+
+	/* Highlight colors (==text==, ==🔴text==) */
+	--highlight-default: 255, 208, 0;
+	--highlight-red: 233, 49, 71;
+	--highlight-orange: 236, 117, 0;
+	--highlight-yellow: 224, 172, 0;
+	--highlight-green: 8, 185, 78;
+	--highlight-blue: 8, 109, 221;
+	--highlight-purple: 120, 82, 238;
+	--highlight-bg-opacity: 0.35;
 }
 
 .header {
@@ -405,6 +445,40 @@ summary[data-callout-title]::-webkit-details-marker {
 
 [data-callout-type="quote"] {
 	--callout-color: var(--callout-quote);
+}
+
+/* Highlights (==text==). A leading color emoji (==🔴text==) becomes
+   data-highlight="<color>" (see src/utils/remarkHighlights.ts). */
+mark {
+	--highlight-color: var(--highlight-default);
+	background-color: rgba(var(--highlight-color), var(--highlight-bg-opacity));
+	color: inherit;
+	border-radius: 2px;
+	padding: 0 0.1em;
+}
+
+mark[data-highlight="red"] {
+	--highlight-color: var(--highlight-red);
+}
+
+mark[data-highlight="orange"] {
+	--highlight-color: var(--highlight-orange);
+}
+
+mark[data-highlight="yellow"] {
+	--highlight-color: var(--highlight-yellow);
+}
+
+mark[data-highlight="green"] {
+	--highlight-color: var(--highlight-green);
+}
+
+mark[data-highlight="blue"] {
+	--highlight-color: var(--highlight-blue);
+}
+
+mark[data-highlight="purple"] {
+	--highlight-color: var(--highlight-purple);
 }
 
 /* Blockquotes (plain Markdown `> ...`; callouts are styled via [data-callout-type]) */

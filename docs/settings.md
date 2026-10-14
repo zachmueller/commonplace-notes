@@ -116,6 +116,11 @@ Each style has:
     `var(--bg-primary)`, `var(--link-color)`, `var(--border-color)`,
     `var(--bg-secondary)` so light/dark follow the theme automatically.
     Hard-coded colors won't adapt.
+  - **Highlight colors** — `==highlights==` read `--highlight-default` and
+    `--highlight-red` / `-orange` / `-yellow` / `-green` / `-blue` / `-purple`
+    (RGB triplets, e.g. `--highlight-red: 200, 0, 0;`) plus
+    `--highlight-bg-opacity`. Set them here to recolor one style's highlights,
+    or in the global `extra-css` slot for the whole site.
   - **Prefer class or `&`-nested selectors** (`.my-class { … }`, `& p { … }`)
     over bare element selectors (`p { … }`); the latter need a newer browser for
     CSS nesting. On browsers without nesting support the block is simply ignored

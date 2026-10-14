@@ -132,6 +132,7 @@ export interface ParserLibs {
 	remarkLineNumbers: typeof import('../remarkLineNumbers').default;
 	remarkBlockIds: typeof import('../remarkBlockIds').default;
 	remarkCallouts: typeof import('../remarkCallouts').default;
+	remarkHighlights: typeof import('../remarkHighlights').default;
 	// optional plugins — light ones eager
 	rehypeRaw: unknown;
 	rehypeAutolinkHeadings: unknown;

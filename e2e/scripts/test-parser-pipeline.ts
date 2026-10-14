@@ -17,8 +17,9 @@
  *   4. Bad-return-shape stage — failure is isolated; the rest of the pipeline runs.
  *   5. Override-by-name — a vault stage with a built-in's name replaces it.
  *   6. context.noteStyle is readable from custom stages.
- *   7. Transclusion placeholders (![[…]]) and block ids (^id).
+ *   7. Transclusion placeholders (![[…]]), block ids (^id) and highlights (==…==).
  *   8. remark-obsidian-links override with transclusions:false.
+ *   9. remark-highlights override (no-op) leaves ==…== literal.
  *
  * Run: npx tsx e2e/scripts/test-parser-pipeline.ts
  */
@@ -436,6 +437,119 @@ return libs.defineTransform((tree) => {
 					'<a href="#/uUID-a" data-heading="^abc">alias</a>',
 				],
 			},
+			{
+				name: 'highlight · plain → default <mark>',
+				md: 'a ==b== c',
+				has: ['<p class="line" data-line="1">a <mark>b</mark> c</p>'],
+				not: ['=='],
+			},
+			...([
+				['🔴', 'red'],
+				['🟠', 'orange'],
+				['🟡', 'yellow'],
+				['🟢', 'green'],
+				['🔵', 'blue'],
+				['🟣', 'purple'],
+			] as const).map(([emoji, color]) => ({
+				name: `highlight · ${emoji} → data-highlight="${color}", emoji stripped`,
+				md: `==${emoji}text==`,
+				has: [`<mark data-highlight="${color}">text</mark>`],
+				not: [emoji, '=='],
+			})),
+			{
+				name: 'highlight · emoji then a space',
+				md: '==🟢 go==',
+				has: ['<mark data-highlight="green">go</mark>'],
+			},
+			{
+				name: 'highlight · emoji with variation selector',
+				md: '==🔴\uFE0F stop==',
+				has: ['<mark data-highlight="red">stop</mark>'],
+				not: ['\uFE0F'],
+			},
+			{
+				name: 'highlight · unknown emoji stays as text in a default highlight',
+				md: '==🟤x==',
+				has: ['<mark>🟤x</mark>'],
+			},
+			{
+				name: 'highlight · emoji-only highlight keeps the emoji',
+				md: '==🔴==',
+				has: ['<mark>🔴</mark>'],
+			},
+			{
+				name: 'highlight · wraps bold and a wikilink',
+				md: '==see **b** [[a]]==',
+				has: ['<mark>see <strong class="line" data-line="1">b</strong> <a href="#/uUID-a">a</a></mark>'],
+				not: ['=='],
+			},
+			{
+				name: 'highlight · colored, starting at a wikilink-split boundary',
+				md: '==🟣[[a]] then text==',
+				has: ['<mark data-highlight="purple"><a href="#/uUID-a">a</a> then text</mark>'],
+			},
+			{
+				name: 'highlight · wraps an unpublished link',
+				md: '==go [[missing]]==',
+				has: ['<mark>go <span class="unpublished-link">missing</span></mark>'],
+			},
+			{
+				name: 'highlight · inside bold',
+				md: '**==x==**',
+				has: ['<strong class="line" data-line="1"><mark>x</mark></strong>'],
+			},
+			{
+				name: 'highlight · several in one paragraph',
+				md: '==🔴a== and ==🔵b==',
+				has: ['<mark data-highlight="red">a</mark> and <mark data-highlight="blue">b</mark>'],
+			},
+			{
+				name: 'highlight · intraword',
+				md: 'x==y==z',
+				has: ['x<mark>y</mark>z'],
+			},
+			{
+				name: 'highlight · inline code and code fences are untouched',
+				md: '`==x==`\n\n```\n==y==\n```',
+				has: ['>==x==</code>', '==y==\n</code>'],
+				not: ['<mark'],
+			},
+			{
+				name: 'highlight · spaced or unmatched == stays literal',
+				md: 'a == b == c\n\nx ==y\n\n== x==\n\n===z===',
+				has: ['a == b == c', 'x ==y', '== x==', '===z==='],
+				not: ['<mark'],
+			},
+			{
+				name: 'highlight · in a heading (slug from stripped text)',
+				md: '## ==🔵Key== idea',
+				has: ['id="key-idea"><mark data-highlight="blue">Key</mark> idea</h2>'],
+			},
+			{
+				name: 'highlight · in a table cell and a tight list item',
+				md: '| ==t== |\n|---|\n| ==🟢c== |\n\n- ==🟠li==',
+				has: [
+					'<th class="line" data-line="1"><mark>t</mark></th>',
+					'<td class="line" data-line="3"><mark data-highlight="green">c</mark></td>',
+					'<li class="line" data-line="5"><mark data-highlight="orange">li</mark></li>',
+				],
+			},
+			{
+				name: 'highlight · in a callout body',
+				md: '> [!note] Title\n> ==🟡body==',
+				has: ['data-callout-type="note"', '<mark data-highlight="yellow">body</mark>'],
+			},
+			{
+				name: 'highlight · spans a soft line break',
+				md: '==one\ntwo==',
+				has: ['<mark>one\ntwo</mark>'],
+			},
+			{
+				name: 'highlight · with a trailing block id',
+				md: '==done== ^b1',
+				has: ['<p class="line" data-line="1" data-block-id="b1"><mark>done</mark></p>'],
+				not: ['^b1'],
+			},
 		];
 		for (const c of cases) {
 			const { html, errors } = await assembleAndRender(c.md);
@@ -468,6 +582,24 @@ return [libs.remarkObsidianLinks, {
 		if (html.includes('cpn-transclusion')) errs.push('placeholder emitted despite transclusions:false');
 		if (!html.includes('<p class="line" data-line="1"><a href="#/uUID-a">a</a></p>')) errs.push(`expected a plain link (html: ${html})`);
 		check('override · transclusions:false → links', errs);
+	}
+
+	// 9. Override remark-highlights with a no-op → `==x==` stays literal.
+	{
+		const override = `---
+cpn-type: parser
+cpn-parser-name: remark-highlights
+cpn-parser-stage: remark
+cpn-parser-order: 47
+---
+\`\`\`ts
+return function () {};
+\`\`\``;
+		const { html, errors } = await assembleAndRender('==x==', [override]);
+		const errs = [...errors];
+		if (html.includes('<mark')) errs.push(`no-op override still highlighted (html: ${html})`);
+		if (!html.includes('==x==')) errs.push(`expected literal ==x== (html: ${html})`);
+		check('override · remark-highlights no-op → literal', errs);
 	}
 
 	console.log('');

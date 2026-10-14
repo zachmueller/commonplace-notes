@@ -82,7 +82,7 @@ comment box to published note pages. Requires Cognito comment identity. See
 ### Parser stage
 
 One step in the Markdown→HTML pipeline (e.g. parse Markdown, resolve wikilinks,
-serialize HTML). CPN ships nine **built-in** stages, and you can **override** a
+serialize HTML). CPN ships ten **built-in** stages, and you can **override** a
 built-in — or add your own — by authoring a stage as a Markdown file in your
 vault. See [parser extensions](parser-extensions.md).
 

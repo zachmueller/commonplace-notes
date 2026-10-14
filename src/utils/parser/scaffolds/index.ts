@@ -11,8 +11,9 @@
  *   010 remark-parse → 020 remark-gfm → 030 line-numbers →
  *   040 remark-obsidian-links → 045 remark-callouts → 050 remark-rehype →
  *   055 rehype-slug → 060 rehype-stringify
- * with 035 remark-block-ids added since (a no-op for notes without `^id`
- * markers, so pre-existing output is unchanged).
+ * with 035 remark-block-ids and 047 remark-highlights added since (no-ops for
+ * notes without `^id` markers or `==` highlights, so pre-existing output is
+ * unchanged).
  *
  * Analogue of Notor's `BUILTIN_TOOL_SCAFFOLDS`.
  */
@@ -24,6 +25,7 @@ import { LINE_NUMBERS } from './line-numbers';
 import { REMARK_BLOCK_IDS } from './remark-block-ids';
 import { REMARK_OBSIDIAN_LINKS } from './remark-obsidian-links';
 import { REMARK_CALLOUTS } from './remark-callouts';
+import { REMARK_HIGHLIGHTS } from './remark-highlights';
 import { REMARK_REHYPE } from './remark-rehype';
 import { REHYPE_SLUG } from './rehype-slug';
 import { REHYPE_STRINGIFY } from './rehype-stringify';
@@ -35,6 +37,7 @@ const SCAFFOLDS: BuiltinParserScaffold[] = [
 	REMARK_BLOCK_IDS,
 	REMARK_OBSIDIAN_LINKS,
 	REMARK_CALLOUTS,
+	REMARK_HIGHLIGHTS,
 	REMARK_REHYPE,
 	REHYPE_SLUG,
 	REHYPE_STRINGIFY,
