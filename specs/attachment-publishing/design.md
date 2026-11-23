@@ -39,16 +39,18 @@ Let a published note carry the attachments it links to, with:
 | Diffing attachments | **No.** Attachments get no diff link or diff view. The note diff shows file names in place of content hashes and says when attachments changed (§8). |
 | Raw Markdown | A separate **Obscure attachment names** setting (default on) replaces every link to a non-Markdown vault file in the published `raw` with the file's content hash, or `null` when it didn't publish, in both wikilink and Markdown syntax, whatever the attachment mode. Like **Obscure wikilinks**, it affects only `raw` and what is built from it. It hides folder paths, not file names: as with note titles, the rendered note shows a file's name unless the author wrote an alias. New note hashes from this are accepted (§3). |
 | Excluded directories | Entries match **from the vault root**: `private/` excludes only the top-level `private` folder. `*` matches within one folder name and `**` matches any depth, so `**/private/` excludes a `private` folder anywhere. This applies to notes and attachments alike. Existing entries keep their text. A one-time upgrade appends patterns so every folder the old rule excluded stays excluded, and a notice says what it added (§1). |
-| Large files | **Streamed from disk** with Node's `fs` (the plugin is desktop-only) for hashing and multipart upload, so memory use doesn't grow with file size (§5, §6). |
+| Large files | **Streamed from disk** with Node's `fs` (the plugin is desktop-only) for hashing and multipart upload, so memory use doesn't grow with file size. At most two large files upload at once, so peak upload memory stays under about 112 MB whatever the file sizes (§5, §6). |
 | File excluded after staging | Every staged attachment is re-checked against the current exclusion rules, allow-list and size cap just before upload. Files that now fail are dropped, not uploaded (§6). |
 | File changed mid-publish | Re-check before staging and re-queue. If the file is still changing, abort the publish without throwing, so staging stays intact. Just before upload, every staged entry's bytes are checked against its hash: a mismatch stops the publish if this publish staged the entry, and drops the entry if an earlier failed batch did, so one changed file can't fail every later publish. If the bytes still mismatch at upload, fail the publish with staged files kept (§6). |
 | Detecting changed bytes | The hash cache is keyed on size, mtime **and** Node's `fs.stat` `ctimeMs`, which every write changes and tools can't reset. A tag editor that keeps size and mtime still causes a re-hash (§5). **Publish updates since last full publish** uses the later of mtime and `ctimeMs` too (§7). |
-| Raw-scrub splice offsets | **An existing bug, fixed in phase 1.** Today's scrubber applies match positions from a text node's unescaped value directly to the source. After an escape, an entity or a continuation-line prefix (blockquote, list item, indented line), it corrupts the published `raw`. The new scrubber maps value positions to source offsets (§3). |
+| Raw-scrub splice offsets | **An existing bug, fixed in phase 1.** Today's scrubber applies match positions from a text node's unescaped value directly to the source. After an escape, an entity, trailing whitespace before a line break or a continuation-line prefix (blockquote, list item, indented line), it corrupts the published `raw`. The new scrubber maps value positions to source offsets (§3). |
+| Raw-scrub links in tables | **An existing bug, fixed in phase 1.** Today's scrubber writes a bare `\|` into table cells, which splits the cell. Inside a table cell, every `\|` it writes is escaped as `\\|` (§3). |
 | Attachment state when the probe fails | `attachments.json` is created with `complete: false`, never skipped, so the `refs` that publish commits are kept. The next sweep rebuilds first (§5). |
 | Publish errors and staging | `handlePublishError` copies staging into the error session directory and **no longer clears it**. Only a successful upload clears staging, so an earlier failed batch is never lost (§6). |
 | Raw HTML and reference-style links | **Not handled, and documented.** `<img src="Media/x.png">`, `<audio src=…>` and `[ref]: Media/a.pdf` definitions are neither published nor obscured. They pass through as written, folder path included (§3). |
 | Release | Attachment publishing **launches as a beta** in its first release (phases 2 and 3, §12). The settings group, the docs and the release notes label it "Beta". The mode still defaults to `off`. Phase 1 changes (session length, excluded-directory matching, Obscure attachment names) are not beta. |
 | Publishing machines | Cleanup assumes **one publishing machine per profile**, or one whose vault sync finished before publishing. The docs say so (§5, §9). |
+| Cleanup and the mode | Orphan sweeps run **whatever the attachment mode**, including `off`, whenever the bucket may hold attachments. Turning the mode off must never leave a gated note's files public (§9). |
 | Deleted bytes | Add an S3 lifecycle rule that expires noncurrent versions and aborts stale multipart uploads (§10). |
 | Sign-in session | Raise the session from 1 hour to **12 hours** by default, configurable per profile in the infrastructure settings. Accept media stopping at session expiry (§11). |
 
@@ -418,7 +420,9 @@ The new target is:
   is published. `<sha256>` is the file's full hash, matching the `key` in the
   note JSON's `attachments` (§4), so a raw consumer can map it to the file.
 - `null.<ext>` when it isn't: excluded, over the size cap, not on the
-  allow-list, a plain link in `embeds` mode, the mode `off`, or a Local profile.
+  allow-list, only linked (never embedded) in `embeds` mode, the mode `off`, or
+  a Local profile. A plain link to a file the note also embeds gets
+  `<sha256>.<ext>`, matching the working link the renderer gives it.
   This mirrors the `null` used for unpublishable note links, but keeps the
   extension so the link still reads as media.
 - For a file without an extension, `<sha256>` or `null`.
@@ -444,6 +448,8 @@ The new target is:
   repeats the file name (`[song.mp3](Media/song.mp3)` → `[song.mp3](3fa9….mp3)`).
   This matches how a wikilink alias that repeats a note's title is kept.
 - The fragment (`#page=3`) and the embed `!` are kept.
+- **Inside a table cell**, every `|` the scrubber writes is written `\|`, for
+  note and file targets alike (§3, "Pipes in table cells").
 - Wikilinks: the scrubber callback (`scrubRawWikilinks` in
   `src/utils/rewriteRawWikilinks.ts`) becomes
   `resolveTarget(path) => { kind: 'note', uid: string | null } | { kind: 'file', sha256: string | null, ext: string } | null`,
@@ -497,6 +503,7 @@ Parsing removes characters on the way into `value`:
 
 - a backslash escape: `\*` becomes `*`, and `\|` in a table cell becomes `|`;
 - a character reference: `&amp;` becomes `&`, and `&#91;` becomes `[`;
+- trailing spaces and tabs before a soft line break: `a \n` becomes `a\n`;
 - the prefix of each continuation line: `> ` in a blockquote, the indent of a
   list item's continuation line, the leading spaces of a paragraph's
   continuation line.
@@ -509,11 +516,15 @@ content index and the chat corpus:
 written                  published today
 a \* [[Note]] b          a \*[[UID|Note]]] b
 x &amp; [[Note]] y       x &a[[UID|Note]]te]] y
+a⎵                       a⎵[[UID|Note]]] b
+[[Note]] b
 > a                      > a
 > [[Note]] b             [[UID|Note]]]] b
 - a                      - a
   [[Note]] b             [[UID|Note]]]] b
 ```
+
+(`⎵` marks a trailing space.)
 
 Separately, the `raw.includes('[[')` fast path skips `\[\[Note]]` and
 `&#91;&#91;Note]]`, which the renderer still turns into note links, so their
@@ -530,17 +541,54 @@ paths stay in `raw`.
   - a `characterReference` maps its decoded characters to the whole reference;
   - a `lineEnding` maps the `\n`;
   - line prefixes (`linePrefix`, `blockQuotePrefix`, a list item's
-    continuation indent) have no value characters and are never part of a
-    match.
+    continuation indent) and trailing whitespace before a soft line break
+    (`lineSuffix`) have no value characters and are never part of a match.
 
   A match that starts or ends inside an escape or a reference covers all of
   it. This uses the same micromark parse as the Markdown destination offsets
-  above, and one helper owns both.
+  above, and one helper owns both. `micromark` and `micromark-extension-gfm`
+  become direct dependencies (today they are only transitive), pinned to the
+  major versions `remark-parse` 10 and `remark-gfm` 3 use (`micromark` 3,
+  `micromark-extension-gfm` 2), so the events line up with the mdast the
+  scrubber walks.
 - The fast path returns early only when `raw` contains neither `[` nor `&`.
 - The fix applies to note targets as well as file targets, whatever the
   Obscure attachment names setting. Notes the bug corrupted get a correct
   `raw`, and so a new hash, once. They republish in the same first publish as
   the Obscure attachment names change.
+
+### Pipes in table cells (fixes an existing bug)
+
+In a GFM table an unescaped `|` ends the cell, so Obsidian users write
+`[[Note\|alias]]` and `![[pic.png\|300]]` there. Today's scrubber always writes
+a bare `|`, so a scrubbed link splits its cell and the published table gains a
+column:
+
+```
+written                        published today
+| [[Note]] | x |               | [[UID|Note]] | x |
+| [[Note\|alias]] | x |        | [[UID|alias]]] | x |
+```
+
+(The second row is also hit by the offset bug.)
+
+**Fix (phase 1):** when a rewritten link's text node has a `tableCell`
+ancestor (`visitParents`), the `|` the replacement puts before a display
+text, alias or size alias is written `\|`. This applies to note and file
+targets alike. Markdown links and images need nothing: only their destination
+is replaced, so alt and link text stay byte for byte as written. Outside
+tables the separator is unchanged.
+
+```
+written (in a table cell)      published raw (both settings on)
+| [[Note]] | x |               | [[UID\|Note]] | x |
+| [[Note\|alias]] | x |        | [[UID\|alias]] | x |
+| ![[pic.png\|300]] | x |      | ![[81be….png\|300]] | x |
+| ![alt\|300](pic.png) | x |   | ![alt\|300](81be….png) | x |
+```
+
+The §3 raw table above shows `|` for these separators. Inside a table cell
+each is `\|`.
 
 ## 4. Pinning: attachments in the hash and the note JSON
 
@@ -622,7 +670,8 @@ One file, so its presence and completeness can be judged as a whole:
   so a file that starts when the bucket holds no attachment objects can't
   miss anything that matters. `publishNotes` loads the file, and creates it
   if missing, at the start of every AWS publish whose attachment mode isn't
-  `off`. This happens in the setup step beside `accessManager.load`, so
+  `off`. With the mode `off`, an existing file is still loaded, so the sweeps
+  (§9) can use it. This happens in the setup step beside `accessManager.load`, so
   **before** `commitPendingNotes` writes `refs` and before anything uploads.
   A sweep or an audit that needs the file and finds none creates it the same
   way. `complete` starts as `true` when either:
@@ -666,7 +715,12 @@ One file, so its presence and completeness can be judged as a whole:
      `attachments` keys under its hash. Pre-feature revisions have no field, so
      they correctly record nothing.
   3. List `attachments/` and `restricted/*/attachments/` to rebuild `uploaded`.
-  4. Merge with the local file and set `complete: true`.
+  4. Merge `refs` with the local file (a union: a note hash always maps to the
+     same keys, so entries never conflict). **Replace** `uploaded` with the
+     listing from step 3 instead of merging it, because the bucket is the
+     truth. Merging would keep local entries for keys deleted outside the
+     plugin, and the next publish would then skip uploading them. Set
+     `complete: true`.
 
   If the rebuild fails (credentials, network), the operation that needed it
   skips its deletes and says so (§9).
@@ -817,7 +871,11 @@ This runs only on entries that passed the re-check above.
    publish, including on failure, so finished uploads aren't repeated.
 
 Uploads run with the existing `runWithConcurrency` (5) and a progress notice
-counting files.
+counting files. Large (multipart) files also take one of **two** slots in a
+separate limiter, so at most two of them upload at once. Peak upload memory is
+then about 2 × 4 × 8 MB for large files plus 3 × 16 MB for small ones in the
+remaining slots, roughly 112 MB at worst, whatever the file sizes. Without the
+limiter, five large files at once would hold about 160 MB.
 
 Notes on the key design:
 
@@ -899,6 +957,16 @@ the cost is S3 GETs and latency, not correctness. A dedicated
 `/*/attachments/*` cache behavior could restore edge caching later. Because
 the edge function runs before the cache, that change wouldn't weaken access
 control.
+
+**No `X-Content-Type-Options: nosniff` (accepted for v1).** The site sends no
+`nosniff` header today, and S3 can't set one on an object, because only system
+metadata such as `Content-Type`, `Content-Disposition` and `Cache-Control` is
+stored. The protection above doesn't rely on it: every active or unmapped type
+is `application/octet-stream` with `attachment`, which browsers download
+without sniffing, and current browsers don't sniff a declared `image/*`,
+`audio/*`, `video/*` or `application/pdf` response into HTML. Adding `nosniff`
+for defense in depth would take a CloudFront response headers policy on the
+site stacks. That is a possible follow-up, not part of v1.
 
 **Headers are fixed at upload.** A key never re-uploads (step 1), so changing
 the site's read gate or the session length later doesn't change the headers on
@@ -1021,6 +1089,13 @@ Pinning (§4) covers a note's own attachments only.
   "Sign in again to play this", with the existing sign-in link
   (`hostedUiLoginUrl`). This covers a session that expires during a long
   recording (§11).
+- An `audio` or `video` element whose `error.code` is
+  `MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED` (4) loaded but can't be played: a
+  codec this browser lacks, such as HEVC in a `.mov` on Chrome or Firefox. 403
+  and 404 also report code 4 in most browsers, so the handler first sends a
+  `HEAD` request for the URL (`cache: 'no-store'`). If it succeeds, the label
+  reads "This browser can't play this file" with a **Download** link to the
+  same URL. Otherwise the cases above apply.
 - Links can't detect failure. A new tab for a missing or forbidden file shows
   the raw response: S3's error, or the edge's `{"error":"cpn_forbidden"}` on a
   public-reads site when signed out. On a whole-site gate, a signed-out new tab
@@ -1118,6 +1193,17 @@ delete. Delete them with `DeleteObjects` (batches of 1000), and remove them from
 
 required(area) comes from local state, so the sweep relies on the
 one-publishing-machine assumption (§5).
+
+**Sweeps ignore the attachment mode.** All three run on every AWS profile,
+including with the mode `off`. Gating attachment work on the mode would fail
+open: a user who publishes attachments, turns the mode off, then gates a note
+would leave that note's files publicly fetchable. So the sweep never checks
+the mode. It uses `attachments.json` when the file exists. When it doesn't,
+the sweep creates it (§5), and the bucket probe decides: if the bucket holds no
+attachment objects, the file starts complete, nothing is a candidate and
+the sweep ends. A profile that never published attachments therefore pays
+one `ListObjectsV2` probe on its first access change or delete, and nothing
+after that, because the file then exists.
 
 The sweep needs `attachments.json` to be `complete`. If it isn't, rebuild first
 (§5). If the rebuild fails, skip the sweep and show a persistent notice:
@@ -1269,8 +1355,8 @@ never outlive its token, and `SessionHours` is the only setting.
 | new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness (bucket probe on creation), rebuild from bucket. Hash cache with streamed hashing (Node `fs` + `crypto`). |
 | `src/utils/notes.ts` | Collect refs in `queueNote` before the raw scrub (§2), scrub when either obscure setting is on, `::att=` segment, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
 | new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments` | Rendering (§3) |
-| `src/utils/rewriteRawWikilinks.ts` | Value-to-source offset mapping from micromark events, fixing today's corrupted splices, and the narrowed fast path (§3, phase 1). File targets (`<sha256>.<ext>` / `null.<ext>`) and Markdown links in the raw scrub, with separate note and attachment switches (§3) |
-| `src/publish/awsUpload.ts` | Attachment upload step (re-check against current settings and the file's hash, with this-batch and earlier-batch handling, manifest, HEAD, streamed multipart with hash-while-sending and abort on mismatch, headers). Sweep after access transitions and partition purge. |
+| `src/utils/rewriteRawWikilinks.ts`, `package.json` | Value-to-source offset mapping from micromark events (`micromark` 3 and `micromark-extension-gfm` 2 as direct dependencies), fixing today's corrupted splices, `\|` for pipes written inside table cells, and the narrowed fast path (§3, phase 1). File targets (`<sha256>.<ext>` / `null.<ext>`) and Markdown links in the raw scrub, with separate note and attachment switches (§3) |
+| `src/publish/awsUpload.ts` | Attachment upload step (re-check against current settings and the file's hash, with this-batch and earlier-batch handling, manifest, HEAD, streamed multipart with hash-while-sending and abort on mismatch, a two-slot limiter for large files, headers). Sweep after access transitions and partition purge, whatever the attachment mode. |
 | `src/publish/publisher.ts` | Pre-staging re-check with a non-throwing abort in `publishNotes` (§6). Load or create `attachments.json` in the setup step, before `commitPendingNotes` (§5). `handlePublishError` copies staging without clearing it (§5). `getUpdatedNotes` attachment rule using the later of mtime and `ctimeMs` (§7). Sweep in `deletePublishedUid`. Audit extension. |
 | `src/main.ts` | Vault `rename` / `delete` for the hash cache. The content-index / chat-corpus rebuild uses the shared scrub helper with attachment refs (§3). Phase 4 `modify` notice. |
 | `infrastructure/assets/index/index.html` (+ `npm run synth:site`) | `fetchNoteJson` prefix, `hydrateAttachments`, transclusion scoping, unavailable/expired states, hash-to-name rewrite and diff notice, CSS |
@@ -1291,8 +1377,8 @@ never outlive its token, and `SessionHours` is the only setting.
    The raw scrub closes a leak that exists today: with Obscure wikilinks on, a
    link to a vault file is published as `[[null|Media/song.mp3]]`, exposing the
    folder path. Phase 1 ships:
-   - the splice-offset fix and the narrowed fast path (§3), for note and
-     file targets alike;
+   - the splice-offset fix, `\|` for pipes in table cells and the narrowed
+     fast path (§3), for note and file targets alike;
    - the `obscureRawAttachments` field, its default fill and its toggle;
    - the scrubber's file targets and Markdown `image` / `link` handling, with
      the separate note and attachment switches;
@@ -1355,7 +1441,11 @@ existing tests do):
     `lastFullPublishTimestamp` but whose `ctimeMs` is after it counts as
     changed;
   - required/candidate/orphan derivation across an access change, a UID delete,
-    a blocked note, and two notes sharing a file in different areas.
+    a blocked note, and two notes sharing a file in different areas;
+  - sweeps with the mode `off`: a note whose revisions reference a file
+    moves from public to gated, and the public copy is still an orphan;
+  - the large-file limiter: with five large files queued, no more than two
+    are mid-upload at once.
 - `test-excluded-directories.ts`, for `src/utils/excludedDirectories.ts`:
   - `private/`, `private` and `/private` all exclude `private/a.mp3` and
     `private/x/a.md`, but not `Projects/private/a.mp3`, `privateer/a.mp3` or
@@ -1382,7 +1472,9 @@ existing tests do):
   `complete: false`. It keeps the `refs` that publish commits, a later probe
   of an empty bucket doesn't turn it `true`, and the next sweep rebuilds
   first. The file exists before `commitPendingNotes` runs. Also: rebuild
-  merge, hash cache hit and miss on size, mtime and `ctime` (a rewrite that
+  merge (`refs` is a union with the local file. `uploaded` equals the bucket
+  listing, so a local entry for a key that is no longer in the bucket is
+  dropped), hash cache hit and miss on size, mtime and `ctime` (a rewrite that
   keeps size and restores mtime with `utimes` still misses), eviction on an
   upload mismatch, rename and delete, and a streamed hash that matches
   `crypto.subtle.digest` on the same bytes.
@@ -1403,12 +1495,18 @@ existing tests do):
   `[[null|Media/song.mp3]]`.
   Splice offsets (phase 1, note and file targets): an escape before a link
   (`a \* [[Note]] b`), an entity before a link (`x &amp; [[Note]] y`), `\|` in
-  a table cell, blockquote and list-item continuation lines, an indented
+  a table cell, a trailing space and a trailing tab before a soft line break
+  (`a \n[[Note]] b`), blockquote and list-item continuation lines, an indented
   paragraph continuation line, two links with an escape between them, a link
   whose brackets are escaped or written as references (`\[\[Note]]`,
   `&#91;&#91;Note]]`), and Markdown destinations after each of these. For every
   case, the output differs from the input only inside the rewritten links:
   parsed again, its text outside the links is unchanged.
+  Pipes in table cells (phase 1, note and file targets): `[[Note]]`,
+  `[[Note\|alias]]`, `[[Note#Heading\|alias]]`, `![[pic.png\|300]]` and
+  `![alt\|300](pic.png)` in a cell each come out with `\|`, and the parsed
+  table keeps the same number of columns and the same cell boundaries. The
+  same links outside a table keep a bare `|`.
 - **Parser:** add cases for `remark-attachments` (each output row in §3,
   headings, size aliases, mixed paragraphs, escaping, `published: false`), then
   re-capture `e2e/fixtures/parser-golden.json`, reviewing every diff. Expected
@@ -1417,7 +1515,9 @@ existing tests do):
   fallback when `exp` is missing.
 - **Site** (in the style of `test-transclusions-runtime.ts`):
   `hydrateAttachments` URL building and encoding, embedded-note scoping, the
-  unavailable state, the expired-session label, and the diff: hash-to-name
+  unavailable state, the expired-session label, the unsupported-format label
+  (media error code 4 with a successful `HEAD`, versus code 4 with a 403), and
+  the diff: hash-to-name
   rewriting (dotted and bare hashes, one hash under two names, `null.<ext>` and
   missing lists left alone), so a bytes-only change with Obscure attachment
   names on reports "The text is identical", plus the notice wording.
@@ -1461,6 +1561,9 @@ existing tests do):
     bucket, then sweeps the public copy. On a profile with publish history but
     no attachment objects, the first publish with attachments on creates the
     file as complete and never rebuilds.
+    Then publish a public note with an mp3, switch the mode to `off`, gate the
+    note and publish. The public copy is swept, and an anonymous fetch of its
+    URL returns 403.
 12. Upload a file over 16 MB (multipart). It plays, and no incomplete multipart
     upload remains (`ListMultipartUploads`). Upload one near the cap and watch
     Obsidian's memory: it stays near the in-flight parts, not the file size.
