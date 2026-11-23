@@ -42,7 +42,7 @@ Let a published note carry the attachments it links to, with:
 | Large files | **Streamed from disk** with Node's `fs` (the plugin is desktop-only) for hashing and multipart upload, so memory use doesn't grow with file size. At most two large files upload at once, so peak upload memory stays under about 112 MB whatever the file sizes (§5, §6). |
 | File excluded after staging | Every staged attachment is re-checked against the current exclusion rules, allow-list and size cap just before upload. Files that now fail are dropped, not uploaded (§6). |
 | File changed mid-publish | Re-check before staging and re-queue. If the file is still changing, abort the publish without throwing, so staging stays intact. Just before upload, every staged entry's bytes are checked against its hash: a mismatch stops the publish if this publish staged the entry, and drops the entry if an earlier failed batch did, so one changed file can't fail every later publish. If the bytes still mismatch at upload, fail the publish with staged files kept (§6). |
-| Detecting changed bytes | The hash cache is keyed on size, mtime **and** Node's `fs.stat` `ctimeMs`, which every write changes and tools can't reset. A tag editor that keeps size and mtime still causes a re-hash (§5). **Publish updates since last full publish** uses the later of mtime and `ctimeMs` too (§7). |
+| Detecting changed bytes | The hash cache is keyed on size, mtime **and** `ctimeMs`, all from one Node `fs.stat` taken before hashing (never Obsidian's cached `file.stat`). Every write changes `ctimeMs`, and tools can't reset it. A tag editor that keeps size and mtime still causes a re-hash (§5). **Publish updates since last full publish** uses the later of mtime and `ctimeMs` too (§7). |
 | Raw-scrub splice offsets | **An existing bug, fixed in phase 1.** Today's scrubber applies match positions from a text node's unescaped value directly to the source. After an escape, an entity, trailing whitespace before a line break or a continuation-line prefix (blockquote, list item, indented line), it corrupts the published `raw`. The new scrubber maps value positions to source offsets (§3). |
 | Raw-scrub links in tables | **An existing bug, fixed in phase 1.** Today's scrubber writes a bare `\|` into table cells, which splits the cell. Inside a table cell, every `\|` it writes is escaped as `\\|` (§3). |
 | Attachment state when the probe fails | `attachments.json` is created with `complete: false`, never skipped, so the `refs` that publish commits are kept. The next sweep rebuilds first (§5). |
@@ -266,7 +266,7 @@ profiles whose mode isn't `off`:
    - is not Markdown,
    - has an allowed extension (case-insensitive), or the allow-list holds `*`,
    - is not under an excluded directory (§1, matching rules),
-   - is within the size cap (`file.stat.size`).
+   - is within the size cap (`size` from the file's stat, below).
 
    A file that fails only the size cap is skipped. The batch shows one notice
    naming the skipped files ("2 attachments over 50 MB were not published:
@@ -280,13 +280,22 @@ interface AttachmentRef {
   sha256: string;      // hex, 64 chars
   fileName: string;    // basename, e.g. "song.mp3"
   ext: string;         // lowercase
-  size: number;
-  mtime: number;       // file.stat.mtime when hashed (see §6, change detection)
-  ctime: number;       // Node fs.stat ctimeMs when hashed (§5, hash cache)
+  size: number;        // fs.stat size
+  mtime: number;       // fs.stat mtimeMs (see §6, change detection)
+  ctime: number;       // fs.stat ctimeMs (§5, hash cache)
   kind: 'image' | 'audio' | 'video' | 'file';
 }
 // NoteState gains: attachments: AttachmentRef[]
 ```
+
+**One stat per file.** `size`, `mtime` and `ctime` all come from a single
+Node `fs.stat` on the file's full path (`FileSystemAdapter.getFullPath`), taken
+**before** hashing. Obsidian's `file.stat` is not used for these: it is cached
+and can lag a write made outside Obsidian, which is exactly the tag-editor case
+§5 guards against. The same stat feeds the size cap, the hash-cache key (§5),
+the pre-staging re-check and the re-check before upload (§6). Because the stat
+precedes the hash, a write during hashing leaves a stat that no longer matches
+the file, so the next check re-hashes instead of trusting a torn hash.
 
 `kind` comes from the extension: the default image, audio and video sets above,
 otherwise `file`. An extension the user adds to the allow-list is `file`.
@@ -358,7 +367,7 @@ heading can't hold media).
 | embed, `video` | `<video class="cpn-attachment cpn-attachment-video" controls preload="metadata" data-cpn-attachment="…"></video>`, sized as for images |
 | embed, `file` (pdf, other) | `<a class="cpn-attachment cpn-attachment-file" data-cpn-attachment="…" target="_blank" rel="noopener">fileName</a>` |
 | plain link (any kind) | `<a class="cpn-attachment cpn-attachment-file" data-cpn-attachment="…" target="_blank" rel="noopener">display text</a>` |
-| `published: false` | today's `<span class="unpublished-link">display text</span>` |
+| `published: false` | `<span class="unpublished-link">display text</span>`, the same markup as today, built as an mdast node (below) |
 
 - `<key>` is `<sha256>/<fileName>`, HTML-attribute-escaped. File names can hold
   `"`, `<`, `&`, `#`, `?`, spaces and Unicode.
@@ -381,7 +390,14 @@ way to keep a name out of the rendered note.
 
 The output elements are built as mdast nodes with `data.hName` and
 `data.hProperties` (as `noteLink` in `remarkObsidianLinks.ts` does), not as raw
-`html` strings, so hast escapes every attribute.
+`html` strings, so hast escapes every attribute and every text child. This
+includes the `published: false` span. Today's `unpublishedSpan` helper in
+`remarkObsidianLinks.ts` builds a raw `html` node from unescaped text, so a file
+named `a&b.png` or `x<y.mp3` would break the markup. The new stage doesn't reuse
+it. It emits `{ data: { hName: 'span', hProperties: { className:
+['unpublished-link'] } }, children: [{ type: 'text', value }] }`. Phase 2 also
+switches `unpublishedSpan` itself to this form, so unpublished note links get
+the same escaping. The HTML for names without `&`, `<` or `>` is unchanged.
 
 **Why no URL in the HTML:** a note with groups `[a, b]` is published byte for
 byte into both `restricted/a/` and `restricted/b/` (`src/utils/access.ts`). A
@@ -733,8 +749,9 @@ Hashing a large file on every publish is wasteful:
 { "<vaultPath>": { "size": 1234567, "mtime": 1763900000000, "ctime": 1763900000123, "sha256": "…" } }
 ```
 
-Re-hash when `size`, `mtime` or `ctime` differ from the cached values. `ctime`
-is Node's `fs.stat(fullPath).ctimeMs`, the inode change time, **not**
+Re-hash when `size`, `mtime` or `ctime` differ from the cached values. All
+three come from one `fs.stat`, taken before hashing (§2, "One stat per file").
+`ctime` is Node's `fs.stat(fullPath).ctimeMs`, the inode change time, **not**
 Obsidian's `file.stat.ctime`, which is the creation time. Size and mtime alone
 aren't enough. Audio taggers (Mp3tag, Picard) can keep a file's modification
 time, and ID3 padding usually keeps its size, so a tag edit would otherwise
@@ -748,8 +765,10 @@ streams the file: `fs.createReadStream` on the adapter's full path
 `crypto.createHash('sha256')`. The plugin is desktop-only and bundled for Node,
 and `src/utils/ssoLogin.ts` already uses `fs`. `vault.readBinary` and
 `crypto.subtle.digest` would need the whole file in memory. In `src/main.ts`, a vault
-`rename` event moves the entry to the new path and a `delete` event drops it.
-The cache only saves work, so losing it costs nothing but re-hashing.
+`rename` or `delete` event drops the entry for the old path. A rename isn't
+carried over to the new path: renaming updates `ctimeMs` on macOS and Linux, so
+a moved entry would usually miss anyway, and dropping it costs at most one
+re-hash. The cache only saves work, so losing it costs nothing but re-hashing.
 
 ### Staging: `staged-attachments.json`
 
@@ -1016,7 +1035,7 @@ would miss the change.
   `metadataCache.resolvedLinks` reach an attachment file that passes the §2
   filters (an allowed extension, not under an excluded directory, within the
   size cap) and changed after `lastFullPublishTimestamp`. A file has changed
-  when the later of `file.stat.mtime` and Node's `fs.stat` `ctimeMs` (§5) is
+  when the later of `mtimeMs` and `ctimeMs` from the file's `fs.stat` (§2, §5) is
   after that timestamp. mtime alone would miss a tag editor that keeps it
   (§5). `ctimeMs` also moves on a rename, a permissions change or a sync
   tool's rewrite. Those re-queue the note, but its hash doesn't change, so it
@@ -1151,8 +1170,18 @@ next publish through the existing fingerprint check.
 The set of files an area needs is **derived**, not reference-counted:
 
 > required(area) = ⋃ `refs[h]` for every revision `h` in `publish-history[uid]`,
-> for every UID currently published (present in the profile's mappings / access
-> map) whose current access areas include `area`.
+> for every UID currently published whose current access areas include `area`.
+
+The two inputs come from different files:
+
+- **Which UIDs are published:** the keys of the profile's `uid-to-hash`
+  mapping. Not the access map, which can lack a published UID.
+- **A UID's current areas:** `partitionsFor` its groups in the access map
+  (`access.json`, uid → groups). A UID missing from the access map, or mapped
+  to `[]`, is **public**. This matches `AccessManager.set`, which treats an
+  unrecorded prior state as public, and it covers notes published before access
+  groups existed. Deriving the UID set from the access map alone would drop
+  those notes and could delete files their revisions use.
 
 This works because of how existing code places revisions:
 
@@ -1175,7 +1204,11 @@ bytes.
 1. **After `applyAccessTransitions`**, once the new mappings are live, in each
    area a note left. This includes blocked notes (`to: null`). This is the
    important one: without it, a note moving from public to gated would leave
-   its audio publicly fetchable.
+   its audio publicly fetchable. Today `applyAccessTransitions`
+   (`src/publish/awsUpload.ts`) consumes the transitions itself and returns
+   only `boolean | null`. It is changed to also return the note hashes it
+   removed from each area (its `byPartition` map), which become this sweep's
+   candidates.
 2. **After `deletePublishedUid`** (delete picker), in each area it deleted
    from.
 3. **After `purgeRestrictedPartition`** removes a whole group area. Its
@@ -1354,9 +1387,9 @@ never outlive its token, and `SessionHours` is the only setting.
 | new `src/utils/attachments.ts` (pure, no Obsidian imports) | Reference filters, extension sets (including `*`), kind, MIME and disposition (passive map, active types), key building and URL encoding, `::att=` segment, staged-entry merge, required/candidate/orphan derivation |
 | new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness (bucket probe on creation), rebuild from bucket. Hash cache with streamed hashing (Node `fs` + `crypto`). |
 | `src/utils/notes.ts` | Collect refs in `queueNote` before the raw scrub (§2), scrub when either obscure setting is on, `::att=` segment, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
-| new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments` | Rendering (§3) |
+| new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments`, `src/utils/remarkObsidianLinks.ts` | Rendering (§3). `unpublishedSpan` becomes an escaped mdast `span` node. |
 | `src/utils/rewriteRawWikilinks.ts`, `package.json` | Value-to-source offset mapping from micromark events (`micromark` 3 and `micromark-extension-gfm` 2 as direct dependencies), fixing today's corrupted splices, `\|` for pipes written inside table cells, and the narrowed fast path (§3, phase 1). File targets (`<sha256>.<ext>` / `null.<ext>`) and Markdown links in the raw scrub, with separate note and attachment switches (§3) |
-| `src/publish/awsUpload.ts` | Attachment upload step (re-check against current settings and the file's hash, with this-batch and earlier-batch handling, manifest, HEAD, streamed multipart with hash-while-sending and abort on mismatch, a two-slot limiter for large files, headers). Sweep after access transitions and partition purge, whatever the attachment mode. |
+| `src/publish/awsUpload.ts` | Attachment upload step (re-check against current settings and the file's hash, with this-batch and earlier-batch handling, manifest, HEAD, streamed multipart with hash-while-sending and abort on mismatch, a two-slot limiter for large files, headers). `applyAccessTransitions` also returns the hashes it removed per area. Sweep after access transitions and partition purge, whatever the attachment mode. |
 | `src/publish/publisher.ts` | Pre-staging re-check with a non-throwing abort in `publishNotes` (§6). Load or create `attachments.json` in the setup step, before `commitPendingNotes` (§5). `handlePublishError` copies staging without clearing it (§5). `getUpdatedNotes` attachment rule using the later of mtime and `ctimeMs` (§7). Sweep in `deletePublishedUid`. Audit extension. |
 | `src/main.ts` | Vault `rename` / `delete` for the hash cache. The content-index / chat-corpus rebuild uses the shared scrub helper with attachment refs (§3). Phase 4 `modify` notice. |
 | `infrastructure/assets/index/index.html` (+ `npm run synth:site`) | `fetchNoteJson` prefix, `hydrateAttachments`, transclusion scoping, unavailable/expired states, hash-to-name rewrite and diff notice, CSS |
@@ -1441,7 +1474,9 @@ existing tests do):
     `lastFullPublishTimestamp` but whose `ctimeMs` is after it counts as
     changed;
   - required/candidate/orphan derivation across an access change, a UID delete,
-    a blocked note, and two notes sharing a file in different areas;
+    a blocked note, and two notes sharing a file in different areas. A
+    published UID missing from the access map counts as public, so a file its
+    revisions use is never an orphan in the public area;
   - sweeps with the mode `off`: a note whose revisions reference a file
     moves from public to gated, and the public copy is still an orphan;
   - the large-file limiter: with five large files queued, no more than two
@@ -1476,7 +1511,9 @@ existing tests do):
   listing, so a local entry for a key that is no longer in the bucket is
   dropped), hash cache hit and miss on size, mtime and `ctime` (a rewrite that
   keeps size and restores mtime with `utimes` still misses), eviction on an
-  upload mismatch, rename and delete, and a streamed hash that matches
+  upload mismatch, rename and delete (both drop the old path's entry), a write
+  during hashing (the stat taken first no longer matches, so the next check
+  re-hashes), and a streamed hash that matches
   `crypto.subtle.digest` on the same bytes.
 - Publish error handling: after a batch fails at upload (staged and
   committed), a second publish that throws while staging (e.g. `uidConflicts`)
@@ -1508,9 +1545,12 @@ existing tests do):
   table keeps the same number of columns and the same cell boundaries. The
   same links outside a table keep a bare `|`.
 - **Parser:** add cases for `remark-attachments` (each output row in §3,
-  headings, size aliases, mixed paragraphs, escaping, `published: false`), then
+  headings, size aliases, mixed paragraphs, escaping, `published: false`), and
+  unpublished file and note links whose names hold `&`, `<` or `>` (escaped in
+  the span's text), then
   re-capture `e2e/fixtures/parser-golden.json`, reviewing every diff. Expected
-  diffs are only attachment links.
+  diffs are only attachment links, and unpublished links whose text holds
+  `&`, `<` or `>`.
 - `test-auth-callback.ts` (new): `Max-Age` from `exp`, the floor at 0, the
   fallback when `exp` is missing.
 - **Site** (in the style of `test-transclusions-runtime.ts`):
