@@ -31,6 +31,7 @@ Let a published note carry the attachments it links to, with:
 | Which version a note shows | **Pinned.** A note revision references the exact bytes it was published with. Editing the file creates a new note revision. |
 | Access control | **One copy per access area.** The file is uploaded to every area (public, `restricted/<group>/`) that has a referencing note. No edge-function change. |
 | What gets published | **Per-profile setting**, default **off**, with levels for how broadly links are followed, plus an extension allow-list and a size cap. |
+| File types | **No type is ever refused.** The allow-list is the user's to widen, and `*` allows every extension. Types that could run code at the site's origin (HTML, JavaScript, XML, SVG opened directly, …) are still published, but served as downloads (§6). |
 | Public exposure | A file becomes public as soon as **any** public note references it. That note shows it to everyone anyway. |
 | Source of a note's attachment list | **Obsidian's metadata cache only** (§2). The renderer never adds to it; it only renders what the list contains. |
 | Reader experience | **Embeds play inline, everything else opens in a new tab.** `![[image]]`, `![[audio]]` and `![[video]]` render in the note. PDF and other embeds, and every plain link, open the file in a new browser tab. |
@@ -67,7 +68,7 @@ New optional field on `PublishingProfile` (`src/types.ts`):
 interface AttachmentSettings {
   /** Which links to non-Markdown files publish the file. */
   mode: 'off' | 'embeds' | 'embedsAndLinks';
-  /** Lowercase extensions without the dot. */
+  /** Lowercase extensions without the dot. `*` allows every extension. */
   allowedExtensions: string[];
   /** Files larger than this are skipped with a notice. 1–500. */
   maxFileSizeMB: number;
@@ -88,11 +89,19 @@ attachments?: AttachmentSettings; // absent ≡ { mode: 'off', …defaults }
 - Video: `mp4 m4v webm mov`
 - Documents: `pdf`
 
-**Hard deny-list**, regardless of settings: `md html htm xhtml xml js mjs wasm`,
-plus Obsidian's own file types (`canvas`, `base`). `md` files are notes and
-publish through `cpn-publish-contexts`. The others would run as same-origin code
-if opened directly. The settings field rejects denied extensions as they are
-typed, with an inline message.
+The default list only sets what publishes out of the box. **There is no
+deny-list.** The user can add any extension: `html`, `js`, `zip`, `canvas`,
+`base`, anything. The entry `*` allows every extension, including files that
+have none. The settings field accepts any entry.
+
+The only distinction kept is between notes and files. A link to a Markdown file
+resolves to a note and publishes through `cpn-publish-contexts`, never as an
+attachment (§2). This is the existing note pipeline, not a file-type rule.
+
+Sharing a type doesn't mean the site renders it. Types that could run code at
+the site's origin, if opened directly, are served as downloads (§6, Headers).
+The settings help text says so: "HTML, JavaScript and other active files
+download instead of opening."
 
 **Default cap:** 50 MB. The field accepts 1–500. The whole file is read into
 memory at upload, and 500 MB is the most that is reasonable for that.
@@ -127,7 +136,7 @@ profiles whose mode isn't `off`:
    `getLinkpath` drops a `#page=3`-style fragment.
 3. Keep it if it resolves to a `TFile` that:
    - is not Markdown,
-   - has an allowed, non-denied extension (case-insensitive),
+   - has an allowed extension (case-insensitive), or the allow-list holds `*`,
    - is not under an excluded directory,
    - is within the size cap (`file.stat.size`).
 
@@ -457,7 +466,14 @@ Notes on the key design:
 
 ### Headers
 
-**`Content-Type`** comes from an extension map in `src/utils/attachments.ts`:
+Every allowed file publishes. The headers only decide whether the browser
+**shows** a file or **downloads** it. Anything a browser could run as a page at
+the site's origin must download: same-origin script would run with the
+reader's session cookie and could read their gated notes.
+
+**`Content-Type`** comes from an extension map in `src/utils/attachments.ts`.
+The map deliberately holds only **passive** types, which browsers display
+without running site code:
 
 | Ext | Type | Ext | Type |
 |-----|------|-----|------|
@@ -469,15 +485,24 @@ Notes on the key design:
 | svg | image/svg+xml | wav | audio/wav |
 | mp4, m4v | video/mp4 | flac | audio/flac |
 | webm | video/webm | mov | video/quicktime |
-| pdf | application/pdf | *(other allowed)* | application/octet-stream |
+| pdf | application/pdf | *(anything else)* | application/octet-stream |
+
+**Active types are never mapped**, whatever the user allows: `html htm xhtml
+xht xml xsl xslt js mjs cjs wasm`, and any other type a browser can render as a
+document with script. They are served as `application/octet-stream`, the same as
+any unmapped extension. The unit tests pin this list, so adding a passive type
+to the map can't map one of these by accident.
 
 **`Content-Disposition`**:
 
-- `inline; filename*=UTF-8''<percent-encoded name>` for mapped types, so a PDF
-  opens in the browser's viewer in the new tab, under its own name.
-- `attachment; filename*=UTF-8''…` for `svg` and every unmapped extension.
-  `<img>` ignores the header and renders SVG normally. Opening the URL directly
-  downloads it instead of running any script it holds at the site's origin.
+- `inline; filename*=UTF-8''<percent-encoded name>` for mapped types except
+  `svg`, so a PDF opens in the browser's viewer in the new tab, under its own
+  name.
+- `attachment; filename*=UTF-8''…` for `svg` and for everything served as
+  `application/octet-stream`, including every active type. A shared `page.html`
+  or `script.js` downloads under its own name instead of opening. `<img>`
+  ignores the header and renders SVG normally, while opening an SVG's URL
+  directly downloads it instead of running any script it holds.
 
 **`Cache-Control`**:
 
@@ -810,7 +835,7 @@ never outlive its token, and `SessionHours` is the only setting.
 | Area | Change |
 |------|--------|
 | `src/types.ts`, settings defaults, profile settings tab | `attachments` settings (§1). `bucketLifecycleDays`, `sessionHours` state. |
-| new `src/utils/attachments.ts` (pure, no Obsidian imports) | Reference filters, extension sets and deny-list, kind, MIME and disposition, key building and URL encoding, `::att=` segment, staged-entry merge, required/candidate/orphan derivation |
+| new `src/utils/attachments.ts` (pure, no Obsidian imports) | Reference filters, extension sets (including `*`), kind, MIME and disposition (passive map, active types), key building and URL encoding, `::att=` segment, staged-entry merge, required/candidate/orphan derivation |
 | new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness, rebuild from bucket. Hash cache. |
 | `src/utils/notes.ts` | Collect refs in `queueNote` (§2), `::att=` segment, pre-commit re-check, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
 | new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments` | Rendering (§3) |
@@ -839,9 +864,12 @@ never outlive its token, and `SessionHours` is the only setting.
 existing tests do):
 
 - `test-attachments.ts`, for `src/utils/attachments.ts`:
-  - reference filtering: mode, extensions, deny-list (including user-typed
-    denied extensions), excluded directories, size;
+  - reference filtering: mode, extensions, `*`, files without an extension,
+    user-added types such as `html` and `canvas`, excluded directories, size;
   - kind and MIME/disposition maps, RFC 5987 file names;
+  - every active type (`html`, `js`, `xml`, `wasm`, …) maps to
+    `application/octet-stream` with `attachment`, even when allowed, and `svg`
+    gets `attachment`;
   - key encoding for odd file names: spaces, `#`, `?`, `%`, `"`, Unicode;
   - the `::att=` segment is order-independent, de-duplicated, and absent when
     there are no refs;
@@ -882,7 +910,9 @@ existing tests do):
    members. The files resolve from the embedded note's area.
 7. A PDF embed and a plain `[[file.pdf]]` link open in a new tab with the
    browser's viewer and the file's own name. An `svg` opened directly
-   downloads.
+   downloads. With `html` and `js` added to the allow-list, `[[page.html]]` and
+   `[[script.js]]` publish, and opening them downloads the file instead of
+   running it.
 8. With the mode `off`, no attachment objects are written, and attachment links
    render as unpublished spans showing the file name.
 9. Delete `attachments.json` and gate a note that has attachments. The publish
@@ -901,6 +931,9 @@ These were settled while writing the spec. Change any you disagree with:
 
 - Noncurrent versions expire after **30 days** (§10).
 - The size cap's ceiling is **500 MB** (§1).
+- Shared HTML, JavaScript and other active files **download** rather than
+  render (§6). Rendering them on the site would mean serving them from a
+  separate origin, which is an infrastructure change.
 - Inline images aren't clickable (no lightbox, no open-in-new-tab) in v1.
 - A mixed paragraph (`![[pic.png]] ![[Note]]`) renders its note embed inline
   (§3).
