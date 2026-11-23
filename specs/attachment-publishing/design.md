@@ -37,7 +37,9 @@ Let a published note carry the attachments it links to, with:
 | Reader experience | **Embeds play inline, everything else opens in a new tab.** `![[image]]`, `![[audio]]` and `![[video]]` render in the note. PDF and other embeds, and every plain link, open the file in a new browser tab. |
 | Attachment list in note JSON | **Yes.** Each published note JSON lists its attachment keys (§4). |
 | Diffing attachments | **No.** Attachments get no diff link or diff view. The note diff only says when they changed (§8). |
-| Raw Markdown | Links to non-Markdown vault files lose their folder path when **Obscure wikilinks** is on, in both wikilink and Markdown syntax, whatever the attachment mode. New note hashes from this are accepted (§3). |
+| Raw Markdown | A separate **Obscure attachment names** setting (default on) replaces every link to a non-Markdown vault file in the published `raw` with the file's content hash, or `null` when it didn't publish, in both wikilink and Markdown syntax, whatever the attachment mode. Like **Obscure wikilinks**, it affects only `raw` and what is built from it. New note hashes from this are accepted (§3). |
+| Excluded directories | Entries match **from the vault root**: `private/` excludes only the top-level `private` folder. `*` matches within one folder name and `**` matches any depth, so `**/private/` excludes a `private` folder anywhere. This applies to notes and attachments alike. Existing entries keep their text, and a one-time notice lists files they no longer exclude (§1). |
+| File excluded after staging | Every staged attachment is re-checked against the current exclusion rules, allow-list and size cap just before upload. Files that now fail are dropped, not uploaded (§6). |
 | File changed mid-publish | Re-check before commit and re-queue. If the bytes still mismatch at upload, fail the publish with staged files kept (§6). |
 | Deleted bytes | Add an S3 lifecycle rule that expires noncurrent versions and aborts stale multipart uploads (§10). |
 | Sign-in session | Raise the session from 1 hour to **12 hours** by default, configurable per profile in the infrastructure settings. Accept media stopping at session expiry (§11). |
@@ -107,8 +109,96 @@ download instead of opening."
 memory at upload, and 500 MB is the most that is reasonable for that.
 
 The profile's **Excluded directories** apply to attachments too
-(`Publisher.isFileExcluded`). A file under `private/` never publishes, whichever
-note links it.
+(`Publisher.isFileExcluded`, with the matching rules below). A file under an
+excluded folder never publishes, whichever note links it.
+
+### Obscure attachment names
+
+A new profile field beside `obscureRawWikilinks`:
+
+```ts
+obscureRawAttachments?: boolean; // absent ≡ true
+```
+
+It is a top-level profile field rather than part of `AttachmentSettings`,
+because it applies whatever the attachment mode, including `off`, and on Local
+profiles too. Like `obscureRawWikilinks`, it is filled in as `true` on load when
+missing (`src/main.ts`, beside the existing default). §3 describes its effect.
+
+**UI:** a toggle directly below **Obscure wikilinks in published Markdown** in
+the content settings: "Obscure attachment names in published Markdown. Replace
+links to images, audio and other files in the published raw Markdown with the
+file's content hash (e.g. `![[Media/song.mp3]]` → `![[3fa9….mp3]]`), so folder
+and file names stay private. Rendered HTML and search are unaffected."
+
+### Excluded directories: matching rules
+
+Today's check (`filePath.startsWith(dir) || filePath.includes('/' + dir + '/')`)
+does raw string matching. With the documented `private/` form, the second clause
+looks for `/private//` and never matches. Without the slash, `private` also
+matches `privateer/` and `private.md`. An entry with a trailing space matches
+nothing. Attachments rely on this check, so the rules are redefined.
+
+**Rules:**
+
+1. Each line is a folder pattern relative to the vault root. Lines are trimmed,
+   and empty lines are ignored. A leading `/` or `./` and a trailing `/` are
+   optional: `private`, `/private` and `private/` mean the same thing.
+2. A pattern is a sequence of `/`-separated segments, matched against **whole
+   folder names**. `private` never matches `privateer`.
+3. A pattern without wildcards names one folder from the vault root:
+   `private/` excludes `private/…` and nothing else, and `Projects/private/`
+   excludes only `Projects/private/…`.
+4. `*` within a segment matches any run of characters except `/`, including
+   none: `*-private/` matches `work-private/`, and `Projects/*/drafts/` matches
+   `Projects/alpha/drafts/`.
+5. A segment that is exactly `**` matches zero or more folders: `**/private/`
+   matches `private/`, `a/private/` and `a/b/private/`. `Archive/**/raw/`
+   matches `Archive/raw/` and `Archive/2024/05/raw/`. A `**` inside a longer
+   segment (`a**b`) is treated as `*`.
+6. Matching is **case-insensitive**, so `Private/` still excludes `private/` on
+   the case-insensitive file systems macOS and Windows use. This can only
+   exclude more, which is the safe direction.
+7. Other characters (`?`, `[`, `{`, `\`) are literal. There is no escaping and
+   no negation.
+8. Patterns match folders, never file names. A file is excluded when **any of
+   its ancestor folders** matches a pattern in full: a pattern matching
+   `Projects/private` excludes `Projects/private/2024/x.mp3`. A pattern such as
+   `**/*.wav` matches only a folder named like that, not `.wav` files.
+
+The matcher is a pure function in a new `src/utils/excludedDirectories.ts`
+(`compileExcludePatterns(lines) → (path) => boolean`). `Publisher.isFileExcluded`
+delegates to it, so notes (`getAllPublishableNotes`, `getConnectedNotes`,
+`publishSingle`, `publishConnected`, the audit, the file-tree indicators) and
+attachments share one implementation.
+
+**Settings help text:** "One folder per line, from the vault root. `private/`
+excludes only the top-level private folder. Use `*` for any folder name and
+`**/` for any depth, e.g. `**/private/` excludes every folder named private."
+
+**Upgrade check (one time, per profile).** Existing entries are kept as typed
+and take the new meaning. Under the old rule, some files may have been excluded
+that no longer are: entries without a trailing slash used to match at any depth
+and by prefix. On the first load after upgrading:
+
+1. For each profile, compare the old and new rules over every vault file, not
+   only Markdown. Collect the files the old rule excluded and the new one
+   doesn't.
+2. If there are any, show a persistent notice per profile: "Excluded
+   directories now match from the vault root. In `<profile>`, 14 files are no
+   longer excluded, under `Projects/private/` and `privateer/`. To keep
+   excluding them, add `**/private/` and `private*/`. Open settings". The
+   notice names the affected folders (up to five, then "and N more") and
+   suggests a pattern for each old entry that caused it: `**/<entry>/` for a
+   nested match and `<entry>*/` for a prefix match. A file the old rule matched
+   only by its own name (`private.md` at the root, from the entry `private`) is
+   listed with "Move it into an excluded folder", because patterns match
+   folders only. The full file list goes to the console.
+3. Record `excludedDirsRulesVersion: 2` on the profile, whether or not anything
+   was found, so the check runs once.
+
+The notice only warns. It doesn't block publishing or rewrite entries. Profiles
+created after the upgrade start at version 2 and skip the check.
 
 **UI:** a new **Attachments** group in the profile's content settings
 (`src/settings/profile/content.ts`, or a new `attachments.ts` beside it): a mode
@@ -137,7 +227,7 @@ profiles whose mode isn't `off`:
 3. Keep it if it resolves to a `TFile` that:
    - is not Markdown,
    - has an allowed extension (case-insensitive), or the allow-list holds `*`,
-   - is not under an excluded directory,
+   - is not under an excluded directory (§1, matching rules),
    - is within the size cap (`file.stat.size`).
 
    A file that fails only the size cap is skipped. The batch shows one notice
@@ -169,6 +259,9 @@ metadata cache already excludes them.
 
 A note blocked by access resolution (`access.ok === false`) returns before this
 step, so its attachments are never collected or staged.
+
+This step runs **before** the raw scrub and the hash in `queueNote`, because
+obscured `raw` (§3) needs each published file's hash.
 
 ## 3. Rendering in the plugin
 
@@ -241,8 +334,9 @@ heading can't hold media).
   (`![[pic.png]] ![[Note]]`) now has several children, so the note embed takes
   the inline transclusion path instead of the block one.
 
-**Display text:** the alias when there is one (not a size alias). Otherwise, with
-**Obscure wikilinks** on, the file name. With it off, the link as written.
+**Display text:** the alias when there is one (not a size alias), otherwise the
+file name. The HTML never shows the folder path. Neither obscure setting changes
+the HTML: readers of the note see the file's real name, as they see note titles.
 
 **Why no URL in the HTML:** a note with groups `[a, b]` is published byte for
 byte into both `restricted/a/` and `restricted/b/` (`src/utils/access.ts`). A
@@ -252,41 +346,75 @@ area. The site fills in the area it actually loaded the note from (§8).
 **Behavior change with the mode `off`:** Markdown links and images that resolve
 to vault files render as unpublished spans instead of passing through as broken
 relative URLs. Wikilinks to vault files show the file name rather than the
-folder path when Obscure wikilinks is on. External URLs and links that don't
-resolve are untouched.
+folder path. External URLs and links that don't resolve are untouched.
 
 The scaffold's doc block states the contract with the site: the
 `data-cpn-attachment` attribute and the classes.
 
 ### Raw Markdown
 
-The published `raw` field keeps attachment links, with the vault folder path
-removed when **Obscure wikilinks** (`obscureRawWikilinks`) is on. This applies to
-every link that resolves to a non-Markdown vault file, **whatever the attachment
-mode**:
+**Obscure attachment names** (`obscureRawAttachments`, §1, default on) does for
+file links what **Obscure wikilinks** does for note links: it replaces the link
+target in the published `raw` with an opaque ID. It applies to every link that
+resolves to a non-Markdown vault file, **whatever the attachment mode**, and is
+independent of `obscureRawWikilinks`.
 
-| Written | Published `raw` |
-|---------|-----------------|
-| `![[Media/2024/song.mp3]]` | `![[song.mp3]]` |
-| `[[Docs/slides.pdf#page=3\|deck]]` | `[[slides.pdf#page=3\|deck]]` |
-| `![](Media/2024/my%20pic.png)` | `![](my%20pic.png)` |
-| `![alt\|300](<Media/my pic.png>)` | `![alt\|300](<my pic.png>)` |
-| `[notes](Docs/a.pdf)` | `[notes](a.pdf)` |
+The new target is:
 
+- `<sha256>.<ext>` when the file is in the note's attachment list (§2), so it
+  is published. `<sha256>` is the file's full hash, matching the `key` in the
+  note JSON's `attachments` (§4), so a raw consumer can map it to the file.
+- `null.<ext>` when it isn't: excluded, over the size cap, not on the
+  allow-list, a plain link in `embeds` mode, the mode `off`, or a Local profile.
+  This mirrors the `null` used for unpublishable note links, but keeps the
+  extension so the link still reads as media.
+- For a file without an extension, `<sha256>` or `null`.
+
+| Written | Published `raw` (setting on) |
+|---------|------------------------------|
+| `![[Media/2024/song.mp3]]` | `![[3fa9….mp3]]` |
+| `![[Media/pic.png\|300]]` | `![[81be….png\|300]]` |
+| `[[Docs/slides.pdf#page=3\|deck]]` | `[[c044….pdf#page=3\|deck]]` |
+| `[[Docs/slides.pdf]]` | `[[c044….pdf]]` |
+| `![[private/scan.pdf]]` (excluded) | `![[null.pdf]]` |
+| `[[private/scan.pdf\|my scan]]` (excluded) | `[[null.pdf\|my scan]]` |
+| `![](Media/2024/my%20pic.png)` | `![](9d12….png)` |
+| `![alt\|300](<Media/my pic.png>)` | `![alt\|300](9d12….png)` |
+| `[notes](Docs/a.pdf)` | `[notes](e7a0….pdf)` |
+
+(`3fa9…` stands for the full 64-character hash.)
+
+- **Aliases, alt text and link text are kept**, as wikilink aliases are. Unlike
+  note links, an attachment link with no alias **never falls back to its path**
+  as display text, because that would bring the file name back.
+- **Known limitation:** text the author wrote is kept as written, even when it
+  repeats the file name (`[song.mp3](Media/song.mp3)` → `[song.mp3](3fa9….mp3)`).
+  This matches how a wikilink alias that repeats a note's title is kept.
+- The fragment (`#page=3`) and the embed `!` are kept.
 - Wikilinks: the scrubber callback (`scrubRawWikilinks` in
   `src/utils/rewriteRawWikilinks.ts`) becomes
-  `resolveTarget(notePath) => { kind: 'note', uid } | { kind: 'file', fileName } | null`.
-  File targets are rewritten to the file name, keeping the alias and fragment.
-  Note targets behave exactly as today.
+  `resolveTarget(path) => { kind: 'note', uid: string | null } | { kind: 'file', sha256: string | null, ext: string } | null`,
+  and the scrubber takes `{ notes: boolean, attachments: boolean }` from the two
+  settings. Note targets behave exactly as today when `notes` is on and are left
+  alone when it's off. File targets are rewritten when `attachments` is on and
+  left as written when it's off.
 - Markdown links: the same pass visits `image` and `link` nodes. A relative URL
   that resolves to a non-Markdown vault file has its destination replaced by the
-  file name, keeping its encoding style (percent-encoded or `<…>`) and fragment.
-  Spliced by source offset, as for wikilinks.
-- Unresolved targets are left as today.
+  new target. A `<…>` destination drops its brackets, since the target has no
+  spaces. It is spliced by source offset, as for wikilinks.
+- Unresolved targets and external URLs are left as today.
+- `queueNote` runs the scrub when **either** setting is on (today:
+  `obscureRawWikilinks` only).
 
-The folder path then never leaves the vault in `raw`, the HTML, the search index
-or the chat corpus. Notes with such links get new hashes once, and republish, on
-the first publish after upgrading. That is accepted: what they publish changes.
+With the setting on, neither the folder path nor the file name appears in `raw`,
+or in anything built from it (the content index, the chat corpus). The HTML and
+the attachment URLs keep the file name (§6). With it off, attachment links in
+`raw` stay exactly as written, including the folder path, as note links do with
+**Obscure wikilinks** off.
+
+Notes with attachment links get new hashes once, and republish, on the first
+publish after upgrading. Toggling the setting does the same. That is accepted:
+what they publish changes.
 
 ## 4. Pinning: attachments in the hash and the note JSON
 
@@ -304,8 +432,8 @@ const att = [...new Set(refs.map(r => `${r.sha256}/${r.fileName}`))].sort();
 As a result:
 
 - **Notes without links to non-Markdown files keep their hashes.**
-- **Notes with such links get a new hash once** when Obscure wikilinks is on,
-  from the `raw` change in §3.
+- **Notes with such links get a new hash once** when Obscure attachment names
+  is on (the default), from the `raw` change in §3.
 - **Editing an attachment changes the hash of every note that references it.**
   The next publish that includes those notes records a new revision, and the
   old revision keeps pointing at the old bytes.
@@ -429,12 +557,36 @@ A staged note revision's areas are its access areas (`partitionsFor`): public if
 it has no groups, otherwise each `restricted/<group>/`. Each of its attachment
 keys is ensured in each of those areas.
 
+### Re-check before upload
+
+At the start of the attachment step, every entry in `staged-attachments.json`
+is checked against the profile's **current** settings, and against the vault:
+
+- the vault file still exists at `vaultPath`;
+- it is not under an excluded directory (§1, matching rules);
+- its extension is still allowed and its size is within the cap;
+- the attachment mode is not `off`.
+
+Entries that fail are **dropped**: they aren't uploaded, they're removed from
+`staged-attachments.json`, and they're logged to the console. One notice covers
+the batch: "2 attachments weren't uploaded because they're now excluded or no
+longer allowed: take1.wav, scan.pdf." The publish continues. This closes the gap
+where entries left by a failed batch (§5) would upload after the user excluded
+their folder. It also covers a settings change in the middle of a publish.
+
+The staged note JSON and `refs` still list the dropped keys. Those revisions show
+"Attachment unavailable" for the file, and the audit lists the keys as
+"referenced, never uploaded". Republishing the note under the new settings
+records a revision without them.
+
 ### Per (area, key)
 
 ```
 <s3Prefix>attachments/<sha256>/<fileName>                  # public area
 <s3Prefix>restricted/<group>/attachments/<sha256>/<fileName>
 ```
+
+This runs only on entries that passed the re-check above.
 
 1. If `uploaded[area]` lists it, skip it.
 2. Otherwise, send a `HeadObject`. On 200, record it and skip it. This recovers
@@ -538,11 +690,12 @@ A file can change while a publish is running:
    again."
 3. **The next publish.** History and mappings were already committed for the
    staged revision, and its bytes are gone from the vault. Staged entries whose
-   vault file no longer matches its hash, or no longer exists, are **dropped**
-   with a console warning. Their notes still upload, and those revisions show
-   "Attachment unavailable" for that file. Republishing the note records a newer
-   revision with the current bytes, which becomes the live one. The dropped keys
-   stay in `refs`, and the audit lists them as "referenced, never uploaded".
+   vault file no longer matches its hash, or that fail the re-check before
+   upload (above), are **dropped** with a console warning. Their notes still
+   upload, and those revisions show "Attachment unavailable" for that file.
+   Republishing the note records a newer revision with the current bytes, which
+   becomes the live one. The dropped keys stay in `refs`, and the audit lists
+   them as "referenced, never uploaded".
 
 ## 7. Noticing changed attachments
 
@@ -551,8 +704,10 @@ would miss the change.
 
 - **Publish updates since last full publish** (`Publisher.getUpdatedNotes`):
   when the mode isn't `off`, also include every publishable note whose
-  `metadataCache.resolvedLinks` reach an allowed attachment file with
-  `mtime > lastFullPublishTimestamp`. `resolvedLinks` doesn't separate embeds
+  `metadataCache.resolvedLinks` reach an attachment file that passes the §2
+  filters (an allowed extension, not under an excluded directory, within the
+  size cap) with `mtime > lastFullPublishTimestamp`. Edits to excluded files
+  therefore never re-queue notes. `resolvedLinks` doesn't separate embeds
   from links, so `embeds` mode may include a note that only links the file. Its
   hash doesn't change, so it records no new revision.
 - **Publish active and connected notes** and **Publish current note** need no
@@ -834,23 +989,26 @@ never outlive its token, and `SessionHours` is the only setting.
 
 | Area | Change |
 |------|--------|
-| `src/types.ts`, settings defaults, profile settings tab | `attachments` settings (§1). `bucketLifecycleDays`, `sessionHours` state. |
+| `src/types.ts`, settings defaults, profile settings tab | `attachments` and `obscureRawAttachments` settings (§1). `excludedDirsRulesVersion`. `bucketLifecycleDays`, `sessionHours` state. |
+| new `src/utils/excludedDirectories.ts` (pure), `Publisher.isFileExcluded`, `src/main.ts`, `src/settings/profile/content.ts` | Exclusion matching rules, the old rule kept only for the one-time upgrade check, the upgrade notice, help text (§1) |
 | new `src/utils/attachments.ts` (pure, no Obsidian imports) | Reference filters, extension sets (including `*`), kind, MIME and disposition (passive map, active types), key building and URL encoding, `::att=` segment, staged-entry merge, required/candidate/orphan derivation |
 | new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness, rebuild from bucket. Hash cache. |
-| `src/utils/notes.ts` | Collect refs in `queueNote` (§2), `::att=` segment, pre-commit re-check, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
+| `src/utils/notes.ts` | Collect refs in `queueNote` before the raw scrub (§2), scrub when either obscure setting is on, `::att=` segment, pre-commit re-check, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
 | new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments` | Rendering (§3) |
-| `src/utils/rewriteRawWikilinks.ts` | File targets and Markdown links in the raw scrub (§3) |
-| `src/publish/awsUpload.ts` | Attachment upload step (manifest, HEAD, multipart, headers, re-hash). Sweep after access transitions and partition purge. |
+| `src/utils/rewriteRawWikilinks.ts` | File targets (`<sha256>.<ext>` / `null.<ext>`) and Markdown links in the raw scrub, with separate note and attachment switches (§3) |
+| `src/publish/awsUpload.ts` | Attachment upload step (re-check against current settings, manifest, HEAD, multipart, headers, re-hash). Sweep after access transitions and partition purge. |
 | `src/publish/publisher.ts` | `getUpdatedNotes` attachment-mtime rule. Sweep in `deletePublishedUid`. Audit extension. Staged-file cleanup and error copy. |
 | `src/main.ts` | Vault `rename` / `delete` for the hash cache. Phase 4 `modify` notice. |
 | `infrastructure/assets/index/index.html` (+ `npm run synth:site`) | `fetchNoteJson` prefix, `hydrateAttachments`, transclusion scoping, unavailable/expired states, diff notice, CSS |
 | `infrastructure/lib/cognito-auth-stack.ts`, `infrastructure/assets/lambda/auth-callback.js`, `src/infrastructure/cloudFormationManager.ts`, wizard, `src/settings/profile/infrastructure.ts` | Session length (§11) |
 | `infrastructure/lib/full-stack-oac.ts`, `full-stack-oai.ts`, `cloudFormationManager.ts`, `src/settings/profile/infrastructure.ts` (+ `npm run synth`) | Lifecycle rule (§10) |
-| `docs/publishing-model.md`, `docs/settings.md`, `docs/parser-extensions.md`, `docs/auth-and-access.md`, `docs/infrastructure-deployment.md` | Replace the "attachments aren't published" limitation. Document settings, pinning, access, the new stage, session length, the lifecycle rule, and the S3 permissions publishing now uses (`s3:GetObject` for HEAD and rebuild, `s3:ListBucket` for audit and rebuild, `s3:AbortMultipartUpload`). |
+| `docs/publishing-model.md`, `docs/settings.md`, `docs/parser-extensions.md`, `docs/auth-and-access.md`, `docs/infrastructure-deployment.md` | Replace the "attachments aren't published" limitation. Document the excluded-directory matching rules with examples, Obscure attachment names, settings, pinning, access, the new stage, session length, the lifecycle rule, and the S3 permissions publishing now uses (`s3:GetObject` for HEAD and rebuild, `s3:ListBucket` for audit and rebuild, `s3:AbortMultipartUpload`). |
 
 **Phases.** Each is a reviewable unit.
 
-1. **Session length (§11).** Independent of attachments, and can ship first.
+1. **Session length (§11)** and **excluded-directory matching (§1)**. Both are
+   independent of attachments and can ship first. The matching rules must ship
+   no later than phase 2, because attachment collection relies on them.
 2. **Core attachments (§1–§8).** Settings, collection, hash, note JSON, the new
    stage, raw scrub, local state, upload, site rendering, `getUpdatedNotes`.
 3. **Cleanup (§9, §10).** Sweeps, rebuild, audit, lifecycle rule.
@@ -874,14 +1032,39 @@ existing tests do):
   - the `::att=` segment is order-independent, de-duplicated, and absent when
     there are no refs;
   - staged-entry merge across a failed batch;
+  - the re-check before upload: a staged entry from a failed batch whose folder
+    was excluded afterwards is dropped, and so are entries whose extension was
+    removed from the allow-list, entries over a lowered cap, entries under the
+    mode `off`, and entries whose file was moved or deleted; entries that still
+    pass are kept;
   - required/candidate/orphan derivation across an access change, a UID delete,
     a blocked note, and two notes sharing a file in different areas.
+- `test-excluded-directories.ts`, for `src/utils/excludedDirectories.ts`:
+  - `private/`, `private` and `/private` all exclude `private/a.mp3` and
+    `private/x/a.md`, but not `Projects/private/a.mp3`, `privateer/a.mp3` or
+    `private.md`;
+  - `Projects/private/` excludes `Projects/private/a.mp3` only;
+  - `**/private/` excludes `private/…`, `a/private/…` and `a/b/private/…`, but
+    not `a/privateer/…`;
+  - `*-private/`, `Projects/*/drafts/` and `Archive/**/raw/` (zero and several
+    middle folders), and `a**b` treated as `*`;
+  - trimming (`private/ `, ` private/`), empty lines, `./private/`;
+  - case-insensitivity (`Private/` excludes `private/a.md`);
+  - literal `?`, `[`, `{` in folder names;
+  - patterns never match file names (`**/*.wav` doesn't exclude `a/b.wav`);
+  - the upgrade check: for entries `private` and `private/`, the files the old
+    rule excluded and the new one doesn't (`Projects/private/…`, `privateer/…`,
+    root `private.md`), the suggested patterns, and no result for `private/`.
 - `test-attachment-state.ts`: completeness on creation (empty versus non-empty
   history), rebuild merge, hash cache hit and miss on size/mtime, rename and
   delete.
-- `test-obscure-wikilinks.ts`, extended: file-target wikilinks with alias,
-  fragment and embed `!`. Markdown images and links in percent-encoded and
-  `<…>` forms. Unresolved targets unchanged. External URLs unchanged.
+- `test-obscure-wikilinks.ts`, extended: every row of the §3 raw table.
+  File-target wikilinks with alias, size alias, fragment and embed `!`.
+  Published targets become `<sha256>.<ext>`, unpublished ones `null.<ext>`, and
+  files without an extension `<sha256>` / `null`. No path fallback when there is
+  no alias. Markdown images and links in percent-encoded and `<…>` forms. The
+  two switches independently: notes only, attachments only, both, neither.
+  Unresolved targets unchanged. External URLs unchanged.
 - **Parser:** add cases for `remark-attachments` (each output row in §3,
   headings, size aliases, mixed paragraphs, escaping, `published: false`), then
   re-capture `e2e/fixtures/parser-golden.json`, reviewing every diff. Expected
@@ -914,15 +1097,25 @@ existing tests do):
    `[[script.js]]` publish, and opening them downloads the file instead of
    running it.
 8. With the mode `off`, no attachment objects are written, and attachment links
-   render as unpublished spans showing the file name.
-9. Delete `attachments.json` and gate a note that has attachments. The publish
-   rebuilds the state from the bucket, then sweeps the public copy.
-10. Upload a file over 16 MB (multipart). It plays, and no incomplete multipart
+   render as unpublished spans showing the file name. With Obscure attachment
+   names on, the note's `raw` shows `null.<ext>` targets. With it off, the links
+   appear as written.
+9. With `**/private/` excluded, a note embedding `Projects/private/a.mp3` and
+   `Media/b.mp3` publishes `b.mp3` only. `a.mp3` renders as an unpublished
+   span, is `null.mp3` in `raw`, and no object exists for it in any area.
+10. Make a publish fail at its first upload, before any attachment is sent (e.g.
+    credentials without `s3:PutObject`), so the batch stays staged. Restore the
+    credentials, add the attachment's folder to Excluded directories, and
+    publish again. The file isn't uploaded, the notice names it, and the note
+    shows "Attachment unavailable".
+11. Delete `attachments.json` and gate a note that has attachments. The publish
+    rebuilds the state from the bucket, then sweeps the public copy.
+12. Upload a file over 16 MB (multipart). It plays, and no incomplete multipart
     upload remains (`ListMultipartUploads`).
-11. Apply a session length of 12 h. After signing in, the `cpn_id` cookie's
+13. Apply a session length of 12 h. After signing in, the `cpn_id` cookie's
     `Max-Age` is about 43200 and the token's `exp` is about 12 h out. A
     pre-upgrade pool's Google sign-in still works after Apply.
-12. Apply the bucket cleanup rule. `GetBucketLifecycleConfiguration` shows both
+14. Apply the bucket cleanup rule. `GetBucketLifecycleConfiguration` shows both
     rules, and the site's routes (`/auth/*`, comments, chat) still work.
 
 ## Defaults chosen
@@ -935,5 +1128,9 @@ These were settled while writing the spec. Change any you disagree with:
   render (§6). Rendering them on the site would mean serving them from a
   separate origin, which is an infrastructure change.
 - Inline images aren't clickable (no lightbox, no open-in-new-tab) in v1.
+- **Obscure attachment names** is on by default, like Obscure wikilinks (§1).
+- Excluded-directory matching is case-insensitive (§1).
+- The upgrade check for excluded directories only warns; it doesn't rewrite
+  entries or block publishing (§1).
 - A mixed paragraph (`![[pic.png]] ![[Note]]`) renders its note embed inline
   (§3).
