@@ -522,12 +522,34 @@ One file, so its presence and completeness can be judged as a whole:
 - `refs` entries are written in `commitPendingNotes`, next to the publish
   history. Revisions without attachments are omitted.
 - `uploaded` entries are added as uploads succeed (§6).
-- **Completeness.** When the file is first created, `complete` is `true` only if
-  the profile's publish history is empty. Otherwise (an upgraded profile, a new
-  machine, a lost file) it is `false`. Any orphan deletion (§9) and the audit's
-  delete offer first run a **rebuild** when `complete` is `false`. Without this,
-  a fresh file holding only new revisions would look authoritative and could
-  delete files that older live revisions still use.
+- **Completeness.** Any orphan deletion (§9) and the audit's delete offer first
+  run a **rebuild** when `complete` is `false`. Without this, a fresh file
+  holding only new revisions would look authoritative and could delete files
+  that older live revisions still use.
+- **Starting complete.** A sweep can only wrongly delete an object that exists,
+  so a file that starts when the bucket holds no attachment objects can't
+  miss anything that matters. The file is created the first time a publish
+  or a sweep loads it, **before** that publish uploads anything. `complete`
+  starts as `true` when either:
+  1. the profile's publish history is empty, or
+  2. a **bucket probe** finds no attachment objects: `ListObjectsV2` with
+     `MaxKeys: 1` on `<s3Prefix>attachments/`, and on
+     `<s3Prefix>restricted/<g>/attachments/` for each group prefix (listed
+     with `Prefix: <s3Prefix>restricted/` and `Delimiter: '/'`). It uses the
+     same `s3:ListBucket` permission as `hasRestrictedObjects`.
+
+  Otherwise (attachments were already published from this or another
+  machine, then the file was lost, or never synced here) it starts `false`.
+  This covers every profile upgraded before attachments were turned on, so
+  they never need a rebuild. A rebuild is needed only when attachments
+  already exist in the bucket and the local file doesn't. If the probe fails
+  (credentials, network), the file isn't created. The publish continues, and
+  the next load probes again. A sweep in that publish is skipped as when a
+  rebuild fails (§9).
+
+  The probe is used rather than a local "attachments were enabled" flag
+  because a local flag can't tell whether another machine has published
+  attachments.
 - **Rebuild:**
   1. List `notes/` and `restricted/*/notes/` with `ListObjectsV2`.
   2. GET each note JSON (concurrency 5, progress notice) and record its
@@ -1066,7 +1088,7 @@ never outlive its token, and `SessionHours` is the only setting.
 | `src/types.ts`, settings defaults, profile settings tab | `attachments` and `obscureRawAttachments` settings (§1). `excludedDirsRulesVersion`. `bucketLifecycleDays`, `sessionHours` state. |
 | new `src/utils/excludedDirectories.ts` (pure), `Publisher.isFileExcluded`, `src/main.ts`, `src/settings/profile/content.ts` | Exclusion matching rules, the old rule kept only for the one-time upgrade, the pattern additions and the upgrade notice, help text (§1) |
 | new `src/utils/attachments.ts` (pure, no Obsidian imports) | Reference filters, extension sets (including `*`), kind, MIME and disposition (passive map, active types), key building and URL encoding, `::att=` segment, staged-entry merge, required/candidate/orphan derivation |
-| new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness, rebuild from bucket. Hash cache with streamed hashing (Node `fs` + `crypto`). |
+| new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness (bucket probe on creation), rebuild from bucket. Hash cache with streamed hashing (Node `fs` + `crypto`). |
 | `src/utils/notes.ts` | Collect refs in `queueNote` before the raw scrub (§2), scrub when either obscure setting is on, `::att=` segment, pre-commit re-check, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
 | new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments` | Rendering (§3) |
 | `src/utils/rewriteRawWikilinks.ts` | File targets (`<sha256>.<ext>` / `null.<ext>`) and Markdown links in the raw scrub, with separate note and attachment switches (§3) |
@@ -1076,15 +1098,36 @@ never outlive its token, and `SessionHours` is the only setting.
 | `infrastructure/assets/index/index.html` (+ `npm run synth:site`) | `fetchNoteJson` prefix, `hydrateAttachments`, transclusion scoping, unavailable/expired states, hash-to-name rewrite and diff notice, CSS |
 | `infrastructure/lib/cognito-auth-stack.ts`, `infrastructure/assets/lambda/auth-callback.js`, `src/infrastructure/cloudFormationManager.ts`, wizard, `src/settings/profile/infrastructure.ts` | Session length (§11) |
 | `infrastructure/lib/full-stack-oac.ts`, `full-stack-oai.ts`, `cloudFormationManager.ts`, `src/settings/profile/infrastructure.ts` (+ `npm run synth`) | Lifecycle rule (§10) |
-| `docs/publishing-model.md`, `docs/settings.md`, `docs/parser-extensions.md`, `docs/auth-and-access.md`, `docs/infrastructure-deployment.md` | Replace the "attachments aren't published" limitation. Document the excluded-directory matching rules with examples, Obscure attachment names, settings, pinning, access, the new stage, session length, the lifecycle rule, and the S3 permissions publishing now uses (`s3:GetObject` for HEAD and rebuild, `s3:ListBucket` for audit and rebuild, `s3:AbortMultipartUpload`). |
+| `docs/publishing-model.md`, `docs/settings.md`, `docs/parser-extensions.md`, `docs/auth-and-access.md`, `docs/infrastructure-deployment.md` | Replace the "attachments aren't published" limitation. Document the excluded-directory matching rules with examples, Obscure attachment names, settings, pinning, access, the new stage, session length, the lifecycle rule, and the S3 permissions publishing now uses (`s3:GetObject` for HEAD and rebuild, `s3:ListBucket` for the completeness probe, audit and rebuild, `s3:AbortMultipartUpload`). |
 
 **Phases.** Each is a reviewable unit.
 
-1. **Session length (§11)** and **excluded-directory matching (§1)**. Both are
-   independent of attachments and can ship first. The matching rules must ship
-   no later than phase 2, because attachment collection relies on them.
+1. **Session length (§11)**, **excluded-directory matching (§1)** and
+   **Obscure attachment names with `null` targets only (§1, §3)**. All three
+   are independent of attachment publishing and can ship first. The matching
+   rules must ship no later than phase 2, because attachment collection relies
+   on them.
+
+   The raw scrub closes a leak that exists today: with Obscure wikilinks on, a
+   link to a vault file is published as `[[null|Media/song.mp3]]`, exposing the
+   folder path. Phase 1 ships:
+   - the `obscureRawAttachments` field, its default fill and its toggle;
+   - the scrubber's file targets and Markdown `image` / `link` handling, with
+     the separate note and attachment switches;
+   - the same scrub in the content-index / chat-corpus rebuild in
+     `src/main.ts`.
+
+   Nothing publishes as an attachment yet, so every file target becomes
+   `null.<ext>` (or `null`) and no hashing is needed. Notes with attachment
+   links get a new hash once. In phase 2 the notes whose files then publish
+   get a second new hash, as their targets become `<sha256>.<ext>`. That is
+   accepted. Phase 1 doesn't touch the HTML. Unpublished wikilinks to vault
+   files still show their path there (`displayTextFor` in
+   `remarkObsidianLinks.ts`) until phase 2's `remark-attachments` stage
+   renders the file name instead.
 2. **Core attachments (§1–§8).** Settings, collection, hash, note JSON, the new
-   stage, raw scrub, local state, upload, site rendering, `getUpdatedNotes`.
+   stage, `<sha256>.<ext>` targets in the raw scrub, local state, upload, site
+   rendering, `getUpdatedNotes`.
 3. **Cleanup (§9, §10).** Sweeps, rebuild, audit, lifecycle rule.
    **Phases 2 and 3 ship in the same release.** Phase 2 alone would leave
    public copies behind when a note is gated.
@@ -1132,8 +1175,11 @@ existing tests do):
     `**/Projects/private/` and `Projects/private*/`. `private/` gains nothing.
     Patterns already in the list aren't added twice. Only root `private.md` is
     reported as no longer excluded. A second run (version 2) changes nothing.
-- `test-attachment-state.ts`: completeness on creation (empty versus non-empty
-  history), rebuild merge, hash cache hit and miss on size/mtime, rename and
+- `test-attachment-state.ts`: completeness on creation. It is `true` with an
+  empty history, and with a non-empty history when the probe finds no
+  attachment objects (public or any group). It is `false` when the probe finds
+  one in any area. No file is created when the probe fails. Also: rebuild
+  merge, hash cache hit and miss on size/mtime, rename and
   delete, and a streamed hash that matches `crypto.subtle.digest` on the same
   bytes.
 - `test-obscure-wikilinks.ts`, extended: every row of the §3 raw table.
@@ -1142,7 +1188,10 @@ existing tests do):
   files without an extension `<sha256>` / `null`. No path fallback when there is
   no alias. Markdown images and links in percent-encoded and `<…>` forms. The
   two switches independently: notes only, attachments only, both, neither.
-  Unresolved targets unchanged. External URLs unchanged.
+  Unresolved targets unchanged. External URLs unchanged. The `null` rows ship
+  in phase 1, with no attachment list (every file target unpublished). The
+  phase 1 cases include today's leak: `[[Media/song.mp3]]` no longer becomes
+  `[[null|Media/song.mp3]]`.
 - **Parser:** add cases for `remark-attachments` (each output row in §3,
   headings, size aliases, mixed paragraphs, escaping, `published: false`), then
   re-capture `e2e/fixtures/parser-golden.json`, reviewing every diff. Expected
@@ -1189,8 +1238,11 @@ existing tests do):
     credentials, add the attachment's folder to Excluded directories, and
     publish again. The file isn't uploaded, the notice names it, and the note
     shows "Attachment unavailable".
-11. Delete `attachments.json` and gate a note that has attachments. The publish
-    rebuilds the state from the bucket, then sweeps the public copy.
+11. Delete `attachments.json` and gate a note that has attachments. The probe
+    finds attachment objects, so the publish rebuilds the state from the
+    bucket, then sweeps the public copy. On a profile with publish history but
+    no attachment objects, the first publish with attachments on creates the
+    file as complete and never rebuilds.
 12. Upload a file over 16 MB (multipart). It plays, and no incomplete multipart
     upload remains (`ListMultipartUploads`). Upload one near the cap and watch
     Obsidian's memory: it stays near the in-flight parts, not the file size.
