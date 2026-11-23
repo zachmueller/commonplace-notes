@@ -41,7 +41,12 @@ Let a published note carry the attachments it links to, with:
 | Excluded directories | Entries match **from the vault root**: `private/` excludes only the top-level `private` folder. `*` matches within one folder name and `**` matches any depth, so `**/private/` excludes a `private` folder anywhere. This applies to notes and attachments alike. Existing entries keep their text. A one-time upgrade appends patterns so every folder the old rule excluded stays excluded, and a notice says what it added (§1). |
 | Large files | **Streamed from disk** with Node's `fs` (the plugin is desktop-only) for hashing and multipart upload, so memory use doesn't grow with file size (§5, §6). |
 | File excluded after staging | Every staged attachment is re-checked against the current exclusion rules, allow-list and size cap just before upload. Files that now fail are dropped, not uploaded (§6). |
-| File changed mid-publish | Re-check before commit and re-queue. If the bytes still mismatch at upload, fail the publish with staged files kept (§6). |
+| File changed mid-publish | Re-check before staging and re-queue. If the file is still changing, abort the publish without throwing, so staging stays intact. If the bytes still mismatch at upload, fail the publish with staged files kept (§6). |
+| Detecting changed bytes | The hash cache is keyed on size, mtime **and** Node's `fs.stat` `ctimeMs`, which every write changes and tools can't reset. A tag editor that keeps size and mtime still causes a re-hash (§5). |
+| Publish errors and staging | `handlePublishError` copies staging into the error session directory and **no longer clears it**. Only a successful upload clears staging, so an earlier failed batch is never lost (§6). |
+| Raw HTML and reference-style links | **Not handled, and documented.** `<img src="Media/x.png">`, `<audio src=…>` and `[ref]: Media/a.pdf` definitions are neither published nor obscured. They pass through as written, folder path included (§3). |
+| Release | Attachment publishing **launches as a beta** in its first release (phases 2 and 3, §12). The settings group, the docs and the release notes label it "Beta". The mode still defaults to `off`. Phase 1 changes (session length, excluded-directory matching, Obscure attachment names) are not beta. |
+| Publishing machines | Cleanup assumes **one publishing machine per profile**, or one whose vault sync finished before publishing. The docs say so (§5, §9). |
 | Deleted bytes | Add an S3 lifecycle rule that expires noncurrent versions and aborts stale multipart uploads (§10). |
 | Sign-in session | Raise the session from 1 hour to **12 hours** by default, configurable per profile in the infrastructure settings. Accept media stopping at session expiry (§11). |
 
@@ -56,6 +61,12 @@ Let a published note carry the attachments it links to, with:
 - **Live attachments** (a stable ID that always resolves to the latest bytes).
 - **Diffing attachment contents.**
 - **A lightbox or click-to-enlarge for inline images.**
+- **Raw HTML and reference-style links to vault files.** `<img src>`,
+  `<audio src>`, `<a href>` and other raw HTML, and `[ref]: path` definitions,
+  aren't in Obsidian's metadata cache and aren't visited by the new stage or the
+  raw scrub. They pass through unchanged, folder path included (§3).
+- **Concurrent publishing from several machines.** Cleanup trusts local state
+  (§5, §9).
 - **Purging one file from old revisions.** If a public note once embedded
   `secret.mp3` and a later revision drops it, the old public revision still
   references it, exactly as the old revision's text stays public. Removing it
@@ -196,7 +207,10 @@ load after upgrading:
 1. For each profile, for every entry that, once trimmed, doesn't end in `/`,
    append the patterns that reproduce the old rule's folder matches:
    `**/<entry>/` (any depth) and `<entry>*/` (prefix), skipping any already in
-   the list. This runs per entry, not per affected file, so a matching folder
+   the list. `<entry>` is first normalized as in rule 1 (a leading `/` or `./`
+   dropped), so `/private` gains `**/private/`, not `**//private/`. An entry
+   with a leading `/` matched nothing under the old rule, so its additions only
+   ever exclude more. This runs per entry, not per affected file, so a matching folder
    created later is still excluded. `private` gains `**/private/` and
    `private*/`, and `Projects/private` gains `**/Projects/private/` and
    `Projects/private*/`. Entries ending in `/` meant the same thing under both
@@ -218,9 +232,11 @@ The added lines only ever exclude more. The upgrade doesn't edit or remove the
 user's own entries, and it doesn't block publishing. Profiles created after the
 upgrade start at version 2 and skip it.
 
-**UI:** a new **Attachments** group in the profile's content settings
+**UI:** a new **Attachments (Beta)** group in the profile's content settings
 (`src/settings/profile/content.ts`, or a new `attachments.ts` beside it): a mode
 dropdown, an extensions text field (space- or comma-separated) and a size field.
+The group's description starts: "Beta: attachment publishing is new and may
+change."
 On Local profiles the group shows but is disabled, with the note "Attachments
 publish on AWS profiles only."
 
@@ -262,6 +278,7 @@ interface AttachmentRef {
   ext: string;         // lowercase
   size: number;
   mtime: number;       // file.stat.mtime when hashed (see §6, change detection)
+  ctime: number;       // Node fs.stat ctimeMs when hashed (§5, hash cache)
   kind: 'image' | 'audio' | 'video' | 'file';
 }
 // NoteState gains: attachments: AttachmentRef[]
@@ -372,6 +389,16 @@ to vault files render as unpublished spans instead of passing through as broken
 relative URLs. Wikilinks to vault files show the file name rather than the
 folder path. External URLs and links that don't resolve are untouched.
 
+**Known limitation: raw HTML and reference-style links.** Notes keep their raw
+HTML (`allowDangerousHtml` in `remark-rehype` and `rehype-stringify`), and
+Obsidian's metadata cache doesn't index it. So `<img src="Media/x.png">`,
+`<audio src=…>` and `<a href=…>` that point at vault files are never collected,
+never published, and pass through as written, folder path included. Reference
+definitions (`[ref]: Media/a.pdf`, used by `![alt][ref]` and `[text][ref]`) are
+`definition` mdast nodes, which this stage doesn't visit, so they behave the
+same way. The docs list both and recommend wikilinks or inline Markdown links
+for attachments.
+
 The scaffold's doc block states the contract with the site: the
 `data-cpn-attachment` attribute and the classes.
 
@@ -425,7 +452,14 @@ The new target is:
 - Markdown links: the same pass visits `image` and `link` nodes. A relative URL
   that resolves to a non-Markdown vault file has its destination replaced by the
   new target. A `<…>` destination drops its brackets, since the target has no
-  spaces. It is spliced by source offset, as for wikilinks.
+  spaces. It is spliced by source offset, as for wikilinks. mdast positions
+  cover the whole `![alt](dest "title")`, not the destination alone, so the
+  destination's offsets come from micromark's `resourceDestination` tokens
+  (or an equivalent parse of the node's source slice that handles `<…>`,
+  titles, escapes and nested brackets), never from searching the slice for the
+  URL text.
+- Reference definitions (`[ref]: path`) and raw HTML are not rewritten (see
+  "Known limitation" above).
 - Unresolved targets and external URLs are left as today.
 - `queueNote` runs the scrub when **either** setting is on (today:
   `obscureRawWikilinks` only).
@@ -439,8 +473,10 @@ The new target is:
   display text. The folder path is therefore already published. This setting
   closes that leak.
 
-With the setting on, neither the folder path nor the file name appears in `raw`,
-or in anything built from it (the content index, the chat corpus). The HTML, the
+With the setting on, neither the folder path nor the file name of a wikilink or
+inline Markdown link target appears in `raw`, or in anything built from it (the
+content index, the chat corpus). Raw HTML and reference definitions are the
+exception and keep their paths (known limitation above). The HTML, the
 note JSON's `attachments` list and the attachment URLs keep the file name (§4,
 §6). The setting keeps folder paths private, not file names. With it off,
 attachment links in `raw` stay exactly as written, including the folder path, as
@@ -550,6 +586,15 @@ One file, so its presence and completeness can be judged as a whole:
   The probe is used rather than a local "attachments were enabled" flag
   because a local flag can't tell whether another machine has published
   attachments.
+- **One publishing machine.** `attachments.json`, `publish-history.json` and
+  the mappings live in the vault's `cpn/` folder and travel with vault sync.
+  `complete` detects a **missing** file, not a **stale** one. If two machines
+  publish the same profile before sync catches up, one machine's sweep (§9)
+  can delete a file that the other's newer revision uses. Its `uploaded` list
+  can also skip re-uploading a key the other machine swept. v1 assumes one
+  publishing machine per profile, or that vault sync finishes before each
+  publish. `docs/publishing-model.md` says so, and **Audit published notes**
+  (§9) finds and repairs the resulting missing objects.
 - **Rebuild:**
   1. List `notes/` and `restricted/*/notes/` with `ListObjectsV2`.
   2. GET each note JSON (concurrency 5, progress notice) and record its
@@ -566,10 +611,19 @@ One file, so its presence and completeness can be judged as a whole:
 Hashing a large file on every publish is wasteful:
 
 ```jsonc
-{ "<vaultPath>": { "size": 1234567, "mtime": 1763900000000, "sha256": "…" } }
+{ "<vaultPath>": { "size": 1234567, "mtime": 1763900000000, "ctime": 1763900000123, "sha256": "…" } }
 ```
 
-Re-hash only when `size` or `mtime` differ from the cached values. Hashing
+Re-hash when `size`, `mtime` or `ctime` differ from the cached values. `ctime`
+is Node's `fs.stat(fullPath).ctimeMs`, the inode change time, **not**
+Obsidian's `file.stat.ctime`, which is the creation time. Size and mtime alone
+aren't enough. Audio taggers (Mp3tag, Picard) can keep a file's modification
+time, and ID3 padding usually keeps its size, so a tag edit would otherwise
+reuse the old hash. The site would then keep serving the old bytes, or every
+publish would fail the upload hash check. Every write changes `ctimeMs`, and
+`utimes` can't set it back. It is local to each machine, so a synced cache
+re-hashes once per machine. Any mismatch found at upload (§6) also deletes the
+file's cache entry, so a stale entry can never cause a second failure. Hashing
 streams the file: `fs.createReadStream` on the adapter's full path
 (`FileSystemAdapter.getFullPath`) piped through Node's
 `crypto.createHash('sha256')`. The plugin is desktop-only and bundled for Node,
@@ -597,6 +651,15 @@ batch needs:
   must stay in step.
 - `cleanupStagedFiles` deletes it, and `handlePublishError` copies it into the
   error session directory with the staged notes.
+- **`handlePublishError` stops clearing staging.** Today it copies staging into
+  the error session directory and then calls `cleanupStagedFiles`. That throws
+  away an earlier failed batch, whose history and mappings were already saved
+  locally, so the next successful publish pushes mappings that point at note
+  JSON that was never uploaded. The `uidConflicts` throw in `publishNotes`
+  already hits this. From now on it only copies. Staging is cleared only after
+  a successful upload, so its entries are retried on the next publish.
+  Uploading a staged note JSON that no mapping uses is harmless, because the
+  site never fetches it.
 
 ## 6. Upload
 
@@ -742,6 +805,17 @@ their own browser already holds, for at most one session length.
 S3 and CloudFront already serve byte-range requests, which `<audio>` and
 `<video>` seeking needs.
 
+**Edge caching of `private` files.** The site's default behavior uses the
+managed CachingOptimized policy (`full-stack-oac.ts`, `full-stack-oai.ts`),
+whose minimum TTL is 1 second. With `private`, CloudFront caches an object for
+only that minimum, so restricted and whole-site-gated media are fetched from S3
+on almost every request, while each reader's browser cache still holds them for
+the max-age. This is accepted for v1: S3-to-CloudFront transfer is free, and
+the cost is S3 GETs and latency, not correctness. A dedicated
+`/*/attachments/*` cache behavior could restore edge caching later. Because
+the edge function runs before the cache, that change wouldn't weaken access
+control.
+
 **Headers are fixed at upload.** A key never re-uploads (step 1), so changing
 the site's read gate or the session length later doesn't change the headers on
 files already in the bucket. Only new keys get the new values. A file uploaded
@@ -754,16 +828,21 @@ docs say so.
 
 A file can change while a publish is running:
 
-1. **Before commit.** At the start of `commitPendingNotes`, compare each pending
-   note's refs against the file's current `stat.size` and `stat.mtime`. If any
-   differ, re-run `queueNote` for that note (which re-hashes). If it differs
-   again on that second check, stop the publish before anything commits:
-   "`song.mp3` is still changing. Publish again when it is saved."
+1. **Before staging.** In `publishNotes`, after queuing and **before** the
+   staging step's `frontmatterManager.process()` and `commitPendingNotes`,
+   compare each pending note's refs against the file's current size, mtime and
+   `ctimeMs`. If any differ, re-run `queueNote` for that note (which
+   re-hashes). If it differs again on that second check, **abort without
+   throwing**: call `discardQueued(profile.id)`, show "`song.mp3` is still
+   changing. Publish again when it is saved.", and return. Nothing commits,
+   staging from earlier batches stays as it was, and `handlePublishError`
+   doesn't run. Any frontmatter queued this batch is written at the start of
+   the next publish, as it is today after a failed run.
 2. **At upload.** If the hash of the bytes sent in step 3 above doesn't match
-   (the multipart upload is aborted, or the `PutObject` never sent), stop the
-   publish before any note JSON uploads, keeping staged files as other upload
-   failures do: "`song.mp3` changed while publishing. Publish the notes that use it
-   again."
+   (the multipart upload is aborted, or the `PutObject` never sent), delete the
+   file's hash-cache entry (§5) and stop the publish before any note JSON
+   uploads, keeping staged files as other upload failures do: "`song.mp3`
+   changed while publishing. Publish the notes that use it again."
 3. **The next publish.** History and mappings were already committed for the
    staged revision, and its bytes are gone from the vault. Staged entries whose
    vault file no longer matches its hash, or that fail the re-check before
@@ -818,8 +897,11 @@ A new `hydrateAttachments(root, prefix)` processes every
 - Mark the element `data-cpn-att="1"` so a later pass skips it.
 - Everything is set through DOM properties, never `innerHTML`.
 
-**Scoping**, so an embedded gated note's files resolve in that note's area, not
-the host's:
+**Scoping**, so an embedded note's files resolve in that note's area, not the
+host's. A public note can't embed a gated one (`linkVisibleFrom` renders it
+unpublished), so the case that matters is a gated host embedding a public
+note: the embedded note's files live under `attachments/`, not the host's
+`restricted/<g>/attachments/`.
 
 1. `renderNote` calls `hydrateAttachments(contentEl, noteData.areaPrefix)`
    **before** `hydrateTransclusions`.
@@ -841,7 +923,9 @@ Pinning (§4) covers a note's own attachments only.
   `cpn-attachment-unavailable` class and a small inline label, "Attachment
   unavailable", with no retry loop. A missing object behind OAC returns 403, so
   403 and 404 look the same here.
-- In a restricted area, the error handler first fetches `/restricted/whoami`
+- In a restricted area, and in **every** area on a whole-site Cognito gate
+  (where a signed-out media request to the public area gets the edge's 401),
+  the error handler first fetches `/restricted/whoami`
   (`cache: 'no-store'`). If `signedIn` is false, the label instead reads
   "Sign in again to play this", with the existing sign-in link
   (`hostedUiLoginUrl`). This covers a session that expires during a long
@@ -940,6 +1024,9 @@ bytes.
 Only keys of the removed revisions are candidates, which bounds what a sweep can
 delete. Delete them with `DeleteObjects` (batches of 1000), and remove them from
 `uploaded[area]`.
+
+required(area) comes from local state, so the sweep relies on the
+one-publishing-machine assumption (§5).
 
 The sweep needs `attachments.json` to be `complete`. If it isn't, rebuild first
 (§5). If the rebuild fails, skip the sweep and show a persistent notice:
@@ -1089,16 +1176,16 @@ never outlive its token, and `SessionHours` is the only setting.
 | new `src/utils/excludedDirectories.ts` (pure), `Publisher.isFileExcluded`, `src/main.ts`, `src/settings/profile/content.ts` | Exclusion matching rules, the old rule kept only for the one-time upgrade, the pattern additions and the upgrade notice, help text (§1) |
 | new `src/utils/attachments.ts` (pure, no Obsidian imports) | Reference filters, extension sets (including `*`), kind, MIME and disposition (passive map, active types), key building and URL encoding, `::att=` segment, staged-entry merge, required/candidate/orphan derivation |
 | new `src/utils/attachmentState.ts` | `attachments.json` load/save, completeness (bucket probe on creation), rebuild from bucket. Hash cache with streamed hashing (Node `fs` + `crypto`). |
-| `src/utils/notes.ts` | Collect refs in `queueNote` before the raw scrub (§2), scrub when either obscure setting is on, `::att=` segment, pre-commit re-check, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
+| `src/utils/notes.ts` | Collect refs in `queueNote` before the raw scrub (§2), scrub when either obscure setting is on, `::att=` segment, `refs` in `commitPendingNotes`, `attachments` in note JSON, `staged-attachments.json` |
 | new `src/utils/parser/scaffolds/remark-attachments.ts`, `src/utils/remarkAttachments.ts`, `ParserContext.resolveAttachment`, `libs.remarkAttachments` | Rendering (§3) |
 | `src/utils/rewriteRawWikilinks.ts` | File targets (`<sha256>.<ext>` / `null.<ext>`) and Markdown links in the raw scrub, with separate note and attachment switches (§3) |
 | `src/publish/awsUpload.ts` | Attachment upload step (re-check against current settings, manifest, HEAD, streamed multipart with hash-while-sending and abort on mismatch, headers). Sweep after access transitions and partition purge. |
-| `src/publish/publisher.ts` | `getUpdatedNotes` attachment-mtime rule. Sweep in `deletePublishedUid`. Audit extension. Staged-file cleanup and error copy. |
+| `src/publish/publisher.ts` | Pre-staging re-check with a non-throwing abort in `publishNotes` (§6). `handlePublishError` copies staging without clearing it (§5). `getUpdatedNotes` attachment-mtime rule. Sweep in `deletePublishedUid`. Audit extension. |
 | `src/main.ts` | Vault `rename` / `delete` for the hash cache. The content-index / chat-corpus rebuild uses the shared scrub helper with attachment refs (§3). Phase 4 `modify` notice. |
 | `infrastructure/assets/index/index.html` (+ `npm run synth:site`) | `fetchNoteJson` prefix, `hydrateAttachments`, transclusion scoping, unavailable/expired states, hash-to-name rewrite and diff notice, CSS |
 | `infrastructure/lib/cognito-auth-stack.ts`, `infrastructure/assets/lambda/auth-callback.js`, `src/infrastructure/cloudFormationManager.ts`, wizard, `src/settings/profile/infrastructure.ts` | Session length (§11) |
 | `infrastructure/lib/full-stack-oac.ts`, `full-stack-oai.ts`, `cloudFormationManager.ts`, `src/settings/profile/infrastructure.ts` (+ `npm run synth`) | Lifecycle rule (§10) |
-| `docs/publishing-model.md`, `docs/settings.md`, `docs/parser-extensions.md`, `docs/auth-and-access.md`, `docs/infrastructure-deployment.md` | Replace the "attachments aren't published" limitation. Document the excluded-directory matching rules with examples, Obscure attachment names, settings, pinning, access, the new stage, session length, the lifecycle rule, and the S3 permissions publishing now uses (`s3:GetObject` for HEAD and rebuild, `s3:ListBucket` for the completeness probe, audit and rebuild, `s3:AbortMultipartUpload`). |
+| `docs/publishing-model.md`, `docs/settings.md`, `docs/parser-extensions.md`, `docs/auth-and-access.md`, `docs/infrastructure-deployment.md` | Replace the "attachments aren't published" limitation, marking attachment publishing as **Beta**. Document the known limitations (raw HTML and reference-style links aren't published or obscured; cleanup assumes one publishing machine per profile), the excluded-directory matching rules with examples, Obscure attachment names, settings, pinning, access, the new stage, session length, the lifecycle rule, and the S3 permissions publishing now uses (`s3:GetObject` for HEAD and rebuild, `s3:ListBucket` for the completeness probe, audit and rebuild, `s3:AbortMultipartUpload`). |
 
 **Phases.** Each is a reviewable unit.
 
@@ -1131,6 +1218,16 @@ never outlive its token, and `SessionHours` is the only setting.
 3. **Cleanup (§9, §10).** Sweeps, rebuild, audit, lifecycle rule.
    **Phases 2 and 3 ship in the same release.** Phase 2 alone would leave
    public copies behind when a note is gated.
+
+   **That release is a beta.** The settings group reads **Attachments
+   (Beta)**, the docs and the release notes label the feature "Beta", and the
+   mode stays `off` by default. Leaving beta is a separate decision, made after
+   real use on the sandbox site and at least one release without changes to
+   the formats in §4 and §5 (note JSON `attachments`, `attachments.json`, key
+   layout). Until then those formats may change, with a migration if they do.
+   Phase 1 isn't beta. The hash-cache `ctime` rule (§5) and the
+   `handlePublishError` fix (§5) ship with phase 2, and the fix can land
+   earlier because it stands alone.
 4. **Change notice (§7).**
 
 ## 13. Testing
@@ -1179,9 +1276,15 @@ existing tests do):
   empty history, and with a non-empty history when the probe finds no
   attachment objects (public or any group). It is `false` when the probe finds
   one in any area. No file is created when the probe fails. Also: rebuild
-  merge, hash cache hit and miss on size/mtime, rename and
-  delete, and a streamed hash that matches `crypto.subtle.digest` on the same
-  bytes.
+  merge, hash cache hit and miss on size, mtime and `ctime` (a rewrite that
+  keeps size and restores mtime with `utimes` still misses), eviction on an
+  upload mismatch, rename and delete, and a streamed hash that matches
+  `crypto.subtle.digest` on the same bytes.
+- Publish error handling: after a batch fails at upload (staged and
+  committed), a second publish that throws while staging (e.g. `uidConflicts`)
+  leaves the first batch's staged note JSON and `staged-attachments.json` in
+  place, and the next successful publish uploads them. The "still changing"
+  abort leaves staging untouched and commits nothing.
 - `test-obscure-wikilinks.ts`, extended: every row of the §3 raw table.
   File-target wikilinks with alias, size alias, fragment and embed `!`.
   Published targets become `<sha256>.<ext>`, unpublished ones `null.<ext>`, and
@@ -1219,8 +1322,9 @@ existing tests do):
 4. Make two notes, one public and one gated, share a file. It exists in both
    areas. Ungating or deleting one leaves the other's copy intact.
 5. Use a note with two groups. A member of only the second group can play it.
-6. Embed a gated note that has attachments into a public note visible to group
-   members. The files resolve from the embedded note's area.
+6. Embed a public note that has attachments into a gated note. A group member
+   sees the embedded files load from `attachments/`, not from the host's
+   `restricted/<g>/attachments/`.
 7. A PDF embed and a plain `[[file.pdf]]` link open in a new tab with the
    browser's viewer and the file's own name. An `svg` opened directly
    downloads. With `html` and `js` added to the allow-list, `[[page.html]]` and
@@ -1248,7 +1352,9 @@ existing tests do):
     Obsidian's memory: it stays near the in-flight parts, not the file size.
     Overwrite a large file while it uploads: the multipart upload is aborted,
     no object exists under its key, and the publish stops with the "changed
-    while publishing" notice.
+    while publishing" notice. Then edit an mp3's tags with a tool that keeps
+    size and mtime, and publish updates for the note: it records a new
+    revision and plays the new bytes.
 13. Apply a session length of 12 h. After signing in, the `cpn_id` cookie's
     `Max-Age` is about 43200 and the token's `exp` is about 12 h out. A
     pre-upgrade pool's Google sign-in still works after Apply.
