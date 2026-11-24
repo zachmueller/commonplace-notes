@@ -27,6 +27,8 @@ export interface AttachmentSettings {
 	allowedExtensions: string[];
 	/** Files larger than this are skipped with a notice. 1–500. */
 	maxFileSizeMB: number;
+	/** PDF embeds render as an inline viewer (iframe) plus a new-tab link. Default off. */
+	inlinePdfs: boolean;
 }
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'file';
@@ -52,7 +54,7 @@ export interface AttachmentRef {
 
 /** What the renderer is told about a link target (§4). */
 export type AttachmentRender =
-	| { published: true; key: string; fileName: string; kind: AttachmentKind }
+	| { published: true; key: string; fileName: string; kind: AttachmentKind; inline?: true }
 	| { published: false; fileName: string };
 
 export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg'] as const;
@@ -76,7 +78,7 @@ export function resolveAttachmentSettings(raw: Partial<AttachmentSettings> | und
 	const allowedExtensions = Array.isArray(raw?.allowedExtensions)
 		? normalizeExtensionList(raw!.allowedExtensions)
 		: [...DEFAULT_ALLOWED_EXTENSIONS];
-	return { mode, allowedExtensions, maxFileSizeMB: clampFileSizeMB(raw?.maxFileSizeMB) };
+	return { mode, allowedExtensions, maxFileSizeMB: clampFileSizeMB(raw?.maxFileSizeMB), inlinePdfs: raw?.inlinePdfs === true };
 }
 
 export function clampFileSizeMB(value: unknown): number {

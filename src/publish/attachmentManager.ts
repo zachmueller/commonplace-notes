@@ -246,15 +246,19 @@ export class AttachmentManager {
 	 * The renderer's lookup for one note: null for anything that isn't a
 	 * non-Markdown vault file; published only for files in the note's list.
 	 */
-	resolverFor(sourcePath: string, refs: readonly AttachmentRef[]): (linkpath: string) => AttachmentRender | null {
+	resolverFor(sourcePath: string, refs: readonly AttachmentRef[], profile?: PublishingProfile): (linkpath: string) => AttachmentRender | null {
 		const byPath = new Map(refs.map(r => [r.vaultPath, r]));
+		const inlinePdfs = this.settingsFor(profile).inlinePdfs;
 		// The renderer passes paths with any #fragment already removed.
 		return (linkpath: string) => {
 			const target = this.plugin.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
 			if (!(target instanceof TFile) || target.extension.toLowerCase() === 'md') return null;
 			const ref = byPath.get(target.path);
 			if (!ref) return { published: false, fileName: target.name };
-			return { published: true, key: attachmentKey(ref.sha256, ref.fileName), fileName: ref.fileName, kind: ref.kind };
+			const render: AttachmentRender = { published: true, key: attachmentKey(ref.sha256, ref.fileName), fileName: ref.fileName, kind: ref.kind };
+			// Only the renderer's embed branch reads this; links stay links.
+			if (inlinePdfs && ref.ext === 'pdf') render.inline = true;
+			return render;
 		};
 	}
 

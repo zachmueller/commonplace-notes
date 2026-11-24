@@ -400,6 +400,24 @@ return libs.defineTransform((tree) => {
 				not: ['href='],
 			},
 			{
+				name: 'attachment · inline pdf embed: frame plus new-tab link, fragment on both',
+				md: '![[deck.pdf#page=3]]',
+				has: ['<span class="cpn-attachment-pdf-embed"><iframe class="cpn-attachment cpn-attachment-pdf" data-cpn-attachment="' + '2'.repeat(64) + '/deck.pdf" title="deck.pdf" loading="lazy" data-cpn-fragment="page=3"></iframe>',
+					'<a class="cpn-attachment cpn-attachment-file" data-cpn-attachment="' + '2'.repeat(64) + '/deck.pdf" target="_blank" rel="noopener" data-cpn-fragment="page=3">deck.pdf</a></span>'],
+				not: ['src=', 'href='],
+			},
+			{
+				name: 'attachment · inline pdf: size alias sizes the frame, Markdown embed and alt title',
+				md: '![[deck.pdf|600x800]] ![The deck](Media/deck.pdf)',
+				has: ['loading="lazy" width="600" height="800"></iframe>', 'title="The deck" loading="lazy"></iframe>', 'rel="noopener">The deck</a></span>'],
+			},
+			{
+				name: 'attachment · inline pdf: plain links, headings and non-inline pdfs stay links',
+				md: '[[deck.pdf|the deck]] ![[slides.pdf]]\n\n## Deck ![[deck.pdf]]',
+				has: ['rel="noopener">the deck</a>', 'rel="noopener">slides.pdf</a>', 'rel="noopener">deck.pdf</a>'],
+				not: ['<iframe', 'cpn-attachment-pdf-embed'],
+			},
+			{
 				name: 'attachment · plain links of any kind are file links with display text',
 				md: '[[song.mp3]] [[slides.pdf|the slides]] [notes **here**](Media/doc.pdf#page=2)',
 				has: ['data-cpn-attachment="' + 'a'.repeat(64) + '/song.mp3" target="_blank" rel="noopener">song.mp3</a>',

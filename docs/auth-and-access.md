@@ -170,7 +170,10 @@ No edge-function change is needed.
 - **Expired sessions.** A recording that fails because the reader's session
   ended shows **Your session has ended. Sign in again to play this.** The page
   never reloads by itself. On a public site with access groups, a signed-out
-  reader of a gated note's file gets the **Sign in again** link.
+  reader of a gated note's file gets the **Sign in again** link. An inline PDF
+  (**Show PDFs inline**) is checked with a `HEAD` request before its viewer
+  loads, so a reader whose session ended sees the same label (**… to view
+  this**) instead of a sign-in page inside the note.
 - **New tabs.** A PDF or other file opened in a new tab shows the raw response
   when it's missing or forbidden. On a whole-site gate, a signed-out new tab goes
   through sign-in and back to the file.

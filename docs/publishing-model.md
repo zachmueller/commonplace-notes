@@ -103,7 +103,12 @@ from Obsidian's metadata cache, so a note Obsidian hasn't indexed yet publishes
 with every file link unpublished. Attachments publish on AWS profiles only.
 
 **How readers see them.** `![[image]]`, `![[audio]]` and `![[video]]` play in the
-note. PDF and other embeds, and every plain link, open the file in a new tab. A
+note. PDF and other embeds, and every plain link, open the file in a new tab.
+With **Show PDFs inline** on, a PDF embed (`![[file.pdf]]`, `![](file.pdf)`)
+instead shows in the note in the browser's PDF viewer, with the new-tab link
+under it. `![[file.pdf#page=3]]` opens at that page, and `![[file.pdf|600x800]]`
+sets its size (default: full width, about 80% of the window's height). Phone
+browsers often can't show a PDF in a page, so readers there use the link. A
 file that didn't publish shows its name as an unpublished link. HTML, JavaScript
 and other files that could run code on the site download instead of opening.
 

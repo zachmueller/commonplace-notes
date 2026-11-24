@@ -13,7 +13,7 @@ attachment references never reach that stage and overrides of it keep working.
 \`context.resolveAttachment(linkpath)\` decides each link: \`null\` leaves it alone
 (a note, an unresolved link, an external URL); \`{ published: false }\` renders
 \`<span class="unpublished-link">\` with the file name; \`{ published: true }\` renders
-the attachment. Only files in the note's attachment list (from Obsidian's
+the attachment (\`inline: true\` marks a PDF the profile shows inline). Only files in the note's attachment list (from Obsidian's
 metadata cache) are ever \`published: true\`.
 
 | Reference | Output |
@@ -21,6 +21,7 @@ metadata cache) are ever \`published: true\`.
 | image embed | \`<img class="cpn-attachment cpn-attachment-image" data-cpn-attachment alt loading="lazy">\`, \`\\|300\` / \`\\|300x200\` set width/height |
 | audio embed | \`<audio class="cpn-attachment cpn-attachment-audio" controls preload="metadata" data-cpn-attachment>\` |
 | video embed | \`<video class="cpn-attachment cpn-attachment-video" controls preload="metadata" data-cpn-attachment>\`, sized like images |
+| PDF embed with **Show PDFs inline** on (\`inline: true\`) | \`<span class="cpn-attachment-pdf-embed">\` holding \`<iframe class="cpn-attachment cpn-attachment-pdf" data-cpn-attachment title loading="lazy">\` (sized like images) and the new-tab link below |
 | other embed, any plain link, any embed in a heading | \`<a class="cpn-attachment cpn-attachment-file" data-cpn-attachment target="_blank" rel="noopener">\` |
 
 🔗 **Coupling (site contract):** \`data-cpn-attachment="<sha256>/<fileName>"\` is the

@@ -59,6 +59,18 @@ export function renderAttachmentsGroup(ctx: ProfileContext, containerEl: HTMLEle
 		});
 
 	new Setting(containerEl)
+		.setName('Show PDFs inline')
+		.setDesc('PDF embeds (![[file.pdf]]) show in the note in the browser\'s PDF viewer, with a link to open them in a new tab. Plain links still open in a new tab. Phone browsers may only show the link. Run "Publish all notes" after changing this.')
+		.addToggle(toggle => {
+			toggle.setValue(current().inlinePdfs)
+				.setDisabled(isLocal)
+				.onChange(async (inlinePdfs) => {
+					await update({ inlinePdfs });
+					new Notice('Run "Publish all notes" so published notes pick up the change.', 12000);
+				});
+		});
+
+	new Setting(containerEl)
 		.setName('Allowed extensions')
 		.setDesc(`Space- or comma-separated. * allows every file. HTML, JavaScript and other active files download instead of opening. Default: ${formatExtensionList(DEFAULT_ALLOWED_EXTENSIONS)}.`)
 		.addTextArea(text => {

@@ -22,13 +22,16 @@ const SHA = (c: string) => c.repeat(64);
  * attachment list; the others are vault files that don't publish. Anything
  * else (notes, missing files, URLs) → null.
  */
-const ATTACHMENTS: Record<string, { sha?: string; fileName: string; kind?: 'image' | 'audio' | 'video' | 'file' }> = {
+const ATTACHMENTS: Record<string, { sha?: string; fileName: string; kind?: 'image' | 'audio' | 'video' | 'file'; inline?: true }> = {
 	'song.mp3': { sha: SHA('a'), fileName: 'song.mp3', kind: 'audio' },
 	'pic.png': { sha: SHA('b'), fileName: 'pic.png', kind: 'image' },
 	'clip.mp4': { sha: SHA('c'), fileName: 'clip.mp4', kind: 'video' },
 	'slides.pdf': { sha: SHA('d'), fileName: 'slides.pdf', kind: 'file' },
 	'Media/cat pic.png': { sha: SHA('e'), fileName: 'cat pic.png', kind: 'image' },
 	'Media/doc.pdf': { sha: SHA('f'), fileName: 'doc.pdf', kind: 'file' },
+	// A PDF on a profile with Show PDFs inline on.
+	'deck.pdf': { sha: SHA('2'), fileName: 'deck.pdf', kind: 'file', inline: true },
+	'Media/deck.pdf': { sha: SHA('2'), fileName: 'deck.pdf', kind: 'file', inline: true },
 	'odd "q" x<y & ü.png': { sha: SHA('1'), fileName: 'odd "q" x<y & ü.png', kind: 'image' },
 	'Media/secret.mp3': { fileName: 'secret.mp3' },
 	'secret.mp3': { fileName: 'secret.mp3' },
@@ -37,13 +40,16 @@ const ATTACHMENTS: Record<string, { sha?: string; fileName: string; kind?: 'imag
 };
 
 export function resolveAttachmentFixture(linkpath: string):
-	| { published: true; key: string; fileName: string; kind: 'image' | 'audio' | 'video' | 'file' }
+	| { published: true; key: string; fileName: string; kind: 'image' | 'audio' | 'video' | 'file'; inline?: true }
 	| { published: false; fileName: string }
 	| null {
 	const a = ATTACHMENTS[linkpath];
 	if (!a) return null;
 	if (!a.sha) return { published: false, fileName: a.fileName };
-	return { published: true, key: `${a.sha}/${a.fileName}`, fileName: a.fileName, kind: a.kind! };
+	const render: { published: true; key: string; fileName: string; kind: 'image' | 'audio' | 'video' | 'file'; inline?: true } =
+		{ published: true, key: `${a.sha}/${a.fileName}`, fileName: a.fileName, kind: a.kind! };
+	if (a.inline) render.inline = true;
+	return render;
 }
 
 export interface Fixture {
@@ -94,6 +100,10 @@ export const PARSER_FIXTURES: Fixture[] = [
 	{
 		name: 'attachment-markdown',
 		input: '![A cat|200](Media/cat%20pic.png) and ![](<Media/cat pic.png>) and [notes **here**](Media/doc.pdf#page=2) and ![ext](https://example.com/x.png) and [abs](/Media/doc.pdf)',
+	},
+	{
+		name: 'attachment-pdf-inline',
+		input: '![[deck.pdf#page=3]]\n\n![[deck.pdf|600x800]] and ![The deck](Media/deck.pdf) and [[deck.pdf|the deck]]\n\n## Deck ![[deck.pdf]]',
 	},
 	{
 		name: 'attachment-unpublished',

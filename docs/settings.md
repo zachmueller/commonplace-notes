@@ -82,12 +82,22 @@ publishing, access and pinning work.
   new revision on their next publish. Narrowing it or turning it off leaves files
   in the bucket while older revisions reference them. When you first turn it on,
   run **Publish all notes** once so existing notes pick up their attachments.
+- **Show PDFs inline** (`attachments.inlinePdfs`, default off) — show PDF embeds
+  (`![[file.pdf]]`, `![](file.pdf)`) in the note in the browser's PDF viewer,
+  with a link under each to open it in a new tab. Plain links (`[[file.pdf]]`)
+  still open in a new tab, and so do embeds inside headings. `|600` or
+  `|600x800` on the embed sets the viewer's size. Phone browsers often show only
+  the link. This changes how notes render, not their content, so it doesn't give
+  them new revisions: run **Publish all notes** after changing it, which
+  rewrites each published note in place (older permalinks show the new look
+  too).
 - **Allowed extensions** (`attachments.allowedExtensions`) — space- or
   comma-separated, case-insensitive. Default: `png jpg jpeg gif webp avif svg`
   (images), `mp3 m4a aac ogg oga opus wav flac` (audio), `mp4 m4v webm mov`
   (video), `pdf`. There's no deny-list: add any extension, or `*` for every file
   (including files without one). Images, audio and video in the default lists
-  play in the note; every other type opens in a new tab.
+  play in the note; every other type opens in a new tab (PDF embeds can show in
+  the note with **Show PDFs inline**).
   **Active files download.** Types that a browser could run as a page on your
   site (`html`, `htm`, `xhtml`, `xml`, `xsl`, `js`, `mjs`, `wasm`, …) and any
   type the site doesn't know are served as `application/octet-stream` with

@@ -154,6 +154,27 @@ function attachmentElement(ref: Reference): AttachmentNode | UnpublishedNode {
 			...sizeProps(ref.size),
 		}, []);
 	}
+	const link = fileLink(ref, base);
+	if (ref.isEmbed && !ref.inHeading && render.inline) {
+		// Inline PDF viewer plus the usual new-tab link (phones often can't show
+		// the frame). The site HEAD-checks the URL before giving the frame a src.
+		const frameProps: Record<string, unknown> = {
+			className: ['cpn-attachment', 'cpn-attachment-pdf'],
+			...base,
+			title: ref.text || render.fileName,
+			loading: 'lazy',
+			...sizeProps(ref.size),
+		};
+		if (ref.fragment) frameProps['data-cpn-fragment'] = ref.fragment;
+		const frame = element('iframe', frameProps, []);
+		return element('span', { className: ['cpn-attachment-pdf-embed'] },
+			[frame as unknown as PhrasingContent, link as unknown as PhrasingContent]);
+	}
+	return link;
+}
+
+/** The new-tab `<a>` for a file (and for any embed that can't play inline). */
+function fileLink(ref: Reference, base: Record<string, string>): AttachmentNode {
 	const props: Record<string, unknown> = {
 		className: ['cpn-attachment', 'cpn-attachment-file'],
 		...base,
@@ -163,7 +184,7 @@ function attachmentElement(ref: Reference): AttachmentNode | UnpublishedNode {
 	if (ref.fragment) props['data-cpn-fragment'] = ref.fragment;
 	const children = ref.children && ref.children.length > 0
 		? ref.children
-		: [{ type: 'text', value: ref.text || render.fileName } as Text];
+		: [{ type: 'text', value: ref.text || ref.render.fileName } as Text];
 	return element('a', props, children);
 }
 

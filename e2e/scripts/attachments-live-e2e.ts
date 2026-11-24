@@ -50,6 +50,11 @@
  *      reload, link → Hosted UI with the note route, and native sign-in through
  *      it lands back on the note; public site (A) gated note shows the sign-in
  *      link.
+ *  16. Show PDFs inline (A): the toggle keeps note hashes; after a republish
+ *      the PDF embed is a frame on the file (#page kept, 200 application/pdf)
+ *      with its new-tab link, [[file.pdf]] stays a link; a g2 member's gated
+ *      PDF frame loads from restricted/g2/; signed out, a frame gets no src
+ *      and shows "Sign in again to view this".
  *
  * Usage (sandbox account only):
  *   CPN_LIVE_AWS_PROFILE=random npx tsx e2e/scripts/attachments-live-e2e.ts
@@ -282,6 +287,7 @@ const NOTES: Record<string, string> = {
 	'Att-Notes/Att Excluded.md': fm([PA]) + '![[Att-Projects/private/a.mp3]]\n\n![[Att-Media/b.mp3]]\n',
 	'Att-Notes/Att Edit During.md': fm([PA]) + 'Edited during a publish.\n',
 	'Att-Notes/Att Gate Song.md': fm([PB]) + '![[Att-Media/long.wav]]\n',
+	'Att-Notes/Att Gated Pdf.md': fm([PA], ['g2']) + 'Deck: ![[Att-Media/gated.pdf]]\n',
 	'Att-Notes/Att Off.md': fm([PC]) + '![[Att-Media/song.mp3]] and [[Att-Media/slides.pdf]] and ![c](Att-Media/cover.png)\n',
 };
 
@@ -312,6 +318,7 @@ function setupVault(vaultPath: string): void {
 	fs.writeFileSync(at('Att-Media/page.html'), '<!doctype html><title>Page</title><script>document.title="RAN"</script><p>page</p>');
 	fs.writeFileSync(at('Att-Media/script.js'), 'document.title = "RAN";\n');
 	fs.writeFileSync(at('Att-Media/slides.pdf'), minimalPdf());
+	fs.writeFileSync(at('Att-Media/gated.pdf'), minimalPdf());
 }
 
 function minimalPdf(): Buffer {
@@ -1443,6 +1450,96 @@ async function scenarioSessionExpiry(ctx: TestContext, d: Deployed, step: Step, 
 	}
 }
 
+/** 16. Show PDFs inline. */
+async function scenarioInlinePdf(ctx: TestContext, d: Deployed, step: Step, browser: PwBrowser): Promise<void> {
+	console.log('\n[16] Show PDFs inline: frames, fallback link, gated frame, signed-out frame');
+	const setInline = (on: boolean) => ctx.page.evaluate(async ({ id, on }) => {
+		const att = (window as any).__att;
+		const p = att.profile(id);
+		p.attachments = { ...p.attachments, inlinePdfs: on };
+		await att.plugin().saveSettings();
+	}, { id: PA, on });
+	const docs = N('Att Docs');
+	const gated = N('Att Gated Pdf');
+	await publish(ctx, [docs, gated], PA);
+	const before = [await latest(ctx, PA, docs), await latest(ctx, PA, gated)];
+	await setInline(true);
+	try {
+		await publish(ctx, [docs, gated], PA);
+		await waitInvalidations(d.state.distA!);
+		const after = [await latest(ctx, PA, docs), await latest(ctx, PA, gated)];
+		step('Toggling Show PDFs inline keeps note hashes (republish rewrites in place)', !!before[0] && !!before[1]
+			&& before[0] === after[0] && before[1] === after[1], `${JSON.stringify(before)} → ${JSON.stringify(after)}`);
+
+		const pdfSha = sha256File(path.join(VAULT_PATH, 'Att-Media/slides.pdf'));
+		const frameUrl = `${d.baseA}/attachments/${pdfSha}/slides.pdf`;
+		const v = await visit(browser, d.baseA, `#/u${await uidOf(ctx, docs)}`);
+		try {
+			const frameNav = v.page.waitForResponse(r => r.url() === frameUrl && r.request().isNavigationRequest()
+				&& r.frame() !== v.page.mainFrame(), { timeout: 30_000 }).catch(() => null);
+			await v.page.waitForSelector('iframe.cpn-attachment-pdf[src]', { timeout: 30_000 });
+			const dom = await v.page.evaluate(() => {
+				const frames = Array.from(document.querySelectorAll('iframe.cpn-attachment-pdf'));
+				const fallback = document.querySelector('.cpn-attachment-pdf-embed a.cpn-attachment-file');
+				const plain = Array.from(document.querySelectorAll('a.cpn-attachment-file'))
+					.filter(a => !a.closest('.cpn-attachment-pdf-embed') && /\/slides\.pdf$/.test(a.getAttribute('href') || ''));
+				const f = frames[0] as HTMLIFrameElement | undefined;
+				return {
+					frames: frames.length, src: f?.getAttribute('src'), title: f?.getAttribute('title'),
+					height: f ? f.getBoundingClientRect().height : 0, width: f ? f.getBoundingClientRect().width : 0,
+					fallback: fallback ? { href: fallback.getAttribute('href'), target: fallback.getAttribute('target'), text: fallback.textContent } : null,
+					plain: plain.length,
+				};
+			});
+			step('PDF embed is a frame on the file with #page kept', dom.frames === 1 && dom.src === `/attachments/${pdfSha}/slides.pdf#page=2`
+				&& dom.title === 'slides.pdf' && dom.width > 0 && dom.height > 200, JSON.stringify(dom));
+			const nav = await frameNav;
+			step('The frame loads the PDF (200 application/pdf)', !!nav && nav.status() === 200 && nav.headers()['content-type'] === 'application/pdf',
+				nav ? `${nav.status()} ${nav.headers()['content-type']}` : 'no frame navigation');
+			step('New-tab fallback link under the frame', dom.fallback?.href === `/attachments/${pdfSha}/slides.pdf#page=2`
+				&& dom.fallback?.target === '_blank' && dom.fallback?.text === 'slides.pdf', JSON.stringify(dom.fallback));
+			step('[[slides.pdf]] stays a plain new-tab link', dom.plain === 1, JSON.stringify(dom));
+			await ctx.screenshot('16-inline-pdf');
+		} finally {
+			await v.context.close();
+		}
+
+		const gSha = sha256File(path.join(VAULT_PATH, 'Att-Media/gated.pdf'));
+		const token = idToken(d.pool.UserPoolId, d.pool.UserPoolClientId, G2_READER);
+		const g = await visit(browser, d.baseA, `#/u${await uidOf(ctx, gated)}`, token);
+		try {
+			await g.page.waitForSelector('iframe.cpn-attachment-pdf[src]', { timeout: 30_000 });
+			const src = await g.page.getAttribute('iframe.cpn-attachment-pdf', 'src');
+			step('g2 member: gated PDF frame loads from restricted/g2/attachments/', src === `/restricted/g2/attachments/${gSha}/gated.pdf`, String(src));
+			// Signed out before a frame loads: hydrate a fresh copy of the frame.
+			await g.context.clearCookies();
+			await g.page.evaluate(() => {
+				const box = document.createElement('div');
+				box.id = 'cpn-e2e-frame';
+				const f = document.querySelector('iframe.cpn-attachment-pdf')!.cloneNode() as HTMLIFrameElement;
+				f.removeAttribute('src');
+				f.removeAttribute('data-cpn-att');
+				delete f.dataset.cpnAttState;
+				box.appendChild(f);
+				document.body.appendChild(box);
+				(window as any).hydrateAttachments(box, 'restricted/g2/');
+			});
+			await g.page.waitForSelector('#cpn-e2e-frame .cpn-attachment-unavailable', { timeout: 20_000 }).catch(() => null);
+			const out = await g.page.evaluate(() => {
+				const f = document.querySelector('#cpn-e2e-frame iframe') as HTMLIFrameElement;
+				const l = document.querySelector('#cpn-e2e-frame .cpn-attachment-unavailable');
+				return { src: f.getAttribute('src'), hidden: f.hidden, text: l?.textContent ?? null, href: l?.querySelector('a')?.getAttribute('href') ?? null };
+			});
+			step('Signed out: frame gets no src, "Sign in again to view this"', out.src === null && out.hidden && out.text === 'Sign in again to view this'
+				&& !!out.href && out.href.startsWith(`${d.pool.HostedUiDomain}/oauth2/authorize`), JSON.stringify(out));
+		} finally {
+			await g.context.close();
+		}
+	} finally {
+		await setInline(false);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -1476,6 +1573,7 @@ async function live(ctx: TestContext): Promise<void> {
 		['13 race', () => scenarioRace(ctx, d, step)],
 		['14 memory', () => scenarioMemory(ctx, d, step)],
 		['15 session expiry', () => scenarioSessionExpiry(ctx, d, step, browser)],
+		['16 inline pdf', () => scenarioInlinePdf(ctx, d, step, browser)],
 	];
 	try {
 		for (const [name, run] of scenarios) {

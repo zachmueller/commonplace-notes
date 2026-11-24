@@ -621,6 +621,30 @@ a[href^="#"].note-opened:hover {
 	height: auto;
 }
 
+/* inline PDF viewer (Show PDFs inline) with its new-tab link below. The
+   frame gets its src only after a HEAD check (loadPdfFrame). |600x800 sets
+   width/height attributes, which these defaults then leave alone. */
+.cpn-attachment-pdf-embed {
+	display: block;
+	margin: .5em 0;
+}
+
+.cpn-attachment-pdf {
+	display: block;
+	max-width: 100%;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	margin-bottom: .25em;
+}
+
+.cpn-attachment-pdf:not([width]) {
+	width: 100%;
+}
+
+.cpn-attachment-pdf:not([height]) {
+	height: min(80vh, 900px);
+}
+
 /* opens in a new tab */
 a.cpn-attachment-file::after {
 	content: "";
@@ -4157,6 +4181,8 @@ ${closeButton}
 				if (tag === 'IMG' || tag === 'AUDIO' || tag === 'VIDEO') {
 					el.addEventListener('error', () => { void onAttachmentError(el, url, prefix || ''); });
 					el.src = url;
+				} else if (tag === 'IFRAME') {
+					void loadPdfFrame(el, url, prefix || '');
 				} else if (tag === 'A') {
 					el.href = url;
 				}
@@ -4169,24 +4195,48 @@ ${closeButton}
 		async function onAttachmentError(el, url, prefix) {
 			if (el.dataset.cpnAttState) return;
 			el.dataset.cpnAttState = 'checking';
-			let status = 0;
-			try {
-				const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-				status = r.status;
-			} catch (e) {
-				status = 0;
-			}
-			let kind = 'unavailable';
-			if (status === 401) {
-				kind = 'expired';
-			} else if (status === 403 && prefix.indexOf('restricted/') === 0) {
-				// Signed out (public site with access groups) or not a member.
-				// Not via getMyIdentity: it caches, and would reload on a 401.
-				kind = (await whoamiSignedIn()) === false && hostedUiLoginUrl() ? 'signin' : 'unavailable';
-			} else if (status >= 200 && status < 300 && (el.tagName === 'AUDIO' || el.tagName === 'VIDEO')) {
+			const status = await attachmentHeadStatus(url);
+			let kind = await attachmentFailureKind(status, prefix);
+			if (status >= 200 && status < 300 && (el.tagName === 'AUDIO' || el.tagName === 'VIDEO')) {
 				kind = 'unplayable';
 			}
 			renderAttachmentState(el, kind, url);
+		}
+
+		// An inline PDF frame. An iframe load is a navigation, so the edge would
+		// answer an expired session with its unlock page or a sign-in redirect
+		// inside the frame, and a frame has no error event to tell. So ask the
+		// server first, and only give the frame its src when the file is there.
+		async function loadPdfFrame(el, url, prefix) {
+			el.dataset.cpnAttState = 'checking';
+			const status = await attachmentHeadStatus(url);
+			if (status >= 200 && status < 300) {
+				delete el.dataset.cpnAttState;
+				el.src = url;
+				return;
+			}
+			renderAttachmentState(el, await attachmentFailureKind(status, prefix), url);
+		}
+
+		// The status of a fresh HEAD for url, 0 on a network error.
+		async function attachmentHeadStatus(url) {
+			try {
+				const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+				return r.status;
+			} catch (e) {
+				return 0;
+			}
+		}
+
+		// Which label a failed attachment gets: expired, signin or unavailable.
+		async function attachmentFailureKind(status, prefix) {
+			if (status === 401) return 'expired';
+			if (status === 403 && prefix.indexOf('restricted/') === 0) {
+				// Signed out (public site with access groups) or not a member.
+				// Not via getMyIdentity: it caches, and would reload on a 401.
+				return (await whoamiSignedIn()) === false && hostedUiLoginUrl() ? 'signin' : 'unavailable';
+			}
+			return 'unavailable';
 		}
 
 		// true / false from a fresh whoami, or null when it can't be told.
@@ -4206,6 +4256,7 @@ ${closeButton}
 
 		function renderAttachmentState(el, kind, url) {
 			el.dataset.cpnAttState = kind;
+			const verb = el.tagName === 'IFRAME' ? 'view' : 'play';
 			const label = document.createElement('span');
 			label.className = 'cpn-attachment-unavailable';
 			const link = (text, href) => {
@@ -4232,9 +4283,9 @@ ${closeButton}
 					ev.preventDefault();
 					location.reload();
 				});
-				label.append('Your session has ended. ', a, ' to play this.');
+				label.append('Your session has ended. ', a, ` to ${verb} this.`);
 			} else if (kind === 'signin') {
-				label.append(link('Sign in again', hostedUiLoginUrl()), ' to play this');
+				label.append(link('Sign in again', hostedUiLoginUrl()), ` to ${verb} this`);
 			} else if (kind === 'unplayable') {
 				const a = link('Download', url);
 				a.setAttribute('download', '');
@@ -4242,7 +4293,7 @@ ${closeButton}
 			} else {
 				label.textContent = 'Attachment unavailable';
 			}
-			if (el.tagName === 'IMG') el.hidden = true;
+			if (el.tagName === 'IMG' || el.tagName === 'IFRAME') el.hidden = true;
 			el.after(label);
 		}
 

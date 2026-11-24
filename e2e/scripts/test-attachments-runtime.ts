@@ -15,6 +15,10 @@
  *      false (sign-in link) and true (unavailable); 403 public (unavailable);
  *      404; 2xx for audio and video (can't play + Download) and img
  *      (unavailable); network failure (unavailable).
+ *   P  Inline PDF frames (Show PDFs inline): one no-store HEAD, src (with
+ *      fragment and area prefix) only on 2xx; 401 / 403 / 404 / network leave
+ *      the frame without a src, hide it and show the "view this" labels; the
+ *      fallback link keeps its href.
  *   D  Diff: hash-to-name rewriting (dotted and bare hashes, one hash under two
  *      names, null.<ext> and missing lists left alone), the bytes-only change
  *      notice "The text is identical. Attachments changed: …", the notice
@@ -269,6 +273,62 @@ async function main() {
 	{
 		const r = await failMedia('audio', '', 'network');
 		check(r.text === 'Attachment unavailable', 'E9: network failure → unavailable');
+	}
+
+	// ===================================================================
+	// P — inline PDF frames (Show PDFs inline): HEAD first, src only on 2xx
+	// ===================================================================
+	async function pdfFrame(prefix: string, reply: HeadReply, who = { groups: ['fam'], signedIn: true }) {
+		headReply = reply;
+		whoami = who;
+		const root = doc.createElement('div');
+		doc.body.appendChild(root);
+		root.innerHTML = `<span class="cpn-attachment-pdf-embed">`
+			+ `<iframe class="cpn-attachment cpn-attachment-pdf" data-cpn-attachment="${C}/deck.pdf" title="deck.pdf" loading="lazy" data-cpn-fragment="page=3"></iframe>`
+			+ `<a class="cpn-attachment cpn-attachment-file" data-cpn-attachment="${C}/deck.pdf" target="_blank" rel="noopener" data-cpn-fragment="page=3">deck.pdf</a></span>`;
+		fetched.length = 0;
+		W.__hydrateAttachments(root, prefix);
+		await settle();
+		const frame = root.querySelector('iframe') as any;
+		const link = root.querySelector('a.cpn-attachment-file') as any;
+		const label = root.querySelector('.cpn-attachment-unavailable') as HTMLElement | null;
+		const heads = fetched.filter(f => f.init?.method === 'HEAD');
+		return { root, frame, link, label, text: label?.textContent ?? '', heads };
+	}
+
+	{
+		const r = await pdfFrame('', 200);
+		check(r.heads.length === 1 && r.heads[0].url === `/attachments/${C}/deck.pdf#page=3` && r.heads[0].init.cache === 'no-store',
+			`P1: one no-store HEAD for the frame URL (got ${JSON.stringify(r.heads.map(h => h.url))})`);
+		check(r.frame.getAttribute('src') === `/attachments/${C}/deck.pdf#page=3`, `P1: 2xx → frame src with fragment (got ${r.frame.getAttribute('src')})`);
+		check(!r.label && !r.frame.hidden && !r.frame.dataset.cpnAttState, 'P1: no label, frame visible, no state left');
+		check(r.link.getAttribute('href') === `/attachments/${C}/deck.pdf#page=3`, 'P2: fallback link gets its href');
+		W.__hydrateAttachments(r.root, '');
+		await settle();
+		check(fetched.filter(f => f.init?.method === 'HEAD').length === 1, 'P3: a second pass sends no second HEAD');
+	}
+	{
+		const r = await pdfFrame('restricted/fam/', 200);
+		check(r.frame.getAttribute('src') === `/restricted/fam/attachments/${C}/deck.pdf#page=3`, 'P4: restricted area prefix in the frame src');
+	}
+	{
+		const r = await pdfFrame('', 401);
+		check(!r.frame.hasAttribute('src'), 'P5: 401 → frame never gets a src');
+		check(r.frame.hidden === true, 'P5: frame hidden');
+		check(r.text === 'Your session has ended. Sign in again to view this.', `P5: session-ended label says view (got ${JSON.stringify(r.text)})`);
+		check(r.link.getAttribute('href') === `/attachments/${C}/deck.pdf#page=3`, 'P5: fallback link still there');
+	}
+	{
+		const r = await pdfFrame('restricted/fam/', 403, { groups: [], signedIn: false });
+		check(!r.frame.hasAttribute('src') && r.text === 'Sign in again to view this', `P6: 403 restricted, signed out → sign-in (got ${JSON.stringify(r.text)})`);
+	}
+	{
+		const r = await pdfFrame('restricted/fam/', 403, { groups: ['fam'], signedIn: true });
+		check(!r.frame.hasAttribute('src') && r.text === 'Attachment unavailable', 'P7: 403 restricted, signed in → unavailable');
+	}
+	for (const reply of [404, 'network'] as const) {
+		const r = await pdfFrame('', reply);
+		check(!r.frame.hasAttribute('src') && r.text === 'Attachment unavailable' && r.frame.hidden === true, `P8: ${reply} → unavailable, frame hidden`);
 	}
 
 	// ===================================================================

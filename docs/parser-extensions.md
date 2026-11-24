@@ -66,14 +66,19 @@ A few couplings to respect if you override these:
   `null` leaves the link alone (a note, an unresolved link, an external URL);
   `{ published: false, fileName }` renders `<span class="unpublished-link">`
   with the file name; `{ published: true, key, fileName, kind }` renders the
-  attachment. Only files in the note's attachment list (collected from
+  attachment, and `inline: true` on it marks a PDF the profile shows inline
+  (**Show PDFs inline**): a PDF embed then renders as
+  `<span class="cpn-attachment-pdf-embed">` holding an
+  `<iframe class="cpn-attachment cpn-attachment-pdf" title loading="lazy">`
+  (sized like images) and the usual `-file` link. The site gives the frame its
+  `src` only after a `HEAD` check succeeds. Only files in the note's attachment list (collected from
   Obsidian's metadata cache) are ever `published: true`, so the renderer can't
   show a file that won't be uploaded. The output never holds an `src` or `href`:
   each element carries `data-cpn-attachment="<sha256>/<fileName>"` (and
   `data-cpn-fragment`, e.g. `page=3` on a PDF link), and the site builds
   `/<area>attachments/<sha256>/<fileName>` for the access area it loaded the note
   from. The classes are `cpn-attachment` plus `cpn-attachment-image`, `-audio`,
-  `-video` or `-file`. Keep the attribute and class names if you replace the
+  `-video`, `-pdf` or `-file`. Keep the attribute and class names if you replace the
   stage. Known limitations: a paragraph mixing an attachment embed with a note
   embed renders the note embed inline; raw HTML (`<img src>`) and reference
   definitions (`[ref]: path`) aren't visited and pass through as written; a link

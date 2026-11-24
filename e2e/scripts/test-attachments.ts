@@ -68,6 +68,10 @@ async function main(): Promise<void> {
 		.every(e => defaults.allowedExtensions.includes(e)) && defaults.allowedExtensions.length === 20, defaults.allowedExtensions);
 	check('cap clamps to 1–500', att.clampFileSizeMB(0) === 1 && att.clampFileSizeMB(900) === 500 && att.clampFileSizeMB('x') === 50);
 	check('unknown mode → off', att.resolveAttachmentSettings({ mode: 'bogus' as any }).mode === 'off');
+	check('inline PDFs default off', defaults.inlinePdfs === false);
+	check('inline PDFs kept only when exactly true',
+		att.resolveAttachmentSettings({ mode: 'embeds', inlinePdfs: true }).inlinePdfs === true
+		&& att.resolveAttachmentSettings({ inlinePdfs: 'yes' as any }).inlinePdfs === false);
 	check('parseExtensionList: spaces, commas, dots, case, dupes',
 		JSON.stringify(att.parseExtensionList(' .PNG, mp3  html,png ,')) === JSON.stringify(['png', 'mp3', 'html']),
 		att.parseExtensionList(' .PNG, mp3  html,png ,'));
