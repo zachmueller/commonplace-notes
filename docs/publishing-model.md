@@ -128,6 +128,25 @@ CloudFront invalidation. **Publish updates since last full publish** also picks
 up notes whose files changed (it checks each linked file's modification and
 change time, so a tag editor that keeps the modification time is still seen).
 
+**Change notice.** Editing a published file doesn't touch the notes that use
+it, so nothing republishes them on its own. When a file a published note uses
+changes in the vault, a notice says "`song.mp3` changed. 3 published notes use
+it." and offers **Republish them**, which publishes those notes on that profile
+like any other publish. While the profile is busy the button shows the busy
+notice and the change notice stays open, so you can try again. Details:
+
+- The notice comes 5 seconds after the last save, so a file written in several
+  steps gives one notice.
+- Only notes whose published revision has other bytes than the file has now
+  count. Saving a file without changing its bytes gives no notice.
+- With several profiles, each profile that uses the file gets its own notice,
+  naming the profile.
+- No notice when the profile's attachment mode is **Off**, or when the file is
+  now excluded, no longer allowed or over the size cap.
+- The plugin learns which notes use which files from each publish and keeps it
+  in memory only. After Obsidian starts, files get notices once a publish has
+  included the notes that use them.
+
 **Diffs.** Attachments get no diff of their own. The note diff shows file names
 instead of content hashes, and says **Attachments changed: …** when the files
 differ. A change to a file's bytes alone shows **The text is identical.

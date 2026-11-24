@@ -35,6 +35,7 @@ import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
 import { Publisher } from './publish/publisher';
 import { AttachmentManager } from './publish/attachmentManager';
+import { AttachmentChangeNotifier } from './publish/attachmentChangeNotifier';
 import { Logger, errorMessage, errorCode } from './utils/logging';
 import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
@@ -111,6 +112,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	templateManager: TemplateManager;
 	publisher: Publisher;
 	attachmentManager: AttachmentManager;
+	attachmentChangeNotifier: AttachmentChangeNotifier;
 	awsSdkManager: AwsSdkManager;
 	cloudFormationManager: CloudFormationManager;
 	deployHookManager: DeployHookManager;
@@ -153,6 +155,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.accessManager = new AccessManager(this);
 		this.publisher = new Publisher(this);
 		this.attachmentManager = new AttachmentManager(this);
+		this.attachmentChangeNotifier = new AttachmentChangeNotifier(this);
 		this.templateManager = new TemplateManager(this);
 		this.awsSdkManager = new AwsSdkManager(this);
 		this.cloudFormationManager = new CloudFormationManager(this);
@@ -183,10 +186,21 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		// Attachment hash cache: a renamed or deleted file's entry is dropped
 		// (not carried over: a rename moves ctime anyway). Attachment spec P2 §6.
 		this.registerEvent(
-			this.app.vault.on('rename', (_file, oldPath) => this.attachmentManager.forgetPath(oldPath))
+			this.app.vault.on('rename', (file, oldPath) => {
+				this.attachmentManager.forgetPath(oldPath);
+				this.attachmentChangeNotifier.onRename(file, oldPath);
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on('delete', (file) => this.attachmentManager.forgetPath(file.path))
+			this.app.vault.on('delete', (file) => {
+				this.attachmentManager.forgetPath(file.path);
+				this.attachmentChangeNotifier.onDelete(file);
+			})
+		);
+		// Attachment change notice: a published file edited in the vault offers
+		// to republish the notes that use it (attachment spec P4 §1).
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => this.attachmentChangeNotifier.onModify(file))
 		);
 
 		// V2 seam — opt-in auto-routing when a note is created (e.g. from a clicked
@@ -1625,6 +1639,7 @@ cpn.rebuildContentIndex();
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
 		this.clearUrlStack();
+		this.attachmentChangeNotifier?.unload();
 		this.awsSdkManager.dispose();
 		this.cloudFormationManager.dispose();
 		NoticeManager.cleanup();

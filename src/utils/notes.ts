@@ -10,6 +10,7 @@ import type { PublishingProfile } from '../types';
 import { linkVisibleFrom, partitionsFor, validateNoteAccess, visibleInPartition } from './access';
 import { NoticeManager } from './notice';
 import { attachmentHashSegment, noteJsonAttachments, type AttachmentRef } from './attachments';
+import type { PublishedNote } from './attachmentChangeNotice';
 
 /** A note's resolved access: its groups, and whether it may publish with them. */
 export interface NoteAccess {
@@ -303,6 +304,21 @@ export class NoteManager {
 		return [...this.pendingNotes.entries()]
 			.filter(([key, n]) => key.startsWith(prefix) && n.attachments.length > 0)
 			.map(([, n]) => ({ file: n.file, attachments: n.attachments }));
+	}
+
+	/**
+	 * Every queued note of a profile with the files its revision uses (none
+	 * for a note without attachments), for the change notice (P4 §1).
+	 */
+	queuedRefs(profileId: string): PublishedNote[] {
+		const prefix = `${profileId}:`;
+		return [...this.pendingNotes.entries()]
+			.filter(([key]) => key.startsWith(prefix))
+			.map(([, n]) => ({
+				notePath: n.file.path,
+				uid: n.uid,
+				refs: n.attachments.map(r => ({ vaultPath: r.vaultPath, sha256: r.sha256 })),
+			}));
 	}
 
 	discardQueued(profileId: string): void {

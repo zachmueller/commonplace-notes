@@ -348,6 +348,11 @@ export class Publisher {
 				return;
 			}
 
+			// The notes and files this batch publishes, for the change notice
+			// (attachment spec P4 §1). Taken before commit empties the queue;
+			// recorded only once the upload succeeds.
+			const published = this.plugin.noteManager.queuedRefs(profile.id);
+
 			// Commit frontmatter + write queued notes to staging, with a loading Notice
 			// covering the (potentially long) per-note JSON write-out loop.
 			const staging = await NoticeManager.showProgress(
@@ -409,6 +414,8 @@ export class Publisher {
 
 			// Clean up staged files
 			await this.cleanupStagedFiles(profile.id);
+
+			this.plugin.attachmentChangeNotifier.recordPublished(profile.id, published);
 
 			// Update timestamp for full publishes
 			if (updatePublishTimestamp) {
@@ -647,6 +654,16 @@ export class Publisher {
 
 		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'connected');
 		await this.publishNotes(connectedFiles, profile, false, triggerInvalidation);
+	}
+
+	/**
+	 * **Republish them** on the attachment change notice (attachment spec P4
+	 * §1): the notes that use a changed file, through {@link publishNotes} so
+	 * the lock applies. Invalidates like a connected-notes publish.
+	 */
+	async republishNotes(files: TFile[], profile: PublishingProfile): Promise<void> {
+		const triggerInvalidation = this.shouldInvalidateCloudFront(profile, 'connected');
+		await this.publishNotes(files, profile, false, triggerInvalidation);
 	}
 
 	async publishUpdates() {
@@ -998,6 +1015,9 @@ export class Publisher {
 
 			// Step 9: Trigger CloudFront invalidation
 			await createCloudFrontInvalidation(this.plugin, profile.id);
+
+			// Its files no longer need a change notice on this profile (P4 §1).
+			this.plugin.attachmentChangeNotifier.forgetUid(profile.id, selectedNote.uid);
 
 			NoticeManager.showNotice(`Successfully deleted published note: ${selectedNote.label}`);
 			return true;
