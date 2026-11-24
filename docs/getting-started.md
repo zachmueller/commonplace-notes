@@ -5,36 +5,29 @@ publish target, opt a note in, and publish it.
 
 ## Requirements
 
-- **Desktop Obsidian** (`1.0.0` or newer). Commonplace Notes is desktop-only — it
+- **Desktop Obsidian** (`1.8.7` or newer). Commonplace Notes is desktop-only — it
   uses Node/AWS SDK APIs that aren't available on mobile.
 - **An AWS account** for the default (AWS) publish mechanism, plus an AWS
   credentials profile configured locally (`~/.aws/credentials`, `~/.aws/config`,
   or SSO). The plugin can provision all the infrastructure for you — see
-  [Infrastructure deployment](infrastructure-deployment.md).
-- **Node ≥24** only if you build from source (contributors).
+  [Infrastructure deployment](infrastructure-deployment.md). AWS bills the
+  resources it creates to your account.
+- **Node 26** only if you build from source (contributors).
 
-## Install with BRAT (recommended)
+## Install from community plugins
 
-CPN is distributed as a beta plugin through
-[BRAT](https://github.com/TfTHacker/obsidian42-brat) (Beta Reviewer's
-Auto-update Tool), which installs it from GitHub and keeps it up to date.
+CPN is listed in Obsidian's community plugin directory:
+[Commonplace Notes](https://community.obsidian.md/plugins/commonplace-notes).
 
-1. In Obsidian, open **Settings → Community plugins**, browse for **BRAT**,
-   install it, and enable it.
-2. Open BRAT's settings and choose **Add beta plugin**.
-3. Paste the CPN repository URL: `https://github.com/zachmueller/commonplace-notes`
-4. BRAT downloads the latest release and installs the plugin. Enable
-   **Commonplace Notes** under **Settings → Community plugins**.
+1. In Obsidian, open **Settings → Community plugins** and turn off Restricted
+   mode if it's on.
+2. Choose **Browse**, search for **Commonplace Notes**, and select **Install**.
+3. Select **Enable**.
 
-BRAT auto-updates the plugin when new releases are published. Releases are built
-by the repo's `.github/workflows/release.yml` (on each version tag) and contain
-`main.js`, `manifest.json`, and `styles.css` — exactly what BRAT consumes.
+Obsidian checks for and installs updates like any other community plugin
+(**Settings → Community plugins → Check for updates**).
 
-> **Maintainer note:** the release workflow creates a **draft** GitHub release.
-> BRAT can only fetch **published** releases, so the maintainer must publish each
-> draft before BRAT will pick it up.
-
-<!-- SCREENSHOT: BRAT "Add beta plugin" dialog -->
+<!-- SCREENSHOT: Commonplace Notes in the community plugin browser -->
 
 ## Install from source (contributors)
 

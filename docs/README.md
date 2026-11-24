@@ -5,7 +5,7 @@ Documentation for the Commonplace Notes Obsidian plugin. New here? **Start with
 
 ## Get started
 
-- [Getting started](getting-started.md) — install (BRAT + source) and your first publish
+- [Getting started](getting-started.md) — install and your first publish
 - [Concepts](concepts.md) — glossary of the core ideas
 
 ## Reference
