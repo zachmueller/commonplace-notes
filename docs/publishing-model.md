@@ -162,8 +162,10 @@ repairs objects that went missing because of overlapping publishes.
   `<audio src=…>`, `<a href=…>` and reference definitions
   (`[ref]: Media/a.pdf`, used by `![alt][ref]` and `[text][ref]`) aren't in
   Obsidian's metadata cache. They are never published and pass through as
-  written, folder path included. Use wikilinks or inline Markdown links for
-  attachments.
+  written, folder path included. The same goes for a Markdown destination with
+  a bare space (`![](Media/my pic.png)`): Markdown doesn't read it as a link and
+  Obsidian doesn't index it. Write `my%20pic.png` or `<Media/my pic.png>`, or use
+  a wikilink.
 - **Links Obsidian and remark read differently.** A link Obsidian indexes but
   the Markdown parser doesn't read as one link is uploaded with the note but
   neither rendered nor obscured in the published raw Markdown, so its folder

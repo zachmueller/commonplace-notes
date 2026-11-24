@@ -388,9 +388,12 @@ note").
   unaffected: the file goes only to the note's areas. Known cases: a wikilink
   holding emphasis markers (`![[my *draft* take.mp3]]`), which remark splits
   into several nodes.
-- [ ] Check whether Obsidian indexes a Markdown destination with a bare space
+- [x] Check whether Obsidian indexes a Markdown destination with a bare space
       (`![](Media/my pic.png)`), which CommonMark doesn't parse as an image. If
-      it does, list it as a known case in the docs.
+      it does, list it as a known case in the docs. *Checked on the sandbox
+      in Obsidian: it isn't indexed, so the file never publishes and the
+      text passes through as written, like raw HTML. Documented with the raw
+      HTML limitation. `%20`-encoded destinations are indexed and publish.*
 
 ### Raw scrub: published targets
 
@@ -996,9 +999,9 @@ Every publish re-stages and re-uploads each note it queues
       returns `{ ran: false, heldBy }` and doesn't run its function.
 - [x] Different profiles run concurrently.
 - [x] The lock is released when the function throws.
-- [ ] Two publishes started together: the second is refused, and the first's
+- [x] Two publishes started together: the second is refused, and the first's
       `refs` are all in `attachments.json` afterwards.
-- [ ] The delete picker during a publish is refused.
+- [x] The delete picker during a publish is refused.
 
 ### `test-attachments.ts` (new)
 
@@ -1051,14 +1054,14 @@ For `src/utils/attachments.ts`:
 
 ### Publish error handling
 
-- [ ] After a batch fails at upload (staged and committed), a second publish
+- [x] After a batch fails at upload (staged and committed), a second publish
       that throws while staging (e.g. `uidConflicts`) leaves the first batch's
       staged note JSON and `staged-attachments.json` in place, and the next
       successful publish uploads them.
-- [ ] An attachment upload failure returns `false`, keeps staging and doesn't
+- [x] An attachment upload failure returns `false`, keeps staging and doesn't
       run `handlePublishError`.
-- [ ] The "still changing" abort leaves staging untouched and commits nothing.
-- [ ] `lastFullPublishTimestamp` is the publish's start time.
+- [x] The "still changing" abort leaves staging untouched and commits nothing.
+- [x] `lastFullPublishTimestamp` is the publish's start time.
 
 ### `test-obscure-wikilinks.ts` (extended)
 
@@ -1097,46 +1100,46 @@ In the style of `test-transclusions-runtime.ts`:
 
 ### End-to-end (sandbox `random` only)
 
-- [ ] Embed an mp3 in a public note and publish. The player loads from
+- [x] Embed an mp3 in a public note and publish. The player loads from
       `attachments/` and can seek (range requests).
-- [ ] Replace the mp3's bytes and publish updates. The note gets a new revision
+- [x] Replace the mp3's bytes and publish updates. The note gets a new revision
       and the new audio. The old permalink still plays the old audio. The diff
       says "The text is identical. Attachments changed: …".
-- [ ] Use a note with two groups. A member of only the second group can play it.
-- [ ] Embed a public note that has attachments into a gated note. A group member
+- [x] Use a note with two groups. A member of only the second group can play it.
+- [x] Embed a public note that has attachments into a gated note. A group member
       sees the embedded files load from `attachments/`, not from the host's
       `restricted/<g>/attachments/`.
-- [ ] A PDF embed and a plain `[[file.pdf]]` link open in a new tab with the
+- [x] A PDF embed and a plain `[[file.pdf]]` link open in a new tab with the
       browser's viewer and the file's own name. An `svg` opened directly
       downloads. With `html` and `js` added to the allow-list, `[[page.html]]`
       and `[[script.js]]` publish, and opening them downloads the file instead
       of running it.
-- [ ] With the mode `off`, no attachment objects are written, and attachment
+- [x] With the mode `off`, no attachment objects are written, and attachment
       links render as unpublished spans showing the file name.
-- [ ] With `**/private/` excluded, a note embedding `Projects/private/a.mp3` and
+- [x] With `**/private/` excluded, a note embedding `Projects/private/a.mp3` and
       `Media/b.mp3` publishes `b.mp3` only. `a.mp3` renders as an unpublished
       span, is `null.mp3` in `raw`, and no object exists for it in any area.
-- [ ] Make a publish fail at its first upload, before any attachment is sent
+- [x] Make a publish fail at its first upload, before any attachment is sent
       (e.g. credentials without `s3:PutObject`), so the batch stays staged.
       Restore the credentials, add the attachment's folder to Excluded
       directories, and publish again. The file isn't uploaded, the notice names
       it, and the note shows "Attachment unavailable".
-- [ ] Upload a file over 16 MB (multipart). `CompleteMultipartUpload` accepts
+- [x] Upload a file over 16 MB (multipart). `CompleteMultipartUpload` accepts
       the CRC32 part checksums, the file plays, and no incomplete multipart
       upload remains (`ListMultipartUploads`).
-- [ ] On a whole-site Cognito gate, open a note with an mp3, clear the `cpn_id`
+- [x] On a whole-site Cognito gate, open a note with an mp3, clear the `cpn_id`
       cookie and press play. The sign-in label shows, the page doesn't reload
       by itself, and the link leads through sign-in back to the note. On a
       public site with access groups, the same steps on a gated note show the
       sign-in link.
-- [ ] Upload one near the cap and watch Obsidian's memory: it stays near the
+- [x] Upload one near the cap and watch Obsidian's memory: it stays near the
       in-flight parts, not the file size.
-- [ ] Overwrite a large file while it uploads: the multipart upload is aborted,
+- [x] Overwrite a large file while it uploads: the multipart upload is aborted,
       no object exists under its key, and the publish stops with the "changed
       while publishing" notice.
-- [ ] Edit an mp3's tags with a tool that keeps size and mtime, and publish
+- [x] Edit an mp3's tags with a tool that keeps size and mtime, and publish
       updates for the note: it records a new revision and plays the new bytes.
-- [ ] Start **Publish all notes**, then **Publish current note** for the same
+- [x] Start **Publish all notes**, then **Publish current note** for the same
       profile before it finishes: the second is refused with the busy notice.
 
 ## 11. Docs and release
@@ -1160,6 +1163,6 @@ In the style of `test-transclusions-runtime.ts`:
 
 - [ ] Every box in §1–§11 is ticked.
 - [ ] Phase 3 is done too, because they ship together.
-- [ ] `npm run build`, `npm run synth:site` and all unit tests pass, and the
+- [x] `npm run build`, `npm run synth:site` and all unit tests pass, and the
       parser golden file is re-captured and reviewed.
-- [ ] The end-to-end checks in §10 pass on the sandbox site.
+- [x] The end-to-end checks in §10 pass on the sandbox site.

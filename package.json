@@ -50,6 +50,7 @@
 		"test:access-client": "npx tsx e2e/scripts/test-access-client.ts",
 		"test:access-live": "npx tsx e2e/scripts/access-groups-live-e2e.ts",
 		"test:session-length-live": "npx tsx e2e/scripts/session-length-live-e2e.ts",
+		"test:attachments-live": "npx tsx e2e/scripts/attachments-live-e2e.ts",
 		"test:lambda-zip": "npx tsx e2e/scripts/test-lambda-zip.ts",
 		"test:deployment-variants": "npx tsx e2e/scripts/deployment-variants-e2e.ts",
 		"test:publish-lock": "npx tsx e2e/scripts/test-publish-lock.ts",
