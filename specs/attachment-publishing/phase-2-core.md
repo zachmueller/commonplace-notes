@@ -105,7 +105,7 @@ since last full publish**.
 
 ## 2. Settings
 
-- [ ] New optional field on `PublishingProfile` (`src/types.ts`):
+- [x] New optional field on `PublishingProfile` (`src/types.ts`):
 
   ```ts
   interface AttachmentSettings {
@@ -128,12 +128,12 @@ since last full publish**.
 
 ### Allow-list
 
-- [ ] Default allow-list:
+- [x] Default allow-list:
   - Images: `png jpg jpeg gif webp avif svg`
   - Audio: `mp3 m4a aac ogg oga opus wav flac`
   - Video: `mp4 m4v webm mov`
   - Documents: `pdf`
-- [ ] The field accepts any entry. `*` allows every extension, including files
+- [x] The field accepts any entry. `*` allows every extension, including files
       that have none.
 
 The default list only sets what publishes out of the box. **There is no
@@ -149,7 +149,7 @@ the site's origin, if opened directly, are served as downloads (§7, Headers).
 
 ### Size cap
 
-- [ ] Default 50 MB. The field accepts 1–500.
+- [x] Default 50 MB. The field accepts 1–500.
 
 Files are streamed from disk for hashing and upload (§6, §7), so the ceiling
 bounds upload time and storage, not memory.
@@ -162,20 +162,20 @@ folder never publishes, whichever note links it.
 
 ### UI
 
-- [ ] A new **Attachments (Beta)** group in the profile's content settings
+- [x] A new **Attachments (Beta)** group in the profile's content settings
       (`src/settings/profile/content.ts`, or a new `attachments.ts` beside it):
       a mode dropdown, an extensions text field (space- or comma-separated) and
       a size field.
-- [ ] The group's description starts: "Beta: attachment publishing is new and
+- [x] The group's description starts: "Beta: attachment publishing is new and
       may change."
-- [ ] Extensions help text: "HTML, JavaScript and other active files download
+- [x] Extensions help text: "HTML, JavaScript and other active files download
       instead of opening."
-- [ ] Mode help text: changing the mode gives affected notes a new revision on
+- [x] Mode help text: changing the mode gives affected notes a new revision on
       their next publish. Narrowing it or turning it off leaves files in the
       bucket while older revisions reference them (§5, P3 §2).
-- [ ] On Local profiles the group shows but is disabled, with the note
+- [x] On Local profiles the group shows but is disabled, with the note
       "Attachments publish on AWS profiles only."
-- [ ] When the mode is first changed from `off`, show a notice: run **Publish
+- [x] When the mode is first changed from `off`, show a notice: run **Publish
       all notes** once so existing notes pick up their attachments (§8).
 
 ## 3. Collecting references

@@ -1,10 +1,12 @@
 import { Setting } from 'obsidian';
 import { ProfileContext } from '../context';
 import { HomeNoteSuggestModal } from '../homeNoteSuggestModal';
+import { renderAttachmentsGroup } from './attachments';
 
 /**
  * "Content" section: home page, site-wide search opt-in, wikilink and
- * attachment-name obfuscation, and excluded directories.
+ * attachment-name obfuscation, excluded directories, and the Attachments
+ * (Beta) group.
  */
 export function renderContentSection(ctx: ProfileContext, containerEl: HTMLElement): void {
 	const { app, plugin, profile, index } = ctx;
@@ -76,4 +78,6 @@ export function renderContentSection(ctx: ProfileContext, containerEl: HTMLEleme
 					value.split('\n').filter(line => line.trim() !== '');
 				await plugin.saveSettings();
 			}));
+
+	renderAttachmentsGroup(ctx, containerEl);
 }

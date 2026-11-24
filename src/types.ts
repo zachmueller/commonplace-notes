@@ -1,5 +1,6 @@
 import { TFile } from 'obsidian';
 import { InfrastructureState, ReadGateMode } from './infrastructure/types';
+import type { AttachmentSettings } from './utils/attachments';
 
 /** Comments panel view mode: the site-wide recency feed vs. the active note's thread. */
 export type CommentsPanelMode = 'recent' | 'active-note';
@@ -61,6 +62,12 @@ export interface PublishingProfile {
 	 * Applies whatever the attachment mode, and on Local profiles. Absent ≡ true.
 	 */
 	obscureRawAttachments?: boolean;
+	/**
+	 * Attachment publishing (Beta, attachment spec P2 §2). Absent ≡ mode
+	 * `off` with the default allow-list and size cap; see
+	 * resolveAttachmentSettings.
+	 */
+	attachments?: AttachmentSettings;
     publishMechanism: 'AWS' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;
