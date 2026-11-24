@@ -839,12 +839,12 @@ lists them as "referenced, never uploaded".
 Editing a file doesn't touch the notes that reference it, so mtime-based scopes
 would miss the change.
 
-- [ ] **Publish updates since last full publish** (`Publisher.getUpdatedNotes`):
+- [x] **Publish updates since last full publish** (`Publisher.getUpdatedNotes`):
       when the mode isn't `off`, also include every publishable note whose
       `metadataCache.resolvedLinks` reach an attachment file that passes the §3
       filters (an allowed extension, not under an excluded directory, within the
       size cap) and changed after `lastFullPublishTimestamp`.
-- [ ] A file has changed when the later of `mtimeMs` and `ctimeMs` from the
+- [x] A file has changed when the later of `mtimeMs` and `ctimeMs` from the
       file's `fs.stat` (§3, §6) is after that timestamp. This takes one
       `fs.stat` per linked attachment file.
 

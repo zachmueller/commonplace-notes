@@ -536,10 +536,29 @@ export class Publisher {
 		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
 		if (!profile) return [];
 
+		const since = profile.lastFullPublishTimestamp || 0;
 		const allPublishable = await this.getAllPublishableNotes(profileId);
-		return allPublishable.filter(file => 
-			file.stat.mtime > (profile.lastFullPublishTimestamp || 0)
-		);
+		const updated = allPublishable.filter(file => file.stat.mtime > since);
+		if (!this.plugin.attachmentManager.isActive(profile)) return updated;
+
+		// Editing a file doesn't touch the notes that use it, so also include
+		// notes whose links reach an attachment that would publish and changed
+		// since (the later of mtime and ctime: a tag editor can keep mtime).
+		// resolvedLinks doesn't separate embeds from links; a note included
+		// only for a link keeps its hash, so it records no new revision.
+		const included = new Set(updated.map(f => f.path));
+		const changed = await this.plugin.attachmentManager.changedAttachmentPaths(profile, since);
+		if (changed.size === 0) return updated;
+		const resolvedLinks = this.plugin.app.metadataCache.resolvedLinks;
+		for (const file of allPublishable) {
+			if (included.has(file.path)) continue;
+			const targets = Object.keys(resolvedLinks[file.path] ?? {});
+			if (targets.some(t => changed.has(t))) {
+				updated.push(file);
+				included.add(file.path);
+			}
+		}
+		return updated;
 	}
 
 	private shouldInvalidateCloudFront(profile: PublishingProfile, publishType: CloudFrontInvalidationScheme): boolean {

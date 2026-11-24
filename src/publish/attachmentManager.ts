@@ -8,7 +8,10 @@ import {
 	attachmentKey,
 	attachmentKind,
 	baseNameOf,
+	changedSince,
+	extensionOf,
 	filterAttachment,
+	isExtensionAllowed,
 	mergeStagedAttachments,
 	refKeys,
 	resolveAttachmentSettings,
@@ -206,6 +209,32 @@ export class AttachmentManager {
 			if (!s || s.size !== ref.size || s.mtimeMs !== ref.mtime || s.ctimeMs !== ref.ctime) return ref;
 		}
 		return null;
+	}
+
+	/**
+	 * §8: every vault file some note links to that passes the §3 filters (an
+	 * allowed extension, not excluded, within the cap) and changed after
+	 * `since` (the later of mtime and ctime, from one fs.stat each).
+	 */
+	async changedAttachmentPaths(profile: PublishingProfile, since: number): Promise<Set<string>> {
+		const settings = this.settingsFor(profile);
+		const targets = new Set<string>();
+		for (const links of Object.values(this.plugin.app.metadataCache.resolvedLinks)) {
+			for (const t of Object.keys(links)) {
+				if (!t.toLowerCase().endsWith('.md')) targets.add(t);
+			}
+		}
+		const out = new Set<string>();
+		for (const path of targets) {
+			const ext = extensionOf(path);
+			if (!isExtensionAllowed(ext, settings.allowedExtensions)) continue;
+			const stat = await this.stat(path);
+			if (!stat) continue;
+			const verdict = filterAttachment({ path, ext, size: stat.size }, settings,
+				p => this.plugin.publisher.isPathExcluded(p, profile));
+			if (verdict === 'ok' && changedSince(stat, since)) out.add(path);
+		}
+		return out;
 	}
 
 	// -------------------------------------------------------------------------
