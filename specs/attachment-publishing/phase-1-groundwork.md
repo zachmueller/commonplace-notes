@@ -575,21 +575,28 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
 
 The two checks that need no AWS run in the local Obsidian harness:
 `npm run test:excluded-directories-e2e` and `npm run test:obscure-wikilinks-e2e`.
+All six also run against the sandbox in
+`CPN_LIVE_AWS_PROFILE=random npm run test:session-length-live` (then `--teardown`).
+Its sign-ins are real: a native test user signs in through the Hosted UI and the
+deployed callback sets `cpn_id`. Google sign-in itself needs a browser and a real
+Google client, so "Google sign-in still works after Apply" is checked as: the
+Google IdP keeps its client ID and secret, and the Hosted UI still redirects to
+Google with that client ID.
 
-- [ ] On a pool deployed before this change, run **Upgrade Cognito gate**
+- [x] On a pool deployed before this change, run **Upgrade Cognito gate**
       without touching the session length. After signing in, the `cpn_id`
       cookie's `Max-Age` is about 3600 and the token's `exp` is about 1 h out,
       and the profile now records `sessionHours: 1`.
-- [ ] Apply a session length of 12 h. After signing in, the `cpn_id` cookie's
+- [x] Apply a session length of 12 h. After signing in, the `cpn_id` cookie's
       `Max-Age` is about 43200 and the token's `exp` is about 12 h out. A
       pre-upgrade pool's Google sign-in still works after Apply.
-- [ ] A new deployment with the wizard's defaults gets 12-hour sessions.
+- [x] A new deployment with the wizard's defaults gets 12-hour sessions.
 - [x] With `**/private/` excluded, a note in `Projects/private/` doesn't
       publish, and one in `Projects/public/` does.
 - [x] With Obscure attachment names on, a note embedding `Media/song.mp3`
       publishes `raw` with `![[null.mp3]]`. With it off, the link appears as
       written.
-- [ ] A note with `a \* [[Note]] b` and a table row `| [[Note\|alias]] | x |`
+- [x] A note with `a \* [[Note]] b` and a table row `| [[Note\|alias]] | x |`
       publishes a `raw` that renders the same table and text as the source.
 
 ## 6. Docs
@@ -633,4 +640,4 @@ Release-note draft:
 
 - [ ] Every box in §1–§6 is ticked.
 - [x] `npm run build` and all unit tests pass.
-- [ ] The end-to-end checks in §5 pass on the sandbox site.
+- [x] The end-to-end checks in §5 pass on the sandbox site.
