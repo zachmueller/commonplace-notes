@@ -238,24 +238,24 @@ That is the point of the rule, and the docs say so.
 
 ### End-to-end (sandbox `random` only)
 
-- [ ] Gate a note that embeds an mp3 to a group and publish. The file appears
+- [x] Gate a note that embeds an mp3 to a group and publish. The file appears
       under `restricted/<g>/attachments/`. The public copy is gone, and an
       anonymous fetch of the old public URL returns 403.
-- [ ] Make two notes, one public and one gated, share a file. It exists in both
+- [x] Make two notes, one public and one gated, share a file. It exists in both
       areas. Ungating or deleting one leaves the other's copy intact.
-- [ ] Delete `attachments.json` and gate a note that has attachments. The probe
+- [x] Delete `attachments.json` and gate a note that has attachments. The probe
       finds attachment objects, so the publish rebuilds the state from the
       bucket, then sweeps the public copy.
-- [ ] On a profile with publish history but no attachment objects, the first
+- [x] On a profile with publish history but no attachment objects, the first
       publish with attachments on creates the file as complete and never
       rebuilds.
-- [ ] Publish a public note with an mp3, switch the mode to `off`, gate the note
+- [x] Publish a public note with an mp3, switch the mode to `off`, gate the note
       and publish. The public copy is swept, and an anonymous fetch of its URL
       returns 403.
-- [ ] Delete an attachment object out of band and run **Audit published
+- [x] Delete an attachment object out of band and run **Audit published
       notes**: it reports the missing object and clears it from `uploaded`, and
       the next publish of the note re-uploads it.
-- [ ] Apply the bucket cleanup rule. `GetBucketLifecycleConfiguration` shows
+- [x] Apply the bucket cleanup rule. `GetBucketLifecycleConfiguration` shows
       both rules, and the site's routes (`/auth/*`, comments, chat) still work.
 
 ## 7. Docs
@@ -270,7 +270,8 @@ That is the point of the rule, and the docs say so.
 
 ## Done when
 
-- [ ] Every box in §1–§7 is ticked.
+- [x] Every box in §1–§7 is ticked.
 - [ ] Phase 2 is done too, because they ship together.
 - [x] `npm run build`, `npm run synth` and all unit tests pass.
-- [ ] The end-to-end checks in §6 pass on the sandbox site.
+- [x] The end-to-end checks in §6 pass on the sandbox site
+      (`npm run test:attachment-cleanup-live`, 72/72).
