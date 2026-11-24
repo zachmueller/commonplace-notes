@@ -37,7 +37,17 @@ export interface PublishingProfile {
 	siteAssetsFingerprint?: string;
 	/** Home note UID last pushed to the site (config.json / index.html; '' = none). The audit and delete never touch it. */
 	publishedHomeNoteUid?: string;
+    /**
+     * Folder patterns from the vault root, one per entry (`private/`,
+     * `**\/drafts/`, `Projects/*\/raw/`). See src/utils/excludedDirectories.ts.
+     */
     excludedDirectories: string[];
+    /**
+     * Excluded-directory rules version. Absent or 1: the old substring rule,
+     * upgraded once on load (main.ts, upgradeExcludedDirectoriesOnce). 2: the
+     * current rules.
+     */
+    excludedDirsRulesVersion?: number;
     baseUrl: string;
 	homeNotePath: string;
     isPublic: boolean;

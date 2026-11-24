@@ -40,6 +40,11 @@ import { DeployHookManager } from './infrastructure/hooks/deployHookManager';
 import { DeploymentWizardModal } from './infrastructure/deploymentWizardModal';
 import { RecentCommentsView, RECENT_COMMENTS_VIEW } from './views/recentCommentsView';
 import type { CommentThreadCache } from './utils/recentComments';
+import {
+	EXCLUDED_DIRS_RULES_VERSION,
+	findNoLongerExcluded,
+	upgradeExcludedDirectories
+} from './utils/excludedDirectories';
 
 // defining interfaces to facilitate deregistering commands
 interface Commands {
@@ -62,6 +67,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
         id: 'default',
 		lastFullPublishTimestamp: 0,
         excludedDirectories: ['private/'],
+		excludedDirsRulesVersion: EXCLUDED_DIRS_RULES_VERSION,
         baseUrl: '',
 		homeNotePath: '',
         isPublic: false,
@@ -89,6 +95,7 @@ const DEFAULT_SETTINGS: CommonplaceNotesSettings = {
 
 export default class CommonplaceNotesPlugin extends Plugin {
 	settings: CommonplaceNotesSettings;
+	settingTab: CommonplaceNotesSettingTab;
 	profileManager: ProfileManager;
 	indicatorManager: IndicatorManager;
 	noteManager: NoteManager;
@@ -182,7 +189,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		await this.profileManager.initialize();
 
-		this.addSettingTab(new CommonplaceNotesSettingTab(this.app, this));
+		this.settingTab = new CommonplaceNotesSettingTab(this.app, this);
+		this.addSettingTab(this.settingTab);
 		this.registerCommands();
 
 		// Custom URI: obsidian://commonplace-notes?action=open-uid&uid=<cpn-uid>.
@@ -197,6 +205,10 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		// Refresh indicators upon fully loading
 		this.app.workspace.onLayoutReady(async () => {
+			// Before anything reads exclusions (indicators, publishing). Needs the
+			// vault's file list, so it runs here rather than in loadSettings.
+			await this.upgradeExcludedDirectoriesOnce();
+
 			Logger.debug('Layout ready, initializing indicators');
 			await this.indicatorManager.updateAllVisibleIndicators();
 
@@ -1216,6 +1228,78 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	/**
+	 * One-time upgrade to the excluded-directories rules version 2 (folder
+	 * patterns from the vault root). The old rule matched slashless entries by
+	 * prefix and at any depth, so for each such entry this appends
+	 * `**\/<entry>/` and `<entry>*\/`, keeping every folder it excluded
+	 * excluded. Files the old rule matched only by their own name can't be
+	 * kept by a folder pattern; they're reported. The user's entries are never
+	 * edited or removed, and publishing is never blocked. Each profile records
+	 * version 2 whether or not anything changed, so this runs once.
+	 */
+	private async upgradeExcludedDirectoriesOnce(): Promise<void> {
+		const pending = this.settings.publishingProfiles.filter(
+			p => (p.excludedDirsRulesVersion ?? 1) < EXCLUDED_DIRS_RULES_VERSION);
+		if (pending.length === 0) return;
+
+		const paths = this.app.vault.getFiles().map(f => f.path);
+		const reports: { profile: PublishingProfile; added: string[]; lost: string[] }[] = [];
+		for (const profile of pending) {
+			const old = [...profile.excludedDirectories];
+			const { entries, added } = upgradeExcludedDirectories(old);
+			const lost = findNoLongerExcluded(old, entries, paths);
+			profile.excludedDirectories = entries;
+			profile.excludedDirsRulesVersion = EXCLUDED_DIRS_RULES_VERSION;
+			if (added.length > 0 || lost.length > 0) reports.push({ profile, added, lost });
+		}
+		await this.saveSettings();
+
+		for (const { profile, added, lost } of reports) {
+			Logger.info(`Excluded directories upgraded for ${profile.name}: added ${JSON.stringify(added)}`
+				+ (lost.length > 0 ? `; no longer excluded: ${JSON.stringify(lost)}` : ''));
+			this.showExcludedDirsUpgradeNotice(profile, added, lost);
+		}
+	}
+
+	/** Persistent notice for one profile's excluded-directories upgrade. */
+	private showExcludedDirsUpgradeNotice(profile: PublishingProfile, added: string[], lost: string[]): void {
+		const MAX_FILES = 5;
+		const fragment = createFragment(frag => {
+			const intro = frag.createDiv();
+			intro.appendText('Excluded directories now match from the vault root.');
+			if (added.length > 0) {
+				intro.appendText(` In ${profile.name}, added `);
+				added.forEach((pattern, i) => {
+					if (i > 0) intro.appendText(i === added.length - 1 ? ' and ' : ', ');
+					intro.createEl('code', { text: pattern });
+				});
+				intro.appendText(' so the same folders stay excluded.');
+			}
+			if (lost.length > 0) {
+				frag.createDiv({ text: `No longer excluded in ${profile.name}. Move it into an excluded folder:` });
+				const list = frag.createEl('ul');
+				for (const file of lost.slice(0, MAX_FILES)) list.createEl('li', { text: file });
+				if (lost.length > MAX_FILES) list.createEl('li', { text: `and ${lost.length - MAX_FILES} more` });
+			}
+			const link = frag.createDiv().createEl('a', { text: 'Open settings', href: '#' });
+			link.addEventListener('click', (evt) => {
+				evt.preventDefault();
+				this.openProfileSettings(profile.id);
+			});
+		});
+		new Notice(fragment, 0);
+	}
+
+	/** Open this plugin's settings on a profile's Profiles tab. */
+	openProfileSettings(profileId: string): void {
+		this.settingTab.showProfile(profileId);
+		// `app.setting` is internal (not in the public typings).
+		const setting = (this.app as App & { setting?: { open(): void; openTabById(id: string): void } }).setting;
+		setting?.open();
+		setting?.openTabById(this.manifest.id);
 	}
 
 	// --- Append-mode URL stacking helpers ---------------------------------

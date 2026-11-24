@@ -8,6 +8,7 @@ import { Logger, errorMessage } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { restrictedPrefix } from '../utils/access';
 import { UID_KEY, normalizeUID } from '../utils/uidResolver';
+import { compileExcludePatterns } from '../utils/excludedDirectories';
 import {
 	auditPublishedUids,
 	describePublishedUid,
@@ -140,11 +141,22 @@ export class Publisher {
 		});
 	}
 
+	/** Compiled excluded-directory matchers, keyed by profile id; rebuilt when the entries change. */
+	private excludeMatchers = new Map<string, { key: string; isExcluded: (path: string) => boolean }>();
+
+	/**
+	 * Whether `file` sits in one of the profile's excluded directories. Rules
+	 * live in {@link compileExcludePatterns}: folder patterns from the vault
+	 * root, `*` within a folder name, `**` for any depth, case-insensitive.
+	 */
 	public isFileExcluded(file: TFile, profile: PublishingProfile): boolean {
-		const filePath = file.path;
-		return profile.excludedDirectories.some(dir => 
-			filePath.startsWith(dir) || filePath.includes('/' + dir + '/')
-		);
+		const key = profile.excludedDirectories.join('\n');
+		let cached = this.excludeMatchers.get(profile.id);
+		if (!cached || cached.key !== key) {
+			cached = { key, isExcluded: compileExcludePatterns(profile.excludedDirectories) };
+			this.excludeMatchers.set(profile.id, cached);
+		}
+		return cached.isExcluded(file.path);
 	}
 
 	// TODO::extend this to allow for no filtering by profileId::

@@ -11,6 +11,7 @@ import { renderContentSection } from './profile/content';
 import { renderDestinationSection } from './profile/destination';
 import { renderDangerZone } from './profile/dangerZone';
 import { renderAccessGroupsSection } from './profile/accessGroups';
+import { EXCLUDED_DIRS_RULES_VERSION } from '../utils/excludedDirectories';
 
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	plugin: CommonplaceNotesPlugin;
@@ -191,6 +192,16 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		return details;
 	}
 
+	/**
+	 * Make the next render show `profileId` on the Profiles tab. Call before
+	 * opening this tab (CommonplaceNotesPlugin.openProfileSettings).
+	 */
+	showProfile(profileId: string): void {
+		this.ensureUiState().activeTab = 'profiles';
+		const index = this.plugin.settings.publishingProfiles.findIndex(p => p.id === profileId);
+		if (index !== -1) this.activeProfileIndex = index;
+	}
+
 	/** Lazily create and return the persisted Settings-tab UI state. */
 	private ensureUiState(): SettingsUiState {
 		if (!this.plugin.settings.settingsUiState) {
@@ -237,6 +248,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			id: `profile-${Date.now()}`,
 			lastFullPublishTimestamp: 0,
 			excludedDirectories: [],
+			excludedDirsRulesVersion: EXCLUDED_DIRS_RULES_VERSION,
 			baseUrl: '',
 			homeNotePath: '',
 			isPublic: false,

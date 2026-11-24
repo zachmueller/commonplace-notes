@@ -68,7 +68,7 @@ export function renderContentSection(ctx: ProfileContext, containerEl: HTMLEleme
 
 	new Setting(containerEl)
 		.setName('Excluded directories')
-		.setDesc('One directory per line (e.g., private/)')
+		.setDesc('One folder per line, from the vault root. private/ excludes only the top-level private folder. Use * for any folder name and **/ for any depth, e.g. **/private/ excludes every folder named private.')
 		.addTextArea(text => text
 			.setValue(profile.excludedDirectories.join('\n'))
 			.onChange(async (value) => {
