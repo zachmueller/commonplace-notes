@@ -79,11 +79,19 @@ export class TestContext {
 		fs.mkdirSync(this.screenshotsDir, { recursive: true });
 		const file = path.join(this.screenshotsDir, `${name}.png`);
 		try {
-			// Viewport-only: fullPage evaluates a page-side measuring helper that
-			// throws "__name is not defined" in Obsidian's Electron renderer (the
-			// same reason run-and-collect.ts guards its fullPage screenshots). A
-			// viewport capture of the app window is the meaningful artifact anyway.
-			await this.page.screenshot({ path: file });
+			// Captured over CDP, not page.screenshot(): Playwright's screenshotter
+			// runs its own functions in the page's utility world via
+			// fn.toString(), and tsx (which also transforms node_modules) has
+			// wrapped them in `__name(...)`, a helper that world doesn't have, so
+			// every page.screenshot() threw "__name is not defined".
+			// Page.captureScreenshot runs nothing in the page.
+			const cdp = await this.page.context().newCDPSession(this.page);
+			try {
+				const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
+				fs.writeFileSync(file, Buffer.from(data, "base64"));
+			} finally {
+				await cdp.detach().catch(() => {});
+			}
 			return file;
 		} catch (err) {
 			console.warn(`  [screenshot] "${name}" failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
