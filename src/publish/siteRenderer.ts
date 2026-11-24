@@ -220,9 +220,12 @@ export function renderConfigJson(profile: PublishingProfile, homeNoteUid?: strin
 		config.commentWritePath = '/api/comments';
 		config.commentMePath = '/api/me';
 	}
-	// The Hosted UI sign-in URL: for the comment box, and for readers of a public
-	// site who need to sign in to see notes gated to their groups.
-	const loginUrl = (commentsOn || accessGating) ? buildAuthLoginUrl(profile) : undefined;
+	// The Hosted UI sign-in URL: for the comment box, for readers of a public
+	// site who need to sign in to see notes gated to their groups, and on a
+	// whole-site Cognito gate for media whose session ended (its `state` keeps
+	// the note route, which the edge's own sign-in redirect can't).
+	const wholeSiteCognito = profile.infrastructureState?.readGateMode === 'cognito';
+	const loginUrl = (commentsOn || accessGating || wholeSiteCognito) ? buildAuthLoginUrl(profile) : undefined;
 	if (loginUrl) {
 		config.authLoginUrl = loginUrl;
 		if (commentsOn) {

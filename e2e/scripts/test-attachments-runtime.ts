@@ -212,6 +212,16 @@ async function main() {
 	}
 
 	{
+		// Cognito gate: the link goes to the Hosted UI with the note route in state.
+		const r = await failMedia('audio', '', 401);
+		const a = r.label?.querySelector('a') as HTMLAnchorElement;
+		check(r.text === 'Your session has ended. Sign in again to play this.', `E1a: 401 → session-ended label (got ${JSON.stringify(r.text)})`);
+		check(!!a && a.getAttribute('href')!.startsWith('https://auth.example/login?state='), `E1a: Cognito gate links to the Hosted UI (got ${a?.getAttribute('href')})`);
+	}
+	{
+		// Password gate (no Hosted UI): the link reloads.
+		const login = W.__CPN_CONFIG__.authLoginUrl;
+		delete W.__CPN_CONFIG__.authLoginUrl;
 		const before = reloads;
 		const r = await failMedia('audio', '', 401);
 		check(r.heads.length === 1 && r.heads[0].init.cache === 'no-store', 'E0: exactly one HEAD, no-store, even after two error events');
@@ -221,6 +231,7 @@ async function main() {
 		const link = r.label?.querySelector('a') as HTMLElement;
 		link?.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
 		check(reloads === before + 1, 'E1: the link reloads the page');
+		W.__CPN_CONFIG__.authLoginUrl = login;
 	}
 	{
 		const r = await failMedia('video', '', 401);

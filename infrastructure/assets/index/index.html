@@ -4215,12 +4215,21 @@ ${closeButton}
 				return a;
 			};
 			if (kind === 'expired') {
-				// Reload as cpnAuthGate does, so the edge serves sign-in (or the
-				// unlock page) as the document. Only when the reader asks.
-				const a = link('Sign in again', location.href);
+				// Only when the reader asks. On a Cognito gate, go straight to the
+				// Hosted UI: its state returns to this note, while the edge's own
+				// sign-in redirect only keeps the path (the #/ route is lost).
+				// Otherwise (password gate) reload as cpnAuthGate does, so the edge
+				// serves the unlock page as the document.
+				const login = hostedUiLoginUrl();
+				const a = link('Sign in again', login || location.href);
 				a.addEventListener('click', (ev) => {
-					ev.preventDefault();
 					sessionStorage.removeItem('cpn_pw_reload');
+					const fresh = hostedUiLoginUrl();
+					if (fresh) {
+						a.href = fresh;
+						return;
+					}
+					ev.preventDefault();
 					location.reload();
 				});
 				label.append('Your session has ended. ', a, ' to play this.');
