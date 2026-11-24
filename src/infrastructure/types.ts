@@ -87,6 +87,13 @@ export interface CognitoAuthState {
 	 * gates only notes with access groups). False/absent: whole-site sign-in.
 	 */
 	edgePublicReads?: boolean;
+	/**
+	 * Sign-in session length in hours (the pool's `SessionHours`: ID token
+	 * lifetime and cookie Max-Age). Absent: the pool was deployed before this
+	 * setting and has Cognito's default 1-hour tokens. Read it through
+	 * effectiveSessionHours (cognitoParams.ts).
+	 */
+	sessionHours?: number;
 }
 
 /** Raw outputs read from a deployed Cognito auth stack (plus its edge stack). */
@@ -170,6 +177,11 @@ export interface InfrastructureState {
 
 export interface DeploymentConfig {
 	profileId: string;
+	/**
+	 * Sign-in session length in hours for the Cognito pool. The wizard seeds 12
+	 * for a new pool and the live pool's effectiveSessionHours on a re-run.
+	 */
+	sessionHours?: number;
 	variantName: string;
 	s3Prefix: string;
 	customDomain: string;

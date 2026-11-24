@@ -8,11 +8,18 @@ import { ProfileContext } from '../context';
 import { openAuthLambdaModal } from '../modals/authLambdaModal';
 import { openUpgradePasswordGateModal } from '../modals/passwordGateModal';
 import { openImportStackModal } from '../modals/importStack';
+import type { CognitoAuthState } from '../../infrastructure/types';
+import {
+	effectiveSessionHours,
+	isValidSessionHours,
+	MAX_SESSION_HOURS,
+	MIN_SESSION_HOURS,
+} from '../../infrastructure/cognitoParams';
 
 /**
  * "Infrastructure" section (AWS profiles): deployment status and the large,
- * state-dependent set of actions — auth Lambda, password gate upgrade, Google
- * OAuth URLs + callback sync, commenting info, sync-from-stack, DNS, deploy,
+ * state-dependent set of actions — auth Lambda, password gate upgrade, Cognito
+ * gate upgrade + sign-in session length, Google OAuth URLs + callback sync, commenting info, sync-from-stack, DNS, deploy,
  * import, and unlink.
  */
 export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HTMLElement): void {
@@ -137,6 +144,8 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 						}
 					});
 				});
+
+			renderSessionLengthRow(ctx, containerEl, cognito);
 		}
 
 		// Google sign-in: the Cognito Hosted UI URLs the user must register
@@ -378,4 +387,73 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 				return button;
 			});
 	}
+}
+
+/**
+ * "Sign-in session length": the pool's token lifetime and cookie Max-Age.
+ * Existing pools keep their length (1 h if deployed before this setting)
+ * until the author applies a new one here.
+ */
+function renderSessionLengthRow(ctx: ProfileContext, containerEl: HTMLElement, cognito: CognitoAuthState): void {
+	const { plugin, profile } = ctx;
+	const current = effectiveSessionHours(cognito);
+	let hours = current;
+	// Pools not on the current template (no access-groups key) may still hold
+	// the old inline edge function, which the current template would remove
+	// without the upgrade's retain step. The manager re-checks the template.
+	const blocked = !cognito.accessGroupsKey;
+	const tradeOff = 'Longer sessions mean fewer sign-ins and media that keeps playing, '
+		+ 'but a reader removed from a group keeps access for up to one session length.';
+	const desc = blocked
+		? 'Run Upgrade Cognito gate first.'
+		: cognito.sessionHours === undefined
+			? `This site uses 1-hour sessions, Cognito's default when it was deployed. ${tradeOff}`
+			: `Currently ${current} hour${current === 1 ? '' : 's'}. ${tradeOff} Applies at each reader's next sign-in.`;
+	const eventLog = containerEl.createDiv({ cls: 'cpn-wizard-event-log' });
+	eventLog.hide();
+	const setting = new Setting(containerEl)
+		.setName('Sign-in session length')
+		.setDesc(desc)
+		.addText(text => {
+			text.inputEl.type = 'number';
+			text.inputEl.min = String(MIN_SESSION_HOURS);
+			text.inputEl.max = String(MAX_SESSION_HOURS);
+			text.inputEl.addClass('cpn-session-hours');
+			text.setValue(String(current))
+				.setDisabled(blocked)
+				.onChange(v => { hours = Number(v); });
+		})
+		.addButton(btn => {
+			btn.setButtonText('Apply').setDisabled(blocked);
+			btn.onClick(async () => {
+				if (!isValidSessionHours(hours)) {
+					new Notice(`Enter a whole number of hours from ${MIN_SESSION_HOURS} to ${MAX_SESSION_HOURS}.`);
+					return;
+				}
+				btn.setDisabled(true);
+				btn.setButtonText('Applying...');
+				eventLog.empty();
+				eventLog.show();
+				try {
+					await plugin.cloudFormationManager.updateCognitoSessionLength(profile, hours, (event) => {
+						const line = eventLog.createDiv({ cls: 'cpn-wizard-event-line' });
+						if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+							line.addClass('cpn-event-error');
+						} else if (event.status.includes('COMPLETE')) {
+							line.addClass('cpn-event-success');
+						}
+						line.setText(`${event.logicalResourceId} - ${event.status}`);
+						eventLog.scrollTop = eventLog.scrollHeight;
+					});
+					new Notice(`Sign-in sessions now last ${hours} hour${hours === 1 ? '' : 's'}, from each reader's next sign-in.`);
+					ctx.rerenderProfile();
+				} catch (err: unknown) {
+					Logger.error('Error changing the sign-in session length:', err);
+					new Notice(`Session length change failed: ${errorMessage(err)}`);
+					btn.setDisabled(false);
+					btn.setButtonText('Apply');
+				}
+			});
+		});
+	if (blocked) setting.descEl.addClass('mod-warning');
 }

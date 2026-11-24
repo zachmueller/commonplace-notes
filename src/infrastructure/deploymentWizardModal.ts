@@ -1,4 +1,11 @@
 import { App, Modal, Setting, Notice } from 'obsidian';
+import {
+	DEFAULT_SESSION_HOURS,
+	effectiveSessionHours,
+	isValidSessionHours,
+	MAX_SESSION_HOURS,
+	MIN_SESSION_HOURS,
+} from './cognitoParams';
 import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
@@ -84,6 +91,11 @@ export class DeploymentWizardModal extends Modal {
 			commentingEnabled: profile.commenting?.enabled || false,
 			chatEnabled: profile.chat?.enabled || false,
 			chatSync: profile.chat?.sync || 'auto',
+			// A live pool keeps its length (1 h if it predates the setting); only
+			// a new pool starts at the default.
+			sessionHours: profile.infrastructureState?.cognitoAuth?.stackName
+				? effectiveSessionHours(profile.infrastructureState.cognitoAuth)
+				: DEFAULT_SESSION_HOURS,
 		};
 	}
 
@@ -379,6 +391,22 @@ export class DeploymentWizardModal extends Modal {
 			// prefix change so the text input keeps focus.
 			const hintEl = container.createDiv({ cls: 'cpn-oauth-hint' });
 			this.renderGoogleOAuthHint(hintEl);
+
+			new Setting(container)
+				.setName('Sign-in session length (hours)')
+				.setDesc(
+					`How long a sign-in lasts, ${MIN_SESSION_HOURS}–${MAX_SESSION_HOURS} hours. Longer sessions mean ` +
+					'fewer sign-ins and media that keeps playing, but a reader removed from a ' +
+					'group keeps access for up to one session length.'
+				)
+				.addText(text => {
+					text.inputEl.type = 'number';
+					text.inputEl.min = String(MIN_SESSION_HOURS);
+					text.inputEl.max = String(MAX_SESSION_HOURS);
+					text
+						.setValue(String(this.config.sessionHours ?? DEFAULT_SESSION_HOURS))
+						.onChange(v => { this.config.sessionHours = Number(v); });
+				});
 		}
 
 		// --- LLM chat over the published corpus ------------------------------
@@ -483,6 +511,10 @@ export class DeploymentWizardModal extends Modal {
 			const prefixError = this.validateAuthDomainPrefix(this.config.authDomainPrefix);
 			if (prefixError) {
 				new Notice(prefixError);
+				return;
+			}
+			if (!isValidSessionHours(this.config.sessionHours)) {
+				new Notice(`Sign-in session length must be a whole number of hours from ${MIN_SESSION_HOURS} to ${MAX_SESSION_HOURS}.`);
 				return;
 			}
 		}
@@ -1715,6 +1747,7 @@ export class DeploymentWizardModal extends Modal {
 			accessGroupsBucket: this.cognitoOutputs.accessGroupsBucket || undefined,
 			accessGroupsKey: this.cognitoOutputs.accessGroupsKey || undefined,
 			edgePublicReads: (this.cognitoEdgeStackName && this.publicAccessGroupsWanted()) || undefined,
+			sessionHours: this.config.sessionHours ?? DEFAULT_SESSION_HOURS,
 		};
 	}
 

@@ -67,6 +67,15 @@ import type {
 	StackRole,
 } from './types';
 import { certCoversDomain } from './certMatch';
+import {
+	buildCognitoAuthParameters,
+	buildCognitoAuthUpdateParameters,
+	currentTemplateUpdateParameters,
+	effectiveSessionHours,
+	isValidSessionHours,
+	MAX_SESSION_HOURS,
+	MIN_SESSION_HOURS,
+} from './cognitoParams';
 import { DEFAULT_MIN_TLS, hostOf, reconcileLiveDomain, type LiveDomainConfig } from './domainDrift';
 import { Logger, errorMessage, errorCode } from '../utils/logging';
 
@@ -423,54 +432,14 @@ export class CloudFormationManager {
 		});
 	}
 
-	private buildCognitoAuthParameters(config: DeploymentConfig) {
-		return [
-			{ ParameterKey: 'VariantName', ParameterValue: config.variantName },
-			{ ParameterKey: 'GoogleClientId', ParameterValue: config.googleClientId || '' },
-			{ ParameterKey: 'GoogleClientSecret', ParameterValue: config.googleClientSecret || '' },
-			{ ParameterKey: 'CallbackURL', ParameterValue: config.callbackUrl || 'https://placeholder.invalid/auth/callback' },
-			{ ParameterKey: 'AuthDomainPrefix', ParameterValue: config.authDomainPrefix || '' },
-			{ ParameterKey: 'AssetsBucket', ParameterValue: config.assetsBucket || '' },
-			{ ParameterKey: 'TriggerAssetsKey', ParameterValue: config.preTokenAssetsKey || '' },
-		];
-	}
-
 	/**
-	 * Every Cognito auth sub-stack template parameter key. Used to build a
-	 * targeted update that changes only a named subset and inherits the rest via
-	 * UsePreviousValue.
+	 * Session length for a pool update from a wizard config: the wizard's value,
+	 * else the live pool's (1 for a pool deployed before SessionHours).
 	 */
-	private static readonly COGNITO_AUTH_PARAM_KEYS = [
-		'VariantName', 'GoogleClientId', 'GoogleClientSecret', 'CallbackURL', 'AuthDomainPrefix',
-		'AssetsBucket', 'TriggerAssetsKey',
-	] as const;
-
-	/**
-	 * Build UpdateStack parameters that change only the keys present in
-	 * `overrides` and keep every other key at its currently-deployed value
-	 * (UsePreviousValue). Critical for a callback-only re-sync: the Google client
-	 * secret is never persisted in the plugin, so re-passing the full parameter
-	 * set from a partial config (via buildCognitoAuthParameters) would resolve
-	 * GoogleClientSecret to '' and wipe the Google IdP secret. ParameterValue and
-	 * UsePreviousValue are mutually exclusive per key.
-	 */
-	private buildCognitoAuthUpdateParameters(
-		overrides: Partial<Record<string, string>>,
-		deployedKeys?: Set<string>,
-	) {
-		// A key the live stack was never deployed with (e.g. AssetsBucket on a
-		// pre-access-groups pool) can't use UsePreviousValue: CloudFormation rejects
-		// it. Omit such keys so the template default applies. With
-		// UsePreviousTemplate the old template may not declare them at all.
-		const out: Array<{ ParameterKey: string; ParameterValue?: string; UsePreviousValue?: boolean }> = [];
-		for (const key of CloudFormationManager.COGNITO_AUTH_PARAM_KEYS) {
-			if (key in overrides) {
-				out.push({ ParameterKey: key, ParameterValue: overrides[key] });
-			} else if (!deployedKeys || deployedKeys.has(key)) {
-				out.push({ ParameterKey: key, UsePreviousValue: true });
-			}
-		}
-		return out;
+	private sessionHoursForUpdate(config: DeploymentConfig): number {
+		if (config.sessionHours !== undefined) return config.sessionHours;
+		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === config.profileId);
+		return effectiveSessionHours(profile?.infrastructureState?.cognitoAuth);
 	}
 
 	/**
@@ -500,8 +469,12 @@ export class CloudFormationManager {
 
 		return this.createOrUpdateStack(client, stackName, {
 			templateBody: COGNITO_AUTH_TEMPLATE,
-			createParameters: this.buildCognitoAuthParameters(config),
-			updateParameters: this.buildCognitoAuthUpdateParameters(updateOverrides, deployedKeys),
+			// Only a new pool takes the wizard's value as-is (12 by default).
+			createParameters: buildCognitoAuthParameters(config),
+			// SessionHours is always explicit: a pool deployed before the
+			// parameter would otherwise get the template default of 12.
+			updateParameters: currentTemplateUpdateParameters(
+				updateOverrides, deployedKeys, this.sessionHoursForUpdate(config)),
 			capabilities: ['CAPABILITY_IAM'],
 			profileId: config.profileId,
 		});
@@ -521,7 +494,7 @@ export class CloudFormationManager {
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			TemplateBody: COGNITO_AUTH_TEMPLATE,
-			Parameters: this.buildCognitoAuthParameters(config),
+			Parameters: buildCognitoAuthParameters({ ...config, sessionHours: this.sessionHoursForUpdate(config) }),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -1288,7 +1261,9 @@ export class CloudFormationManager {
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
 			UsePreviousTemplate: true,
-			Parameters: this.buildCognitoAuthUpdateParameters({ CallbackURL: callbackUrl }, deployedKeys),
+			// UsePreviousTemplate: a pool whose template lacks SessionHours omits
+			// it, and one that has it keeps it via UsePreviousValue.
+			Parameters: buildCognitoAuthUpdateParameters({ CallbackURL: callbackUrl }, deployedKeys),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: [
 				{ Key: 'cpn:managed', Value: 'true' },
@@ -1313,6 +1288,7 @@ export class CloudFormationManager {
 			useRoute53: state?.useRoute53 || false,
 			hostedZoneId: state?.hostedZoneId || '',
 			hostedZoneName: state?.hostedZoneName || '',
+			sessionHours: effectiveSessionHours(state?.cognitoAuth),
 		};
 	}
 
@@ -1410,15 +1386,17 @@ export class CloudFormationManager {
 			}, 'Retaining the legacy edge function');
 		}
 
-		// 3) Pool stack -> current template (adds the pre-token trigger).
+		// 3) Pool stack -> current template (adds the pre-token trigger). The
+		// session length stays what it is (1 h on a pool that predates it).
+		const sessionHours = effectiveSessionHours(cognito);
 		const deployedKeys = await this.getDeployedParameterKeys(client, poolStack);
 		await sendUpdate({
 			StackName: poolStack,
 			TemplateBody: COGNITO_AUTH_TEMPLATE,
-			Parameters: this.buildCognitoAuthUpdateParameters({
+			Parameters: currentTemplateUpdateParameters({
 				AssetsBucket: config.assetsBucket || '',
 				TriggerAssetsKey: config.preTokenAssetsKey || '',
-			}, deployedKeys),
+			}, deployedKeys, sessionHours),
 			Capabilities: ['CAPABILITY_IAM'],
 			Tags: tags,
 		}, 'Cognito pool stack update');
@@ -1459,12 +1437,79 @@ export class CloudFormationManager {
 			// Force a membership re-upload on the next sync.
 			accessGroupsSyncedHash: undefined,
 			edgePublicReads: edgeStackName ? (publicReads || undefined) : cognito.edgePublicReads,
+			sessionHours,
 		};
 		if (orphan && (orphan.functionName || orphan.roleName)) {
 			profile.pendingEdgeCleanup = [...(profile.pendingEdgeCleanup || []), orphan];
 		}
 		await this.plugin.saveSettings();
 		return { edgeFunctionVersionArn: edgeArn, legacyOrphaned: !!orphan };
+	}
+
+	/**
+	 * Change the sign-in session length of a deployed Cognito pool: the ID and
+	 * access token lifetime, and with it the `cpn_id` cookie's Max-Age (the
+	 * callback sets it from the token's `exp`). Applies at each reader's next
+	 * sign-in. Sends the current template, because pools deployed before
+	 * SessionHours lack the parameter, and inherits every other parameter (the
+	 * never-stored Google client secret included) via UsePreviousValue.
+	 *
+	 * Refused on imported stacks, and on a legacy pool that still holds its
+	 * inline edge function: the current template would remove that function
+	 * without Upgrade Cognito gate's retain step.
+	 */
+	async updateCognitoSessionLength(
+		profile: PublishingProfile,
+		hours: number,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<void> {
+		if (!isValidSessionHours(hours)) {
+			throw new Error(`Session length must be a whole number of hours from ${MIN_SESSION_HOURS} to ${MAX_SESSION_HOURS}.`);
+		}
+		const state = profile.infrastructureState;
+		const cognito = state?.cognitoAuth;
+		if (!state || !cognito?.stackName) throw new Error('This profile has no deployed Cognito stack.');
+		if (state.imported) throw new Error('Imported stacks are managed externally; change them via CDK.');
+
+		const config = this.configForProfile(profile);
+		const client = this.getCfClient(config.awsProfile, 'us-east-1');
+		const poolStack = cognito.stackName;
+
+		const deployedTpl = await client.send(new GetTemplateCommand({ StackName: poolStack, TemplateStage: 'Original' }));
+		let tpl: { Resources?: Record<string, unknown> };
+		try {
+			tpl = JSON.parse(deployedTpl.TemplateBody || '{}') as typeof tpl;
+		} catch {
+			throw new Error(`Could not parse the deployed template of ${poolStack} (expected JSON).`);
+		}
+		if (CloudFormationManager.LEGACY_POOL_EDGE_IDS.some((id) => tpl.Resources?.[id])) {
+			throw new Error('This sign-in pool still holds its old edge function. Run Upgrade Cognito gate first.');
+		}
+
+		const deployedKeys = await this.getDeployedParameterKeys(client, poolStack);
+		let changed = true;
+		try {
+			await client.send(new UpdateStackCommand({
+				StackName: poolStack,
+				TemplateBody: COGNITO_AUTH_TEMPLATE,
+				Parameters: currentTemplateUpdateParameters({}, deployedKeys, hours),
+				Capabilities: ['CAPABILITY_IAM'],
+				Tags: [
+					{ Key: 'cpn:managed', Value: 'true' },
+					{ Key: 'cpn:profile', Value: profile.id },
+				],
+			}));
+		} catch (err) {
+			if (!this.isNoUpdatesError(err)) throw err;
+			changed = false;
+		}
+		if (changed) {
+			const status = await this.pollStackUntilComplete(poolStack, profile, onEvent || (() => {}), 'us-east-1');
+			if (status !== 'UPDATE_COMPLETE') throw new Error(`Cognito pool stack update ended with status ${status}`);
+		}
+
+		state.cognitoAuth = { ...cognito, sessionHours: hours };
+		await this.plugin.saveSettings();
 	}
 
 	/**

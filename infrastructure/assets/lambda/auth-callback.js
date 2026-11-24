@@ -9,6 +9,8 @@
 // Flow: receives `?code=...&state=...` from the Hosted UI, exchanges the code at
 // the Cognito token endpoint for an id token, sets it as an HttpOnly session
 // cookie, and 302-redirects back to the original path carried in `state`.
+// The cookie's Max-Age is the token's remaining lifetime (its `exp` minus now),
+// so it never outlives the token and the pool's SessionHours is the only knob.
 //
 // env: COGNITO_DOMAIN (full https Hosted UI origin), CLIENT_ID, CLIENT_SECRET,
 //      REDIRECT_URI (the exact https://<site>/auth/callback registered on the
@@ -56,6 +58,21 @@ function safePath(state) {
 	return '/';
 }
 
+// Seconds until the ID token's `exp`, floored at 0, else 3600. The payload is
+// read without verifying it: the token came straight from Cognito's token
+// endpoint over TLS, and every reader (edge function, comment authorizer)
+// verifies it anyway.
+function cookieMaxAge(idToken, nowMs) {
+	try {
+		const payload = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString('utf8'));
+		if (typeof payload.exp !== 'number' || !isFinite(payload.exp)) return 3600;
+		return Math.max(0, Math.floor(payload.exp - nowMs / 1000));
+	} catch (e) {
+		return 3600;
+	}
+}
+exports.cookieMaxAge = cookieMaxAge;
+
 exports.handler = async (event) => {
 	const q = (event && event.queryStringParameters) || {};
 	const host = (event.headers && (event.headers.host || event.headers.Host)) || '';
@@ -83,7 +100,7 @@ exports.handler = async (event) => {
 		}
 		const cookie =
 			'cpn_id=' + idToken +
-			'; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=3600';
+			'; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=' + cookieMaxAge(idToken, Date.now());
 		return {
 			statusCode: 302,
 			headers: { Location: dest },

@@ -75,6 +75,20 @@ export class CognitoAuthStack extends cdk.Stack {
 			description: 'S3 key of the pre-token-generation trigger code zip in AssetsBucket',
 		});
 
+		// Sign-in session length. The callback sets the cpn_id cookie's Max-Age
+		// from the ID token's `exp`, so this is the only setting. Existing pools
+		// predate the parameter; the plugin always passes it explicitly on update
+		// (1 for those pools) so the default here only ever applies to a new pool.
+		const sessionHours = new cdk.CfnParameter(this, 'SessionHours', {
+			type: 'Number',
+			default: 12,
+			minValue: 1,
+			maxValue: 24,
+			description:
+				'Sign-in session length in hours: the ID and access token lifetime ' +
+				'(1-24; 24 is the Cognito maximum).',
+		});
+
 		// ---- User pool + Google IdP ------------------------------------------
 		const userPool = new cdk.aws_cognito.CfnUserPool(this, 'UserPool', {
 			userPoolName: cdk.Fn.join('', ['cpn-', cdk.Aws.STACK_NAME]),
@@ -113,6 +127,10 @@ export class CognitoAuthStack extends cdk.Stack {
 			allowedOAuthFlowsUserPoolClient: true,
 			callbackUrLs: [callbackUrl.valueAsString],
 			logoutUrLs: [callbackUrl.valueAsString],
+			// The refresh token keeps its default; the site doesn't use it.
+			idTokenValidity: sessionHours.valueAsNumber,
+			accessTokenValidity: sessionHours.valueAsNumber,
+			tokenValidityUnits: { idToken: 'hours', accessToken: 'hours' },
 		});
 		// The client must exist after the Google IdP it references.
 		userPoolClient.addDependency(googleIdp);
