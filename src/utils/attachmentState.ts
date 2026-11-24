@@ -115,8 +115,10 @@ export class AttachmentHashCache {
 		this.loaded = true;
 		try {
 			const text = await this.store.read(this.path);
-			const parsed = text ? JSON.parse(text) : {};
-			this.entries = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+			const parsed: unknown = text ? JSON.parse(text) : {};
+			this.entries = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+				? parsed as Record<string, HashCacheEntry>
+				: {};
 		} catch {
 			this.entries = {};
 		}
@@ -289,11 +291,14 @@ export async function loadStagedAttachments(store: TextStore, path: string): Pro
 	const text = await store.read(path);
 	if (!text) return [];
 	try {
-		const raw = JSON.parse(text);
+		const raw: unknown = JSON.parse(text);
 		if (!Array.isArray(raw)) return [];
-		return raw.filter((e): e is StagedAttachment =>
-			!!e && typeof e.area === 'string' && typeof e.key === 'string' && typeof e.vaultPath === 'string'
-			&& typeof e.sha256 === 'string' && typeof e.fileName === 'string' && typeof e.size === 'number');
+		return (raw as unknown[]).filter((v): v is StagedAttachment => {
+			if (!v || typeof v !== 'object') return false;
+			const e = v as Record<string, unknown>;
+			return typeof e.area === 'string' && typeof e.key === 'string' && typeof e.vaultPath === 'string'
+				&& typeof e.sha256 === 'string' && typeof e.fileName === 'string' && typeof e.size === 'number';
+		});
 	} catch {
 		return [];
 	}

@@ -247,8 +247,9 @@ export class AttachmentManager {
 	 */
 	resolverFor(sourcePath: string, refs: readonly AttachmentRef[]): (linkpath: string) => AttachmentRender | null {
 		const byPath = new Map(refs.map(r => [r.vaultPath, r]));
+		// The renderer passes paths with any #fragment already removed.
 		return (linkpath: string) => {
-			const target = this.plugin.app.metadataCache.getFirstLinkpathDest(getLinkpath(linkpath), sourcePath);
+			const target = this.plugin.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
 			if (!(target instanceof TFile) || target.extension.toLowerCase() === 'md') return null;
 			const ref = byPath.get(target.path);
 			if (!ref) return { published: false, fileName: target.name };

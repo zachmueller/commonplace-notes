@@ -266,7 +266,7 @@ export class Publisher {
 		// up by the next "Publish updates since last full publish".
 		const startedAt = Date.now();
 		try {
-			await NoticeManager.showProgress(
+			const queued = await NoticeManager.showProgress(
 				`Processing ${files.length} notes`,
 				(async () => {
 					// Ensure all required directories exist before processing
@@ -305,6 +305,12 @@ export class Publisher {
 				})(),
 				`${files.length} notes processed`
 			);
+			// A note that failed to queue (or setup that failed) must not let the
+			// rest of the batch commit without it.
+			if (!queued.success) {
+				this.plugin.noteManager.discardQueued(profile.id);
+				throw queued.error ?? new Error('Note processing failed');
+			}
 
 			const oversized = this.plugin.attachmentManager.consumeOversized(profile.id);
 			if (oversized.length > 0) {
