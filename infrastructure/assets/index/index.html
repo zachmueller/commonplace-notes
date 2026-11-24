@@ -602,6 +602,53 @@ a[href^="#"].note-opened:hover {
 	background-color: var(--unpublished-bg-hover);
 }
 
+/* attachments (images, audio, video, files), published by remark-attachments
+   with data-cpn-attachment and given their URL by hydrateAttachments. */
+.cpn-attachment-image {
+	max-width: 100%;
+	height: auto;
+}
+
+.cpn-attachment-audio {
+	display: block;
+	width: 100%;
+	margin: .5em 0;
+}
+
+.cpn-attachment-video {
+	display: block;
+	max-width: 100%;
+	height: auto;
+}
+
+/* opens in a new tab */
+a.cpn-attachment-file::after {
+	content: "";
+	display: inline-block;
+	width: 0.75em;
+	height: 0.75em;
+	margin-left: 0.2em;
+	vertical-align: baseline;
+	background-color: currentColor;
+	-webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E") center / contain no-repeat;
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E") center / contain no-repeat;
+	opacity: 0.7;
+}
+
+.cpn-attachment-unavailable {
+	display: inline-block;
+	color: var(--text-muted);
+	background-color: var(--unpublished-bg);
+	border-radius: 3px;
+	font-size: 0.85em;
+	padding: 1px 6px;
+	margin: 0.25em 0;
+}
+
+.cpn-attachment-unavailable a {
+	color: var(--link-color);
+}
+
 /* transclusions (![[Note]] embeds), filled in at view time by
    hydrateTransclusions. Seamless: no frame, just a faint left rule and a
    source link while hovered (innermost embed only when nested). */
@@ -2278,7 +2325,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 
 		// Fetch a note revision by content hash from whichever partition holds it:
 		// known partitions first, then public, then each of the viewer's groups.
-		// Resolves { note } | { gate: true } (auth reload in progress) | { forbidden, status }.
+		// Resolves { note, prefix } | { gate: true } (auth reload in progress) | { forbidden, status }.
 		// gate/forbidden results also carry the url + response of the last request
 		// tried; a network or JSON-parse failure rejects with the request tagged.
 		async function fetchNoteJson(hash) {
@@ -2303,7 +2350,9 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 				if (cpnAuthGate(response)) return { gate: true, url, response };
 				if (response.ok) {
 					try {
-						return { note: await response.json() };
+						// prefix: the area the note was found in ('' or
+						// 'restricted/<g>/'); its attachments live in the same area.
+						return { note: await response.json(), prefix };
 					} catch (err) {
 						throw tagRequestError(err, url, response);
 					}
@@ -2367,6 +2416,7 @@ t.set=function(a,b){this.store[a]=b;return this};fa(T.prototype);var sa={encode:
 					result.url, result.response);
 			}
 			const noteData = result.note;
+			noteData.areaPrefix = result.prefix || '';
 			sessionStorage.removeItem('cpn_pw_reload');
 			// Stamp the resolved hash so the comment client has a reliable
 			// revision anchor (it is not otherwise guaranteed on noteData for
@@ -2864,6 +2914,7 @@ ${closeButton}
 						<label class="diff-wrap-toggle"><input type="checkbox"> Wrap lines</label>
 						<span class="diff-side diff-side-new">new <strong>${shortHash(meta.right)}</strong></span>
 					</div>
+					${noteData.diffNotice ? `<div class="diff-notice">${noteData.diffNotice}</div>` : ''}
 					<div class="diff-body">${noteData.diffHtml}</div>
 				`;
 
@@ -3002,6 +3053,9 @@ ${closeButton}
 			if (!isError && !isDiff) {
 				const contentEl = panel.querySelector('.content');
 				if (contentEl) {
+					// The note's own files, in the area it was loaded from. Before
+					// transclusions, so embedded notes' files resolve in theirs.
+					hydrateAttachments(contentEl, noteData.areaPrefix || '');
 					hydrateTransclusions(contentEl, { panel, ancestors: new Set([noteData.uid]), depth: 0 });
 				}
 			}
@@ -4007,22 +4061,180 @@ ${closeButton}
 			if (typeof targetNote.raw !== 'string' || typeof baseNote.raw !== 'string') {
 				throw new Error('Note JSON is missing raw Markdown; cannot diff');
 			}
-			if (targetNote.raw === baseNote.raw) {
-				return { empty: true };
+			// With Obscure attachment names, new bytes swap a hash in raw; show
+			// each revision's file names instead, from its own list.
+			const leftRaw = rawWithAttachmentNames(targetNote.raw, targetNote.attachments);
+			const rightRaw = rawWithAttachmentNames(baseNote.raw, baseNote.attachments);
+			const attachmentsChanged = changedAttachmentNames(targetNote.attachments, baseNote.attachments);
+			if (leftRaw === rightRaw) {
+				return { empty: true, attachmentsChanged };
 			}
 
 			const leftHash = targetHash;
 			const rightHash = baseNote.hash;
 			const patch = Diff.createTwoFilesPatch(
 				`${leftHash}`, `${rightHash}`,
-				targetNote.raw, baseNote.raw, '', ''
+				leftRaw, rightRaw, '', ''
 			);
 			const html = Diff2Html.html(patch, {
 				drawFileList: false,
 				matching: 'words',
 				outputFormat: 'side-by-side'
 			});
-			return { html, leftHash, rightHash };
+			return { html, leftHash, rightHash, attachmentsChanged };
+		}
+
+		// A note JSON attachments entry's hash, or null when malformed.
+		function attachmentSha(entry) {
+			const key = entry && typeof entry.key === 'string' ? entry.key : '';
+			return /^[0-9a-f]{64}\//.test(key) ? key.slice(0, 64) : null;
+		}
+
+		// raw with each listed hash replaced by its file name: `<sha>.<ext>` first,
+		// then a bare `<sha>` (files without an extension). One hash under several
+		// names takes the first by key. `null.<ext>` and lists that are missing
+		// are left alone. Hashes are 64 hex chars, so no other text can match.
+		function rawWithAttachmentNames(raw, list) {
+			if (typeof raw !== 'string' || !Array.isArray(list)) return raw;
+			const sorted = list.filter(e => attachmentSha(e) && typeof e.name === 'string')
+				.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+			const names = new Map();
+			for (const e of sorted) {
+				const sha = attachmentSha(e);
+				if (!names.has(sha)) names.set(sha, e.name);
+			}
+			let out = raw;
+			for (const [sha, name] of names) {
+				out = out.replace(new RegExp(sha + '\\.[A-Za-z0-9]+', 'g'), () => name);
+			}
+			for (const [sha, name] of names) {
+				out = out.split(sha).join(name);
+			}
+			return out;
+		}
+
+		// File names whose keys are in one revision's list but not the other's.
+		function changedAttachmentNames(leftList, rightList) {
+			const toMap = (list) => new Map((Array.isArray(list) ? list : [])
+				.filter(e => e && typeof e.key === 'string')
+				.map(e => [e.key, typeof e.name === 'string' ? e.name : e.key.slice(65)]));
+			const left = toMap(leftList);
+			const right = toMap(rightList);
+			const names = [];
+			for (const [key, name] of [...left, ...right]) {
+				if (left.has(key) && right.has(key)) continue;
+				if (!names.includes(name)) names.push(name);
+			}
+			return names;
+		}
+
+		// ====================================================================
+		// Attachments. remark-attachments publishes files as elements carrying
+		// data-cpn-attachment="<sha256>/<fileName>" (and data-cpn-fragment), never
+		// a URL: a note in several access areas is the same bytes in each, so the
+		// URL is built here for the area the note was loaded from.
+		// ====================================================================
+
+		// '/<prefix>attachments/<sha256>/<encoded name>[#fragment]', or null.
+		function attachmentUrl(key, prefix, fragment) {
+			if (typeof key !== 'string' || !/^[0-9a-f]{64}\/./.test(key)) return null;
+			if (prefix !== '' && !/^restricted\/[a-z0-9-]{1,40}\/$/.test(prefix)) return null;
+			const url = `/${prefix}attachments/${key.slice(0, 64)}/${encodeURIComponent(key.slice(65))}`;
+			return fragment ? `${url}#${fragment}` : url;
+		}
+
+		// Give every not-yet-handled attachment element under root its URL. Media
+		// get their error listener before src, so an early failure isn't missed.
+		function hydrateAttachments(root, prefix) {
+			if (!root || typeof root.querySelectorAll !== 'function') return;
+			const els = Array.from(root.querySelectorAll('[data-cpn-attachment]:not([data-cpn-att])'));
+			if (root.matches && root.matches('[data-cpn-attachment]:not([data-cpn-att])')) els.unshift(root);
+			for (const el of els) {
+				el.setAttribute('data-cpn-att', '1');
+				const url = attachmentUrl(el.getAttribute('data-cpn-attachment'), prefix || '', el.getAttribute('data-cpn-fragment'));
+				if (!url) continue;
+				const tag = el.tagName;
+				if (tag === 'IMG' || tag === 'AUDIO' || tag === 'VIDEO') {
+					el.addEventListener('error', () => { void onAttachmentError(el, url, prefix || ''); });
+					el.src = url;
+				} else if (tag === 'A') {
+					el.href = url;
+				}
+			}
+		}
+
+		// A media element failed. Its error event can't say why (401, 403, 404 and
+		// an unplayable codec all look alike), so ask the server once and label it.
+		// Never reloads the page: the next note fetch reaches cpnAuthGate anyway.
+		async function onAttachmentError(el, url, prefix) {
+			if (el.dataset.cpnAttState) return;
+			el.dataset.cpnAttState = 'checking';
+			let status = 0;
+			try {
+				const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+				status = r.status;
+			} catch (e) {
+				status = 0;
+			}
+			let kind = 'unavailable';
+			if (status === 401) {
+				kind = 'expired';
+			} else if (status === 403 && prefix.indexOf('restricted/') === 0) {
+				// Signed out (public site with access groups) or not a member.
+				// Not via getMyIdentity: it caches, and would reload on a 401.
+				kind = (await whoamiSignedIn()) === false && hostedUiLoginUrl() ? 'signin' : 'unavailable';
+			} else if (status >= 200 && status < 300 && (el.tagName === 'AUDIO' || el.tagName === 'VIDEO')) {
+				kind = 'unplayable';
+			}
+			renderAttachmentState(el, kind, url);
+		}
+
+		// true / false from a fresh whoami, or null when it can't be told.
+		async function whoamiSignedIn() {
+			const cfg = window.__CPN_CONFIG__ || {};
+			try {
+				const r = await fetch(cfg.accessWhoamiPath || '/restricted/whoami', { cache: 'no-store' });
+				if (!r.ok) return null;
+				const data = await r.json();
+				if (data.signedIn === true || data.signedIn === false) return data.signedIn;
+				const groups = Array.isArray(data.groups) ? data.groups : [];
+				return groups.length > 0 || !!data.email;
+			} catch (e) {
+				return null;
+			}
+		}
+
+		function renderAttachmentState(el, kind, url) {
+			el.dataset.cpnAttState = kind;
+			const label = document.createElement('span');
+			label.className = 'cpn-attachment-unavailable';
+			const link = (text, href) => {
+				const a = document.createElement('a');
+				a.textContent = text;
+				a.href = href;
+				return a;
+			};
+			if (kind === 'expired') {
+				// Reload as cpnAuthGate does, so the edge serves sign-in (or the
+				// unlock page) as the document. Only when the reader asks.
+				const a = link('Sign in again', location.href);
+				a.addEventListener('click', (ev) => {
+					ev.preventDefault();
+					sessionStorage.removeItem('cpn_pw_reload');
+					location.reload();
+				});
+				label.append('Your session has ended. ', a, ' to play this.');
+			} else if (kind === 'signin') {
+				label.append(link('Sign in again', hostedUiLoginUrl()), ' to play this');
+			} else if (kind === 'unplayable') {
+				const a = link('Download', url);
+				a.setAttribute('download', '');
+				label.append("This browser can't play this file. ", a);
+			} else {
+				label.textContent = 'Attachment unavailable';
+			}
+			if (el.tagName === 'IMG') el.hidden = true;
+			el.after(label);
 		}
 
 		// ====================================================================
@@ -4050,7 +4262,10 @@ ${closeButton}
 						return { missing: true };
 					}
 					const result = await fetchNoteJson(hash);
-					if (result.note) result.note.hash = hash;
+					if (result.note) {
+						result.note.hash = hash;
+						result.note.areaPrefix = result.prefix || '';
+					}
 					return result;
 				})().catch(err => {
 					console.error('Error loading embedded note:', err);
@@ -4204,6 +4419,11 @@ ${closeButton}
 			const nodes = extractTransclusion(note, ph);
 			if (!nodes) return renderTransclusionFallback(ph, 'section-missing');
 			prepareTranscludedNodes(nodes, uid);
+			// Embedded files live in the EMBEDDED note's area (a gated host can
+			// embed a public note, whose files are under attachments/).
+			for (const n of nodes) {
+				if (n.nodeType === 1) hydrateAttachments(n, note.areaPrefix || '');
+			}
 
 			let content = nodes;
 			if (ph.tagName === 'SPAN') {
@@ -4295,11 +4515,15 @@ ${closeButton}
 				if (params && params.diff) {
 					try {
 						const diff = await buildDiff(noteData, params.diff);
+						const changed = (diff.attachmentsChanged || []).join(', ');
 						if (diff.empty) {
-							noteData.diffNotice = 'No differences between these two versions.';
+							noteData.diffNotice = changed
+								? `The text is identical. Attachments changed: ${escapeHtml(changed)}.`
+								: 'No differences between these two versions.';
 						} else {
 							noteData.diffHtml = diff.html;
 							noteData.diffMeta = { left: diff.leftHash, right: diff.rightHash };
+							if (changed) noteData.diffNotice = `Attachments changed: ${escapeHtml(changed)}.`;
 						}
 					} catch (diffError) {
 						console.error('Error building diff:', diffError);

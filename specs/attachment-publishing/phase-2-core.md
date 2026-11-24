@@ -865,15 +865,15 @@ Never hand-edit `src/publish/siteAssets.ts`.
 
 ### Area prefix
 
-- [ ] `fetchNoteJson(hash)` already tries each area in turn. It also returns the
+- [x] `fetchNoteJson(hash)` already tries each area in turn. It also returns the
       `prefix` it succeeded with (`''` or `restricted/<g>/`).
-- [ ] `loadNoteByParameter` and `fetchTranscludedNote` keep it on the note data
+- [x] `loadNoteByParameter` and `fetchTranscludedNote` keep it on the note data
       (`noteData.areaPrefix`). The home note's `index.json` is public, so its
       prefix is `''`.
 
 ### Resolving attachment elements
 
-- [ ] A new `hydrateAttachments(root, prefix)` processes every
+- [x] A new `hydrateAttachments(root, prefix)` processes every
       `[data-cpn-attachment]:not([data-cpn-att])` element under `root`:
   - Build the URL `/<prefix>attachments/<sha256>/<encodeURIComponent(fileName)>`,
     plus `#<data-cpn-fragment>` if present.
@@ -888,10 +888,10 @@ unpublished), so the case that matters is a gated host embedding a public note:
 the embedded note's files live under `attachments/`, not the host's
 `restricted/<g>/attachments/`.
 
-- [ ] `createPanel` calls `hydrateAttachments(contentEl, noteData.areaPrefix)`
+- [x] `createPanel` calls `hydrateAttachments(contentEl, noteData.areaPrefix)`
       **before** `hydrateTransclusions`, inside the same
       `!isError && !isDiff` check.
-- [ ] `hydrateOne` (transclusions) calls `hydrateAttachments` on the extracted
+- [x] `hydrateOne` (transclusions) calls `hydrateAttachments` on the extracted
       nodes with the **embedded** note's prefix before inserting them.
 
 Attachment links are not `a[href^="#"]`, so `bindNoteLinks` never intercepts or
@@ -909,7 +909,7 @@ A media element's `error` event says nothing about why it failed: browsers
 report a 401, a 403, a 404 and an unplayable codec alike, mostly as
 `MEDIA_ERR_SRC_NOT_SUPPORTED`. So the handler asks the server once.
 
-- [ ] `img`, `audio` and `video` listen for `error`. The handler sends one `HEAD`
+- [x] `img`, `audio` and `video` listen for `error`. The handler sends one `HEAD`
       request for the element's URL (`cache: 'no-store'`), with no retry loop,
       and picks the label from its status. Each label is a small inline element
       after the media, which also gets a `cpn-attachment-unavailable` class.
@@ -921,12 +921,12 @@ report a 401, a 403, a 404 and an unplayable codec alike, mostly as
 | **2xx** on `audio` or `video` | The file is there but this browser can't decode it, such as HEVC in a `.mov` on Chrome or Firefox. | "This browser can't play this file", with a **Download** link to the same URL. |
 | anything else | A missing object (behind OAC a missing key is 403, because the site stacks define no custom error responses, so 403 and 404 look the same), a 2xx on `img` (a corrupt image), or a network failure. | "Attachment unavailable" |
 
-- [ ] The 401 case never reloads on its own: a media error mustn't take the
+- [x] The 401 case never reloads on its own: a media error mustn't take the
       page away from a reader mid-note. Reading on, the next note fetch reaches
       `cpnAuthGate` as it does today.
-- [ ] The 401 case doesn't go through `getMyIdentity`, which caches its result
+- [x] The 401 case doesn't go through `getMyIdentity`, which caches its result
       and would itself reload on a 401.
-- [ ] This covers a session that expires during a long recording (P1 §1).
+- [x] This covers a session that expires during a long recording (P1 §1).
 
 Links can't detect failure. A new tab for a missing or forbidden file shows the
 raw response: S3's error, or the edge's `{"error":"cpn_forbidden"}` on a
@@ -938,7 +938,7 @@ accepted v1 behavior.
 
 Attachments get no diff of their own.
 
-- [ ] **Hashes become names first.** With Obscure attachment names on (the
+- [x] **Hashes become names first.** With Obscure attachment names on (the
       default), new bytes change `raw` (`![[3fa9….mp3]]` → `![[77ab….mp3]]`), so
       comparing `raw` directly would show a hash swap rather than "the text is
       identical". Before comparing, `buildDiff` rewrites each revision's `raw`
@@ -954,7 +954,7 @@ Attachments get no diff of their own.
   hashes can't hit other text. Readers already see these names in the rendered
   note (§4), so nothing new is shown. The diff, and the identical-text check
   below, use the rewritten text.
-- [ ] Then compare the two revisions' `attachments` lists by key:
+- [x] Then compare the two revisions' `attachments` lists by key:
   - If the rewritten `raw` differs and the lists differ, show a notice above the
     diff: "Attachments changed: song.mp3, cover.png."
   - If the rewritten `raw` is identical and the lists differ, replace "No
@@ -965,11 +965,11 @@ Attachments get no diff of their own.
 
 Both light and dark themes:
 
-- [ ] `.cpn-attachment-image`: `max-width: 100%; height: auto`.
-- [ ] `.cpn-attachment-audio`: `display: block; width: 100%; margin: .5em 0`.
-- [ ] `.cpn-attachment-video`: `display: block; max-width: 100%; height: auto`.
-- [ ] `.cpn-attachment-file`: an "opens in a new tab" icon after the text.
-- [ ] `.cpn-attachment-unavailable`: muted, with a small inline label.
+- [x] `.cpn-attachment-image`: `max-width: 100%; height: auto`.
+- [x] `.cpn-attachment-audio`: `display: block; width: 100%; margin: .5em 0`.
+- [x] `.cpn-attachment-video`: `display: block; max-width: 100%; height: auto`.
+- [x] `.cpn-attachment-file`: an "opens in a new tab" icon after the text.
+- [x] `.cpn-attachment-unavailable`: muted, with a small inline label.
 
 ### Upgrade note
 
@@ -1082,17 +1082,17 @@ For `src/utils/attachments.ts`:
 
 In the style of `test-transclusions-runtime.ts`:
 
-- [ ] `hydrateAttachments` URL building and encoding.
-- [ ] Embedded-note scoping.
-- [ ] Each `HEAD` branch of the error handler: 401 on a whole-site Cognito gate
+- [x] `hydrateAttachments` URL building and encoding.
+- [x] Embedded-note scoping.
+- [x] Each `HEAD` branch of the error handler: 401 on a whole-site Cognito gate
       and on a password gate (sign-in label, no automatic reload); 403 on a
       restricted URL with whoami `signedIn: false` (sign-in link) and `true`
       (unavailable); 403 on a public URL (unavailable); 404; a 2xx for `audio`
       and `video` (can't play, with Download) and for `img` (unavailable); a
       network failure (unavailable).
-- [ ] The diff's hash-to-name rewriting: dotted and bare hashes, one hash under
+- [x] The diff's hash-to-name rewriting: dotted and bare hashes, one hash under
       two names, `null.<ext>` and missing lists left alone.
-- [ ] A bytes-only change with Obscure attachment names on reports "The text is
+- [x] A bytes-only change with Obscure attachment names on reports "The text is
       identical", plus the notice wording.
 
 ### End-to-end (sandbox `random` only)
