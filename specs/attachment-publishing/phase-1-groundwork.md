@@ -5,7 +5,8 @@ before phases 2 and 3.
 
 Four changes that don't depend on attachment publishing:
 
-1. [Sign-in session length](#1-sign-in-session-length): 12 hours by default.
+1. [Sign-in session length](#1-sign-in-session-length): 12 hours for new
+   deployments; existing sites keep 1 hour until their author changes it.
 2. [Excluded directories](#2-excluded-directories): matched from the vault
    root, with `*` and `**`.
 3. [Raw-scrub fixes](#3-raw-scrub-fixes): correct splice offsets, escaped pipes
@@ -45,8 +46,13 @@ Cognito's default ID token lifetime of 1 hour. Both must be raised together,
 because a longer cookie holding a 1-hour token changes nothing.
 
 Media requests (phase 2) can't trigger the site's reload-to-sign-in, so a long
-recording stops when the session ends. A 12-hour default makes that rare, and
-the remaining risk is accepted. P2 §9 covers the message readers see.
+recording stops when the session ends. A 12-hour default for new deployments
+makes that rare, and the remaining risk is accepted. P2 §9 covers the message
+readers see.
+
+**Existing pools keep 1 hour.** A longer session also widens how long a removed
+member keeps access (Effect and trade-offs, below), so an existing site's
+session never changes unless its author chooses a new length with **Apply**.
 
 ### Cognito pool stack
 
@@ -78,11 +84,22 @@ setting.
       and `buildCognitoAuthParameters`.
 - [ ] Persist `DeploymentConfig.sessionHours` and `CognitoAuthState.sessionHours`
       (`src/types.ts`).
+- [ ] New `effectiveSessionHours(profile)`: the persisted
+      `CognitoAuthState.sessionHours`, or **1** when it is absent. Absent means
+      the pool was deployed before this setting, so its tokens last Cognito's
+      default of 1 hour. Every caller that needs "the session length" uses it,
+      including the restricted attachments' `max-age` (P2 §7).
 - [ ] **Deployment wizard**, Cognito step: a "Sign-in session length (hours)"
-      field, default 12.
+      field. It defaults to 12 for a new pool and to `effectiveSessionHours`
+      when the wizard re-runs against a live pool.
 - [ ] **Settings → Infrastructure → Cognito gate**
       (`src/settings/profile/infrastructure.ts`): a "Sign-in session length"
-      row with an hours field (1–24) and an **Apply** button.
+      row with an hours field (1–24) showing `effectiveSessionHours`, and an
+      **Apply** button. On a pool without a persisted value, the description
+      reads: "This site uses 1-hour sessions, Cognito's default when it was
+      deployed. Longer sessions mean fewer sign-ins and media that keeps
+      playing, but a reader removed from a group keeps access for up to one
+      session length."
 - [ ] New `updateCognitoSessionLength(profile, hours)`, which:
   - [ ] runs `UpdateStack` on the pool stack in us-east-1 with the **current**
         `COGNITO_AUTH_TEMPLATE` (older pools lack the parameter, so
@@ -96,17 +113,32 @@ setting.
       the current template would remove that function without the upgrade's
       retain step.
 - [ ] The Apply row is disabled on imported stacks.
-- [ ] `upgradeCognitoGate` and every other pool-stack update pass the persisted
-      `sessionHours`, so they don't reset it to the default.
+- [ ] **No update ever relies on the template default.** Every pool-stack
+      update that sends the current `COGNITO_AUTH_TEMPLATE`
+      (`upgradeCognitoGate`, the update path of `deployCognitoAuthStack`,
+      `updateCognitoAuthStack`) passes `SessionHours` **explicitly** as
+      `effectiveSessionHours(profile)`. This matters for pools that predate the
+      parameter: `buildCognitoAuthUpdateParameters` omits keys the live stack
+      was never deployed with, so without an explicit value the template default
+      of 12 would apply and silently lengthen an existing site's sessions.
+- [ ] After such an update succeeds on a pool without a persisted value, persist
+      `sessionHours: 1`, so later updates take the usual path.
+- [ ] `updateCognitoCallbackUrl` keeps `UsePreviousTemplate`. It needs no
+      change: a pool whose template lacks the parameter omits it, and one that
+      has it keeps it with `UsePreviousValue`.
+- [ ] Only a **new** pool (`CreateStack`) takes the wizard's value, 12 by
+      default.
 
 ### Effect and trade-offs
 
+- New deployments get 12 hours. Existing sites stay at 1 hour until their
+  author applies a longer length.
 - It applies at each reader's next sign-in. Existing cookies keep their expiry.
 - It covers the whole-site Cognito gate, access-group sign-in on public sites,
   and comment sign-in. They share one app client.
 - Removing someone from a group, or from the site, takes effect within one
-  session length (12 h by default) instead of about an hour. A copied cookie is
-  also valid that long.
+  session length (12 h by default on new sites) instead of about an hour. A
+  copied cookie is also valid that long.
 - From phase 2, restricted attachments are cached privately for one session
   length (P2 §7).
 
@@ -505,11 +537,29 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
 - [ ] The floor at 0 for an expired token.
 - [ ] The fallback to 3600 when `exp` is missing or unreadable.
 
+### `test-session-hours.ts` (new)
+
+- [ ] `effectiveSessionHours` returns the persisted value, and 1 when none is
+      persisted.
+- [ ] The update parameters for `upgradeCognitoGate`, `deployCognitoAuthStack`
+      (update path) and `updateCognitoAuthStack` include `SessionHours`
+      explicitly: `1` for a pool deployed without the parameter and without a
+      persisted value, otherwise the persisted value. Never `UsePreviousValue`
+      on a pool that lacks the key, and never omitted.
+- [ ] `updateCognitoCallbackUrl` omits `SessionHours` for a pool that lacks it
+      and uses `UsePreviousValue` for one that has it.
+- [ ] A new pool's create parameters use the wizard's value, 12 by default.
+
 ### End-to-end (sandbox `random` only)
 
+- [ ] On a pool deployed before this change, run **Upgrade Cognito gate**
+      without touching the session length. After signing in, the `cpn_id`
+      cookie's `Max-Age` is about 3600 and the token's `exp` is about 1 h out,
+      and the profile now records `sessionHours: 1`.
 - [ ] Apply a session length of 12 h. After signing in, the `cpn_id` cookie's
       `Max-Age` is about 43200 and the token's `exp` is about 12 h out. A
       pre-upgrade pool's Google sign-in still works after Apply.
+- [ ] A new deployment with the wizard's defaults gets 12-hour sessions.
 - [ ] With `**/private/` excluded, a note in `Projects/private/` doesn't
       publish, and one in `Projects/public/` does.
 - [ ] With Obscure attachment names on, a note embedding `Media/song.mp3`
@@ -521,7 +571,8 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
 ## 6. Docs
 
 - [ ] `docs/auth-and-access.md`: "Membership changes apply at a reader's next
-      sign-in…" updated for the 12-hour default and the setting.
+      sign-in…" updated for the setting: 12 hours on new sites, 1 hour on sites
+      deployed earlier until the author changes it, and the access trade-off.
 - [ ] `docs/infrastructure-deployment.md`: the session length field in the
       wizard and the Apply row.
 - [ ] `docs/settings.md`: the excluded-directory matching rules with examples,
@@ -530,7 +581,10 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
       section. Note that rendered HTML still shows folder paths for vault-file
       links until attachment publishing ships.
 - [ ] Release notes: the one-time hash change for notes with attachment links
-      or corrupted `raw`, and the excluded-directories upgrade.
+      or corrupted `raw`, the excluded-directories upgrade, and the session
+      length setting ("Existing sites keep 1-hour sign-in sessions. To lengthen
+      them, use Settings → Infrastructure → Cognito gate → Sign-in session
+      length").
 
 ## Done when
 

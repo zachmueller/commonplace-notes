@@ -524,6 +524,10 @@ profile, because a file's hash doesn't depend on the profile.
       `app.saveLocalStorage('cpn-machine-id', …)` and read with
       `app.loadLocalStorage`. Obsidian's local storage is per device and never
       synced.
+- [ ] **Raise `minAppVersion` to 1.8.7** in `manifest.json`, because
+      `loadLocalStorage` and `saveLocalStorage` are `@since 1.8.7` and the
+      plugin requires 1.7.2 today. `version-bump.mjs` then records 1.8.7 in
+      `versions.json` for this release. The release notes say so (§11).
 - [ ] **File.** `<configDir>/plugins/commonplace-notes/attachment-hash-cache.<machineId>.json`
       (`manifest.dir`). Each machine reads and writes only its own file, so a
       synced plugin folder never makes two machines overwrite each other's
@@ -676,6 +680,14 @@ This runs only on entries that passed the re-check above.
         up to 4 part uploads in flight. Before `CompleteMultipartUpload`, the
         final digest is compared with the key's hash. On a mismatch, or any
         other failure, call `AbortMultipartUpload`, so no object is created.
+  - [ ] **Checksums.** The bundled `@aws-sdk/client-s3` (3.744) adds a CRC32
+        checksum to `PutObject` and `UploadPart` by default (since 3.729).
+        Make the multipart path consistent with that, without changing the
+        shared S3 client's defaults: pass `ChecksumAlgorithm: 'CRC32'` on
+        `CreateMultipartUpload`, and give `CompleteMultipartUpload` each part's
+        `ChecksumCRC32` from its `UploadPart` response, beside its `ETag` and
+        `PartNumber`. The multipart end-to-end check (§10) confirms it against
+        S3.
   - [ ] Headers (below) are set on `PutObject` and on `CreateMultipartUpload`.
 - [ ] **Step 4.** Record it in `uploaded[area]`. Save `attachments.json` after
       the attachment step, including on failure, so finished uploads aren't
@@ -748,7 +760,9 @@ session cookie and could read their gated notes.
   | public | whole-site gate (`cognito`, `password`, `byo`) | `private, max-age=31536000, immutable` |
   | `restricted/<g>/` | any | `private, max-age=<session length in seconds>, immutable` |
 
-The session length is the profile's sign-in session (P1 §1), 12 h by default.
+The session length is `effectiveSessionHours(profile)` (P1 §1): the persisted
+value, 12 h by default on new sites, or 1 h on a pool deployed before the
+setting existed.
 Notes in restricted areas use `private, no-store` (`RESTRICTED_CACHE_CONTROL`),
 but re-downloading a 20 MB file on every play is not acceptable. The `private`
 directive keeps shared caches out. The edge function runs on every viewer
@@ -874,8 +888,9 @@ unpublished), so the case that matters is a gated host embedding a public note:
 the embedded note's files live under `attachments/`, not the host's
 `restricted/<g>/attachments/`.
 
-- [ ] `renderNote` calls `hydrateAttachments(contentEl, noteData.areaPrefix)`
-      **before** `hydrateTransclusions`.
+- [ ] `createPanel` calls `hydrateAttachments(contentEl, noteData.areaPrefix)`
+      **before** `hydrateTransclusions`, inside the same
+      `!isError && !isDiff` check.
 - [ ] `hydrateOne` (transclusions) calls `hydrateAttachments` on the extracted
       nodes with the **embedded** note's prefix before inserting them.
 
@@ -890,25 +905,28 @@ covers a note's own attachments only.
 
 ### Unavailable and expired states
 
-- [ ] `img`, `audio` and `video` listen for `error`. On error, the element gets a
-      `cpn-attachment-unavailable` class and a small inline label, "Attachment
-      unavailable", with no retry loop. A missing object behind OAC returns 403
-      (the site stacks define no custom error responses), so 403 and 404 look
-      the same here.
-- [ ] **Expired session.** In a restricted area, and in **every** area on a
-      whole-site Cognito gate (where a signed-out media request to the public
-      area gets the edge's 401), the error handler first fetches
-      `/restricted/whoami` (`cache: 'no-store'`). If `signedIn` is false, the
-      label instead reads "Sign in again to play this", with the existing
-      sign-in link (`hostedUiLoginUrl`). This covers a session that expires
-      during a long recording (P1 §1).
-- [ ] **Unsupported format.** An `audio` or `video` element whose `error.code` is
-      `MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED` (4) loaded but can't be played: a
-      codec this browser lacks, such as HEVC in a `.mov` on Chrome or Firefox.
-      403 and 404 also report code 4 in most browsers, so the handler first
-      sends a `HEAD` request for the URL (`cache: 'no-store'`). If it succeeds,
-      the label reads "This browser can't play this file" with a **Download**
-      link to the same URL. Otherwise the cases above apply.
+A media element's `error` event says nothing about why it failed: browsers
+report a 401, a 403, a 404 and an unplayable codec alike, mostly as
+`MEDIA_ERR_SRC_NOT_SUPPORTED`. So the handler asks the server once.
+
+- [ ] `img`, `audio` and `video` listen for `error`. The handler sends one `HEAD`
+      request for the element's URL (`cache: 'no-store'`), with no retry loop,
+      and picks the label from its status. Each label is a small inline element
+      after the media, which also gets a `cpn-attachment-unavailable` class.
+
+| `HEAD` result | Meaning | Label |
+|---------------|---------|-------|
+| **401** | The session expired on a whole-site Cognito or password gate. Both edge functions answer a signed-out data request with 401 and `x-cpn-auth: required`. | "Your session has ended. **Sign in again** to play this." The link reloads the page, as `cpnAuthGate` does, so the edge serves the sign-in redirect or the unlock page as the document. |
+| **403** on a `restricted/<g>/` URL | Signed out on a public site with access groups (the edge answers 403 there, never 401), or signed in without membership. The handler fetches `/restricted/whoami` (`cache: 'no-store'`) to tell them apart. | If `signedIn` is false: "**Sign in again** to play this", with the existing sign-in link (`hostedUiLoginUrl`). Otherwise "Attachment unavailable". |
+| **2xx** on `audio` or `video` | The file is there but this browser can't decode it, such as HEVC in a `.mov` on Chrome or Firefox. | "This browser can't play this file", with a **Download** link to the same URL. |
+| anything else | A missing object (behind OAC a missing key is 403, because the site stacks define no custom error responses, so 403 and 404 look the same), a 2xx on `img` (a corrupt image), or a network failure. | "Attachment unavailable" |
+
+- [ ] The 401 case never reloads on its own: a media error mustn't take the
+      page away from a reader mid-note. Reading on, the next note fetch reaches
+      `cpnAuthGate` as it does today.
+- [ ] The 401 case doesn't go through `getMyIdentity`, which caches its result
+      and would itself reload on a 401.
+- [ ] This covers a session that expires during a long recording (P1 §1).
 
 Links can't detect failure. A new tab for a missing or forbidden file shows the
 raw response: S3's error, or the edge's `{"error":"cpn_forbidden"}` on a
@@ -1066,9 +1084,12 @@ In the style of `test-transclusions-runtime.ts`:
 
 - [ ] `hydrateAttachments` URL building and encoding.
 - [ ] Embedded-note scoping.
-- [ ] The unavailable state, the expired-session label, and the
-      unsupported-format label (media error code 4 with a successful `HEAD`,
-      versus code 4 with a 403).
+- [ ] Each `HEAD` branch of the error handler: 401 on a whole-site Cognito gate
+      and on a password gate (sign-in label, no automatic reload); 403 on a
+      restricted URL with whoami `signedIn: false` (sign-in link) and `true`
+      (unavailable); 403 on a public URL (unavailable); 404; a 2xx for `audio`
+      and `video` (can't play, with Download) and for `img` (unavailable); a
+      network failure (unavailable).
 - [ ] The diff's hash-to-name rewriting: dotted and bare hashes, one hash under
       two names, `null.<ext>` and missing lists left alone.
 - [ ] A bytes-only change with Obscure attachment names on reports "The text is
@@ -1100,8 +1121,14 @@ In the style of `test-transclusions-runtime.ts`:
       Restore the credentials, add the attachment's folder to Excluded
       directories, and publish again. The file isn't uploaded, the notice names
       it, and the note shows "Attachment unavailable".
-- [ ] Upload a file over 16 MB (multipart). It plays, and no incomplete
-      multipart upload remains (`ListMultipartUploads`).
+- [ ] Upload a file over 16 MB (multipart). `CompleteMultipartUpload` accepts
+      the CRC32 part checksums, the file plays, and no incomplete multipart
+      upload remains (`ListMultipartUploads`).
+- [ ] On a whole-site Cognito gate, open a note with an mp3, clear the `cpn_id`
+      cookie and press play. The sign-in label shows, the page doesn't reload
+      by itself, and the link leads through sign-in back to the note. On a
+      public site with access groups, the same steps on a gated note show the
+      sign-in link.
 - [ ] Upload one near the cap and watch Obsidian's memory: it stays near the
       in-flight parts, not the file size.
 - [ ] Overwrite a large file while it uploads: the multipart upload is aborted,
@@ -1126,7 +1153,8 @@ In the style of `test-transclusions-runtime.ts`:
       one session length, headers fixed at upload.
 - [ ] The S3 permissions publishing now uses: `s3:GetObject` for HEAD,
       `s3:ListBucket` for the completeness probe, `s3:AbortMultipartUpload`.
-- [ ] Release notes (with phase 3): "Attachments (Beta)", off by default.
+- [ ] Release notes (with phase 3): "Attachments (Beta)", off by default. The
+      release requires Obsidian 1.8.7 or later (§6, Machine ID).
 
 ## Done when
 

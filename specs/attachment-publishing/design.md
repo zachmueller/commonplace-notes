@@ -104,7 +104,9 @@ Leaving beta is a separate decision. It needs all of:
 | Publishing machines | Cleanup assumes **one publishing machine per profile**, or one whose plugin data finished syncing before publishing. The docs say so (Assumptions, below). |
 | Cleanup and the mode | Orphan sweeps run **whatever the attachment mode**, including `off`, whenever the bucket may hold attachments. Turning the mode off must never leave a gated note's files public (P3 §2). |
 | Deleted bytes | Add an S3 lifecycle rule that expires noncurrent versions and aborts stale multipart uploads (P3 §5). |
-| Sign-in session | Raise the session from 1 hour to **12 hours** by default, configurable per profile in the infrastructure settings. Accept media stopping at session expiry (P1 §1). |
+| Sign-in session | **12 hours** for new deployments, configurable per profile in the infrastructure settings. **Existing pools keep 1 hour** until their author applies a longer length, because a longer session also lengthens a removed member's access. No stack update ever applies the template default to an existing pool. Accept media stopping at session expiry (P1 §1). |
+| Media errors on the site | One `HEAD` request for the failed URL decides the label: 401 means the session expired (sign-in link, no automatic reload), a 403 on a restricted URL is checked with whoami, a 2xx on audio or video means the browser can't play it, anything else is unavailable (P2 §9). |
+| Obsidian version | Phase 2 raises `minAppVersion` to **1.8.7** for `app.loadLocalStorage`, which holds the per-device machine ID (P2 §6). |
 
 ## Non-goals (v1)
 
@@ -177,6 +179,12 @@ These were settled while writing the spec. Change any you disagree with:
   (P2 §4).
 - A publish request while the profile is busy is **refused**, not queued
   (P2 §1).
+- Existing Cognito pools keep their **1-hour** sessions. Only new deployments
+  default to 12 hours (P1 §1).
+- A media error never reloads the page by itself. An expired session shows a
+  sign-in link instead (P2 §9).
+- `minAppVersion` rises to **1.8.7** rather than falling back to
+  `window.localStorage` for the machine ID (P2 §6).
 
 ## Testing conventions
 
