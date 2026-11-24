@@ -44,6 +44,13 @@ export interface PublishingProfile {
 	publishContentIndex: boolean;
 	/** Replace wikilink note-paths with UIDs in the published raw Markdown (e.g. `[[Note]]` → `[[UID|Note]]`) to scrub titles. Default true. */
 	obscureRawWikilinks?: boolean;
+	/**
+	 * Replace links to non-Markdown vault files in the published raw Markdown
+	 * with the file's content hash, or `null` when it doesn't publish (e.g.
+	 * `![[Media/song.mp3]]` → `![[null.mp3]]`), so folder paths stay private.
+	 * Applies whatever the attachment mode, and on Local profiles. Absent ≡ true.
+	 */
+	obscureRawAttachments?: boolean;
     publishMechanism: 'AWS' | 'Local';
     awsSettings?: AWSProfileSettings;
     localSettings?: LocalProfileSettings;

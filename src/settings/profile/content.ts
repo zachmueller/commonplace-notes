@@ -3,8 +3,8 @@ import { ProfileContext } from '../context';
 import { HomeNoteSuggestModal } from '../homeNoteSuggestModal';
 
 /**
- * "Content" section: home page, site-wide search opt-in, wikilink obfuscation,
- * and excluded directories.
+ * "Content" section: home page, site-wide search opt-in, wikilink and
+ * attachment-name obfuscation, and excluded directories.
  */
 export function renderContentSection(ctx: ProfileContext, containerEl: HTMLElement): void {
 	const { app, plugin, profile, index } = ctx;
@@ -53,6 +53,16 @@ export function renderContentSection(ctx: ProfileContext, containerEl: HTMLEleme
 			.setValue(profile.obscureRawWikilinks ?? true)
 			.onChange(async (value) => {
 				plugin.settings.publishingProfiles[index].obscureRawWikilinks = value;
+				await plugin.saveSettings();
+			}));
+
+	new Setting(containerEl)
+		.setName('Obscure attachment names in published Markdown')
+		.setDesc('Replace links to images, audio and other files in the published raw Markdown with the file\'s content hash, or null when the file isn\'t published (e.g. ![[Media/song.mp3]] → ![[3fa9….mp3]]), so folder paths stay private. As with note titles, the rendered note still shows a file\'s name unless the link has an alias. Rendered HTML and search are unaffected.')
+		.addToggle(toggle => toggle
+			.setValue(profile.obscureRawAttachments ?? true)
+			.onChange(async (value) => {
+				plugin.settings.publishingProfiles[index].obscureRawAttachments = value;
 				await plugin.saveSettings();
 			}));
 

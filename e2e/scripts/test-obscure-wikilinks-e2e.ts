@@ -23,11 +23,17 @@
  *      UID anchor (proving HTML is built from the original path-form raw).
  *   5. With obscuring OFF: `raw` is the original path-form text and the content
  *      hash differs from the obscured run.
- *   6. No plugin errors captured during the run.
+ *   6. Obscure attachment names ON (the default): an embed and a Markdown image
+ *      of a vault audio file become `![[null.mp3]]` / `![clip](null.mp3)`,
+ *      with no folder path left in `raw`.
+ *   7. Obscure attachment names OFF: both links appear as written.
+ *   8. No plugin errors captured during the run.
  *
  * Run: npx tsx e2e/scripts/test-obscure-wikilinks-e2e.ts
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import { runTest, type TestContext } from "../lib/test-harness";
 import { createTestNote } from "../lib/test-helpers";
 
@@ -38,6 +44,8 @@ import { createTestNote } from "../lib/test-helpers";
 const SOURCE_NOTE = "Obscure-Source.md";
 const TARGET_NOTE = "Obscure-Target.md";
 const PROFILE_ID = "public";
+const MEDIA_DIR = "Obscure-Media";
+const MEDIA_FILE = `${MEDIA_DIR}/song.mp3`;
 
 // Frontmatter that opts a note into the `public` publish profile (the test vault's only profile).
 const PUBLISH_FM = `---\ncpn-publish-contexts:\n  - ${PROFILE_ID}\n---\n`;
@@ -59,6 +67,10 @@ const SOURCE_BODY = [
 	"Ghost: [[No Such Note]].",
 	"",
 	"Same note: [[#Local Heading]].",
+	"",
+	`Embed: ![[${MEDIA_FILE}]]`,
+	"",
+	`Image: ![clip](${MEDIA_FILE})`,
 	"",
 	"## Local Heading",
 	"",
@@ -99,9 +111,10 @@ async function safeShot(ctx: TestContext, name: string): Promise<string | undefi
 async function queueAndRead(
 	ctx: TestContext,
 	obscure: boolean,
+	obscureAttachments = true,
 ): Promise<QueueProbe> {
 	return ctx.page.evaluate(
-		async ({ sourceName, targetName, profileId, obscure }) => {
+		async ({ sourceName, targetName, profileId, obscure, obscureAttachments }) => {
 			const app = (window as any).app;
 			const plugin = app?.plugins?.plugins?.["commonplace-notes"];
 			if (!plugin) return { error: "plugin not found" };
@@ -117,6 +130,7 @@ async function queueAndRead(
 			);
 			if (!profile) return { error: `profile not found: ${profileId}` };
 			profile.obscureRawWikilinks = obscure;
+			profile.obscureRawAttachments = obscureAttachments;
 
 			try {
 				await plugin.noteManager.queueNote(sourceFile, profileId);
@@ -136,7 +150,7 @@ async function queueAndRead(
 				targetUid: plugin.frontmatterManager.getNoteUID(targetFile) as string | null,
 			};
 		},
-		{ sourceName: SOURCE_NOTE, targetName: TARGET_NOTE, profileId: PROFILE_ID, obscure },
+		{ sourceName: SOURCE_NOTE, targetName: TARGET_NOTE, profileId: PROFILE_ID, obscure, obscureAttachments },
 	);
 }
 
@@ -281,8 +295,39 @@ async function testUnobscuredAndHashDiff(ctx: TestContext): Promise<void> {
 	}
 }
 
+async function testObscuredAttachments(ctx: TestContext): Promise<void> {
+	console.log("\nTest 6-7: Obscure attachment names");
+
+	const on = await queueAndRead(ctx, true, true);
+	if (on.error) {
+		ctx.fail("Attachments ON queueNote", on.error);
+	} else {
+		const raw = on.raw ?? "";
+		const ok = raw.includes("Embed: ![[null.mp3]]")
+			&& raw.includes("Image: ![clip](null.mp3)")
+			&& !raw.includes(MEDIA_DIR);
+		if (ok) {
+			ctx.pass("Attachments ON → null.<ext>", "raw has ![[null.mp3]] and ![clip](null.mp3), no folder path");
+		} else {
+			ctx.fail("Attachments ON → null.<ext>", `expected null.mp3 targets and no ${MEDIA_DIR}\n--- raw ---\n${raw}`);
+		}
+	}
+
+	const off = await queueAndRead(ctx, true, false);
+	if (off.error) {
+		ctx.fail("Attachments OFF queueNote", off.error);
+	} else {
+		const raw = off.raw ?? "";
+		if (raw.includes(`Embed: ![[${MEDIA_FILE}]]`) && raw.includes(`Image: ![clip](${MEDIA_FILE})`)) {
+			ctx.pass("Attachments OFF → as written", "raw keeps both links with their folder path");
+		} else {
+			ctx.fail("Attachments OFF → as written", `expected the links as written\n--- raw ---\n${raw}`);
+		}
+	}
+}
+
 async function testNoErrors(ctx: TestContext): Promise<void> {
-	console.log("\nTest 6: no plugin errors captured");
+	console.log("\nTest 8: no plugin errors captured");
 	const errors = ctx.collector.getLogsByLevel("error");
 	if (errors.length === 0) {
 		ctx.pass("No plugin errors", "0 error-level log entries");
@@ -301,6 +346,7 @@ async function tests(ctx: TestContext): Promise<void> {
 	await testSettingDefault(ctx);
 	await testObscuredScrub(ctx);
 	await testUnobscuredAndHashDiff(ctx);
+	await testObscuredAttachments(ctx);
 	await testNoErrors(ctx);
 }
 
@@ -314,10 +360,13 @@ runTest(
 		setupVault: (vaultPath) => {
 			createTestNote(vaultPath, SOURCE_NOTE, PUBLISH_FM + SOURCE_BODY);
 			createTestNote(vaultPath, TARGET_NOTE, PUBLISH_FM + TARGET_BODY);
+			// Any bytes will do: only the path and extension matter to the scrub.
+			fs.mkdirSync(path.join(vaultPath, MEDIA_DIR), { recursive: true });
+			fs.writeFileSync(path.join(vaultPath, MEDIA_FILE), Buffer.from([0x49, 0x44, 0x33, 0x04]));
 		},
 		// Notes pick up minted UIDs / queued frontmatter writes during the run;
 		// remove them so the next run starts clean.
-		cleanupFiles: [SOURCE_NOTE, TARGET_NOTE],
+		cleanupFiles: [SOURCE_NOTE, TARGET_NOTE, MEDIA_DIR],
 	},
 	tests,
 );

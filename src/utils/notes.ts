@@ -5,7 +5,7 @@ import { ResolvedNoteInfo } from './remarkObsidianLinks';
 import { Logger } from './logging';
 import { UrlScheme } from './urlScheme';
 import type { ParserContext } from './parser/types';
-import { scrubRawWikilinks } from './rewriteRawWikilinks';
+import { scrubRawWikilinks, type ResolvedTarget } from './rewriteRawWikilinks';
 import type { PublishingProfile } from '../types';
 import { linkVisibleFrom, partitionsFor, validateNoteAccess, visibleInPartition } from './access';
 import { NoticeManager } from './notice';
@@ -221,11 +221,21 @@ export class NoteManager {
 	}
 
 	/**
-	 * Rewrite `[[wikilinks]]` in raw Markdown so the human-readable note path is
-	 * replaced by the target note's UID, with the title carried as an Obsidian
-	 * inline alias — e.g. `[[Some Title]]` → `[[ABCD1234|Some Title]]`. This
-	 * scrubs potentially sensitive note titles out of the published `raw` field
-	 * while keeping the link relationships intact.
+	 * Scrub the published `raw` for a profile. The one helper behind both the
+	 * publish (queueNote) and the content-index rebuild, so the index can't drift
+	 * from the published `raw`. Two independent per-profile settings (both
+	 * default on):
+	 *
+	 * - **Obscure wikilinks** (`obscureRawWikilinks`): a wikilink's note path is
+	 *   replaced by the target note's UID, with the title carried as an inline
+	 *   alias — e.g. `[[Some Title]]` → `[[ABCD1234|Some Title]]`.
+	 * - **Obscure attachment names** (`obscureRawAttachments`): links to
+	 *   non-Markdown vault files, wikilink or inline Markdown, get the file's
+	 *   content hash as their target, or `null` when it doesn't publish
+	 *   (`![[Media/song.mp3]]` → `![[null.mp3]]`). Nothing publishes as an
+	 *   attachment yet, so every file target is `null.<ext>` today.
+	 *
+	 * Returns `raw` unchanged when both are off.
 	 *
 	 * IMPORTANT — this output is for the published `raw` field and the content
 	 * hash ONLY. It must NOT be fed back into {@link markdownToHtml}: the HTML
@@ -234,25 +244,30 @@ export class NoteManager {
 	 * `content` is always built from the original (path-form) raw.
 	 *
 	 * The parse/splice mechanics live in the pure {@link scrubRawWikilinks} core
-	 * (unit-testable without Obsidian); this wrapper supplies the UID lookup.
+	 * (unit-testable without Obsidian); this wrapper supplies the lookup.
 	 * UID resolution goes through FrontmatterManager.getNoteUID (NOT a fresh
 	 * generateUID) so a target lacking a UID is minted exactly once and cached —
 	 * the same value the HTML path and the eventual frontmatter write all see.
-	 * Targets with no resolvable UID (missing, non-`.md`, or not in any publish
-	 * context) get the sentinel `null`, which cannot collide with an uppercase
-	 * Crockford Base32 UID.
-	 *
-	 * `profileId` is accepted for symmetry with markdownToHtml and to leave room
-	 * for profile-scoped resolution later; UID minting is profile-agnostic today.
+	 * A wikilink whose target is missing gets the note sentinel `null`, as it
+	 * always has; a Markdown link whose target is missing is left as written.
 	 */
-	async rewriteRawWikilinks(raw: string, currentFile: TFile, profileId: string): Promise<string> {
-		return scrubRawWikilinks(raw, (notePath: string): string | null => {
-			const target = this.plugin.app.metadataCache.getFirstLinkpathDest(notePath, currentFile.path);
-			if (target instanceof TFile && target.extension === 'md') {
-				return this.plugin.frontmatterManager.getNoteUID(target);
+	async rewriteRawWikilinks(raw: string, currentFile: TFile, profile: PublishingProfile | undefined): Promise<string> {
+		const opts = {
+			notes: profile?.obscureRawWikilinks ?? true,
+			attachments: profile?.obscureRawAttachments ?? true
+		};
+		if (!opts.notes && !opts.attachments) return raw;
+		return scrubRawWikilinks(raw, (linkPath: string): ResolvedTarget => {
+			const target = this.plugin.app.metadataCache.getFirstLinkpathDest(linkPath, currentFile.path);
+			if (target instanceof TFile) {
+				if (target.extension === 'md') {
+					return { kind: 'note', uid: this.plugin.frontmatterManager.getNoteUID(target) };
+				}
+				// Phase 2 supplies the hash for files in the note's attachment list.
+				return { kind: 'file', sha256: null, ext: target.extension };
 			}
-			return null;
-		});
+			return { kind: 'note', uid: null };
+		}, opts);
 	}
 
 	/**
@@ -302,15 +317,12 @@ export class NoteManager {
 			}
 			this.blockedNotes.delete(key);
 
-			// Optionally scrub wikilink note-paths down to UIDs in the published
-			// raw Markdown (per-profile, default on). This scrubbed text feeds the
-			// content hash and the stored `raw`/content-index — but NOT the HTML
-			// render, which must keep the original path-form links to resolve.
-			const obscure = this.plugin.settings.publishingProfiles
-				.find(p => p.id === profileId)?.obscureRawWikilinks ?? true;
-			const scrubbedRaw = obscure
-				? await this.rewriteRawWikilinks(raw, file, profileId)
-				: raw;
+			// Optionally scrub note paths and attachment paths out of the published
+			// raw Markdown (per-profile, both default on). This scrubbed text feeds
+			// the content hash and the stored `raw`/content-index — but NOT the
+			// HTML render, which must keep the original path-form links to resolve.
+			const scrubbedRaw = await this.rewriteRawWikilinks(
+				raw, file, this.plugin.settings.publishingProfiles.find(p => p.id === profileId));
 
 			// Calculate current hash over the scrubbed raw so toggling the setting
 			// or a target gaining/losing a UID correctly re-publishes the note.

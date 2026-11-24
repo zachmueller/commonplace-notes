@@ -242,6 +242,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			isPublic: false,
 			publishContentIndex: true,
 			obscureRawWikilinks: true,
+			obscureRawAttachments: true,
 			publishMechanism: 'AWS',
 			indicator: {
 				style: 'color',

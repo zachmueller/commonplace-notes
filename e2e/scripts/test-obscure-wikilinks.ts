@@ -5,7 +5,9 @@
  * Exercises the pure scrubber core (scrubRawWikilinks) that backs
  * NoteManager.rewriteRawWikilinks: `[[Note]]` → `[[UID|Note]]` in published raw
  * Markdown, preserving aliases/headings, leaving same-note links and code spans
- * untouched, and keeping all surrounding Markdown byte-for-byte.
+ * untouched, and keeping all surrounding Markdown byte-for-byte. Also covers
+ * Obscure attachment names (links to vault files → `null.<ext>`), splice
+ * offsets after escapes/entities/line prefixes, and pipes in table cells.
  *
  * The scrubber takes UID resolution as a callback, so this is a pure unit test —
  * no Obsidian runtime required. A final PARITY block confirms the scrubber
@@ -22,7 +24,7 @@ import remarkRehype from 'remark-rehype';
 import rehypeSlug from 'rehype-slug';
 import rehypeStringify from 'rehype-stringify';
 import * as scrubModule from '../../src/utils/rewriteRawWikilinks';
-import { type ResolveUid } from '../../src/utils/rewriteRawWikilinks';
+import { type ResolveTarget, type ScrubOptions } from '../../src/utils/rewriteRawWikilinks';
 import * as obsidianLinksModule from '../../src/utils/remarkObsidianLinks';
 import { type ResolvedNoteInfo } from '../../src/utils/remarkObsidianLinks';
 
@@ -51,7 +53,34 @@ const UID_BY_PATH: Record<string, string> = {
 	'b': 'UIDB'
 };
 
-const resolveUid: ResolveUid = (notePath) => UID_BY_PATH[notePath] ?? null;
+const resolveUid = (notePath: string): string | null => UID_BY_PATH[notePath] ?? null;
+
+// Non-Markdown vault files. Nothing publishes as an attachment in phase 1, so
+// each resolves with a null hash and becomes `null.<ext>`.
+const FILES = new Set([
+	'Media/2024/song.mp3', 'Media/song.mp3', 'Media/pic.png', 'Media/2024/my pic.png', 'Media/my pic.png',
+	'Docs/slides.pdf', 'Docs/a.pdf', 'Docs/README', 'private/scan.pdf', 'pic.png'
+]);
+
+/** Paths that don't resolve at all, so the link is left as written. */
+const UNRESOLVED = new Set(['Ghost Path']);
+
+/**
+ * Mirrors NoteManager.rewriteRawWikilinks: notes by UID, files by extension,
+ * and anything else as a note without a UID (today's `[[null|…]]` sentinel).
+ */
+const resolveTarget: ResolveTarget = (path) => {
+	if (UNRESOLVED.has(path)) return null;
+	if (FILES.has(path)) {
+		const name = path.slice(path.lastIndexOf('/') + 1);
+		const dot = name.lastIndexOf('.');
+		return { kind: 'file', sha256: null, ext: dot === -1 ? '' : name.slice(dot + 1) };
+	}
+	return { kind: 'note', uid: resolveUid(path) };
+};
+
+const BOTH: ScrubOptions = { notes: true, attachments: true };
+const scrub = (raw: string, opts: ScrubOptions = BOTH): string => scrubRawWikilinks(raw, resolveTarget, opts);
 
 // ---------------------------------------------------------------------------
 // Scrub cases — exact-string expectations
@@ -61,6 +90,8 @@ interface Case {
 	name: string;
 	input: string;
 	expected: string;
+	/** Defaults to both settings on. */
+	opts?: ScrubOptions;
 }
 
 const CASES: Case[] = [
@@ -215,6 +246,8 @@ function outsideLinks(markdown: string): string {
 		parts.push(`<${node.type}>`);
 		if (node.type === 'text') parts.push(node.value.replace(/\[\[(.*?)\]\]/g, '[[…]]'));
 		else if (typeof node.value === 'string') parts.push(node.value);
+		if (typeof node.alt === 'string') parts.push(`alt=${node.alt}`);
+		if (typeof node.title === 'string') parts.push(`title=${node.title}`);
 		for (const child of node.children ?? []) walk(child);
 		parts.push(`</${node.type}>`);
 	};
@@ -233,6 +266,71 @@ function tableShape(markdown: string): string {
 	walk(tree);
 	return rows.join(',');
 }
+
+// ---------------------------------------------------------------------------
+// Obscure attachment names (P1 §4) — every file target is null.<ext> in phase 1
+// ---------------------------------------------------------------------------
+
+const PIC = '[[Note A]] ![[Media/pic.png]] ![](Media/pic.png)';
+
+const ATTACHMENT_CASES: Case[] = [
+	// The §4 table, with null in place of the hash.
+	{ name: 'Files — embed, folder path dropped', input: '![[Media/2024/song.mp3]]', expected: '![[null.mp3]]' },
+	{ name: 'Files — size alias kept', input: '![[Media/pic.png|300]]', expected: '![[null.png|300]]' },
+	{ name: 'Files — fragment and alias kept', input: '[[Docs/slides.pdf#page=3|deck]]', expected: '[[null.pdf#page=3|deck]]' },
+	{ name: 'Files — plain link', input: '[[Docs/slides.pdf]]', expected: '[[null.pdf]]' },
+	{ name: 'Files — excluded file embed', input: '![[private/scan.pdf]]', expected: '![[null.pdf]]' },
+	{ name: 'Files — excluded file with alias', input: '[[private/scan.pdf|my scan]]', expected: '[[null.pdf|my scan]]' },
+	{ name: 'Files — Markdown image, percent-encoded', input: '![](Media/2024/my%20pic.png)', expected: '![](null.png)' },
+	{ name: 'Files — Markdown image, <…> destination', input: '![alt|300](<Media/my pic.png>)', expected: '![alt|300](null.png)' },
+	{ name: 'Files — Markdown link', input: '[notes](Docs/a.pdf)', expected: '[notes](null.pdf)' },
+	// More shapes.
+	{ name: 'Files — fragment only', input: '![[Docs/slides.pdf#page=3]]', expected: '![[null.pdf#page=3]]' },
+	{ name: 'Files — no path fallback (closes [[null|Media/song.mp3]] leak)', input: '[[Media/song.mp3]]', expected: '[[null.mp3]]' },
+	{ name: 'Files — no extension', input: '[[Docs/README]] and [r](Docs/README)', expected: '[[null]] and [r](null)' },
+	{ name: 'Files — Markdown link with title', input: '[notes](Docs/a.pdf "The title")', expected: '[notes](null.pdf "The title")' },
+	{ name: 'Files — <…> destination with title', input: "![x](<Media/my pic.png> 'T')", expected: "![x](null.png 'T')" },
+	{ name: 'Files — percent-encoded with title', input: '![x](Media/2024/my%20pic.png (T))', expected: '![x](null.png (T))' },
+	{ name: 'Files — Markdown fragment kept', input: '[p3](Docs/slides.pdf#page=3)', expected: '[p3](null.pdf#page=3)' },
+	{ name: 'Files — image nested in a link', input: '[![a](Media/pic.png)](Docs/a.pdf)', expected: '[![a](null.png)](null.pdf)' },
+	{ name: 'Files — link text naming the file is kept (known limitation)', input: '[song.mp3](Media/song.mp3)', expected: '[song.mp3](null.mp3)' },
+	// Left alone.
+	{ name: 'Files — unresolved Markdown target unchanged', input: '![](Media/missing.png)', expected: '![](Media/missing.png)' },
+	{ name: 'Files — unresolved wikilink unchanged', input: '![[Ghost Path]]', expected: '![[Ghost Path]]' },
+	{ name: 'Files — Markdown link to a note unchanged', input: '[n](Note A)', expected: '[n](Note A)' },
+	{
+		name: 'Files — external, anchor, absolute and protocol-relative URLs unchanged',
+		input: '![](https://x.com/Media/pic.png) [m](mailto:a@b.c) [h](#Media/pic.png) [abs](/Media/pic.png) [p](//cdn/Media/pic.png)',
+		expected: '![](https://x.com/Media/pic.png) [m](mailto:a@b.c) [h](#Media/pic.png) [abs](/Media/pic.png) [p](//cdn/Media/pic.png)'
+	},
+	{ name: 'Files — reference definition unchanged', input: '![x][ref]\n\n[ref]: Media/pic.png\n', expected: '![x][ref]\n\n[ref]: Media/pic.png\n' },
+	{ name: 'Files — raw HTML unchanged', input: '<img src="Media/pic.png">\n\ntext <a href="Docs/a.pdf">a</a>', expected: '<img src="Media/pic.png">\n\ntext <a href="Docs/a.pdf">a</a>' },
+	{ name: 'Files — inline code unchanged', input: '`![](Media/pic.png)` `![[Media/pic.png]]`', expected: '`![](Media/pic.png)` `![[Media/pic.png]]`' },
+	// The two switches independently.
+	{ name: 'Switches — both', input: PIC, expected: '[[AAAA1111|Note A]] ![[null.png]] ![](null.png)' },
+	{ name: 'Switches — notes only', input: PIC, expected: '[[AAAA1111|Note A]] ![[Media/pic.png]] ![](Media/pic.png)', opts: { notes: true, attachments: false } },
+	{ name: 'Switches — attachments only', input: PIC, expected: '[[Note A]] ![[null.png]] ![](null.png)', opts: { notes: false, attachments: true } },
+	{ name: 'Switches — neither', input: PIC, expected: PIC, opts: { notes: false, attachments: false } }
+];
+
+// Splice offsets for file targets and Markdown destinations (P1 §3 + §4).
+const ATTACHMENT_OFFSET_CASES: Case[] = [
+	{ name: 'Offsets (files) — escape before an embed', input: 'a \\* ![[Media/song.mp3]] b', expected: 'a \\* ![[null.mp3]] b' },
+	{ name: 'Offsets (files) — entity before a Markdown image', input: 'x &amp; ![](Media/pic.png) y', expected: 'x &amp; ![](null.png) y' },
+	{ name: 'Offsets (files) — trailing space before a soft break', input: 'a \n![[Media/pic.png]] ![](Media/pic.png)', expected: 'a \n![[null.png]] ![](null.png)' },
+	{ name: 'Offsets (files) — blockquote continuation', input: '> a\n> ![[Media/pic.png]] ![](Media/pic.png)\n', expected: '> a\n> ![[null.png]] ![](null.png)\n' },
+	{ name: 'Offsets (files) — list continuation', input: '- a\n  [[Docs/a.pdf]] [notes](Docs/a.pdf)\n', expected: '- a\n  [[null.pdf]] [notes](null.pdf)\n' },
+	{ name: 'Offsets (files) — indented continuation', input: 'a\n   [notes](Docs/a.pdf)\n', expected: 'a\n   [notes](null.pdf)\n' },
+	{ name: 'Offsets (files) — escaped alt text kept', input: '![a \\* b](<Media/my pic.png>) [[Note A]]', expected: '![a \\* b](null.png) [[AAAA1111|Note A]]' },
+	{ name: 'Offsets (files) — escaped brackets', input: '!\\[\\[Media/pic.png]]', expected: '!\\[\\[null.png]]' }
+];
+
+const ATTACHMENT_TABLE_CASES: Case[] = [
+	{ name: 'Table (files) — ![[pic.png\\|300]]', input: TABLE_HEAD + '| ![[pic.png\\|300]] | x |\n', expected: TABLE_HEAD + '| ![[null.png\\|300]] | x |\n' },
+	{ name: 'Table (files) — ![alt\\|300](pic.png)', input: TABLE_HEAD + '| ![alt\\|300](pic.png) | x |\n', expected: TABLE_HEAD + '| ![alt\\|300](null.png) | x |\n' },
+	{ name: 'Table (files) — [[Docs/a.pdf]]', input: TABLE_HEAD + '| [[Docs/a.pdf]] | x |\n', expected: TABLE_HEAD + '| [[null.pdf]] | x |\n' },
+	{ name: 'Outside a table (files) — bare separator kept', input: '![[pic.png|300]]', expected: '![[null.png|300]]' }
+];
 
 // ---------------------------------------------------------------------------
 // HTML renderer (for parity), mirroring NoteManager.markdownToHtml's chain
@@ -267,8 +365,8 @@ function count(haystack: string, needle: string): number {
 async function main() {
 	let failures = 0;
 
-	for (const c of CASES) {
-		const got = scrubRawWikilinks(c.input, resolveUid);
+	for (const c of [...CASES, ...ATTACHMENT_CASES]) {
+		const got = scrub(c.input, c.opts);
 		if (got === c.expected) {
 			console.log(`PASS  ${c.name}`);
 		} else {
@@ -282,8 +380,8 @@ async function main() {
 
 	// --- Splice offsets and table pipes: exact output, plus the invariant that
 	// only the inside of links changed, plus (tables) the same cell layout.
-	for (const c of [...OFFSET_CASES, ...TABLE_CASES]) {
-		const got = scrubRawWikilinks(c.input, resolveUid);
+	for (const c of [...OFFSET_CASES, ...TABLE_CASES, ...ATTACHMENT_OFFSET_CASES, ...ATTACHMENT_TABLE_CASES]) {
+		const got = scrub(c.input, c.opts);
 		const problems: string[] = [];
 		if (got !== c.expected) problems.push(`expected ${JSON.stringify(c.expected)}`);
 		if (outsideLinks(got) !== outsideLinks(c.input)) problems.push('text outside links changed when parsed again');
@@ -310,7 +408,7 @@ async function main() {
 	const parityDoc =
 		'[[a]] **x** [[b]] and `[[a]]` plus [[Unpublished]] and [[#Self]].';
 	const html = await renderHtml(parityDoc);
-	const scrubbed = scrubRawWikilinks(parityDoc, resolveUid);
+	const scrubbed = scrub(parityDoc);
 
 	const parityErrors: string[] = [];
 	// Renderer converts both published links to anchors (2), inline-code [[a]]
@@ -335,7 +433,8 @@ async function main() {
 		for (const e of parityErrors) console.log(`        - ${e}`);
 	}
 
-	const total = CASES.length + OFFSET_CASES.length + TABLE_CASES.length + 1;
+	const total = CASES.length + ATTACHMENT_CASES.length + OFFSET_CASES.length + TABLE_CASES.length
+		+ ATTACHMENT_OFFSET_CASES.length + ATTACHMENT_TABLE_CASES.length + 1;
 	console.log('');
 	if (failures === 0) {
 		console.log(`All ${total} obscure-wikilink cases passed.`);
