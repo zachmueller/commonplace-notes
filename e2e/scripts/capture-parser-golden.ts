@@ -25,7 +25,8 @@ import rehypeStringify from 'rehype-stringify';
 import * as obsidianLinksModule from '../../src/utils/remarkObsidianLinks';
 import { type ResolvedNoteInfo } from '../../src/utils/remarkObsidianLinks';
 import remarkLineNumbersModule from '../../src/utils/remarkLineNumbers';
-import { PARSER_FIXTURES, PUBLISHED, type Fixture } from './parser-fixtures';
+import * as attachmentsModule from '../../src/utils/remarkAttachments';
+import { PARSER_FIXTURES, PUBLISHED, resolveAttachmentFixture, type Fixture } from './parser-fixtures';
 
 // tsx's ESM loader can double-wrap a default export; unwrap defensively so the
 // real attacher (not an object) reaches unified().use().
@@ -35,6 +36,10 @@ const remarkObsidianLinks: any =
 	obsidianLinksModule;
 const remarkLineNumbers: any =
 	(remarkLineNumbersModule as any)?.default ?? remarkLineNumbersModule;
+const remarkAttachments: any =
+	(attachmentsModule as any).default?.default ??
+	(attachmentsModule as any).default ??
+	attachmentsModule;
 
 // EXACT replica of NoteManager.markdownToHtml's legacy 7-stage pipeline
 // (notes.ts as of the pre-cutover commit). Keep in lockstep with that method.
@@ -43,6 +48,8 @@ async function renderLegacy(markdown: string): Promise<string> {
 		.use(remarkParse)
 		.use(remarkGfm)
 		.use(remarkLineNumbers)
+		// Added with attachment publishing (order 038, before obsidian links).
+		.use(remarkAttachments, { resolveAttachment: resolveAttachmentFixture })
 		.use(remarkObsidianLinks, {
 			frontmatterManager: {} as any,
 			urlScheme: 'current',

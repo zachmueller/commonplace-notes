@@ -187,21 +187,21 @@ renderer may show.
 While queuing a note (`NoteManager.queueNote`, `src/utils/notes.ts`), for AWS
 profiles whose mode isn't `off`:
 
-- [ ] **Read.** `metadataCache.getFileCache(file)`. Take its `embeds`, and in
+- [x] **Read.** `metadataCache.getFileCache(file)`. Take its `embeds`, and in
       `embedsAndLinks` mode also its `links`. Both cover wikilink and Markdown
       syntax. Frontmatter links (`frontmatterLinks`) are ignored.
-- [ ] **Resolve** each `link` with
+- [x] **Resolve** each `link` with
       `metadataCache.getFirstLinkpathDest(getLinkpath(link), file.path)`.
       `getLinkpath` drops a `#page=3`-style fragment.
-- [ ] **Filter.** Keep it if it resolves to a `TFile` that:
+- [x] **Filter.** Keep it if it resolves to a `TFile` that:
   - is not Markdown,
   - has an allowed extension (case-insensitive), or the allow-list holds `*`,
   - is not under an excluded directory (P1 §2),
   - is within the size cap (`size` from the file's stat, below).
-- [ ] **Size notice.** A file that fails only the size cap is skipped. The batch
+- [x] **Size notice.** A file that fails only the size cap is skipped. The batch
       shows one notice naming the skipped files ("2 attachments over 50 MB were
       not published: talk.mov, raw.wav").
-- [ ] **De-duplicate** by vault path. Hash each kept file (§6, hash cache) and
+- [x] **De-duplicate** by vault path. Hash each kept file (§6, hash cache) and
       attach the list to the note's state:
 
   ```ts
@@ -218,7 +218,7 @@ profiles whose mode isn't `off`:
   // NoteState gains: attachments: AttachmentRef[]
   ```
 
-- [ ] **One stat per file.** `size`, `mtime` and `ctime` all come from a single
+- [x] **One stat per file.** `size`, `mtime` and `ctime` all come from a single
       Node `fs.stat` on the file's full path (`FileSystemAdapter.getFullPath`),
       taken **before** hashing. Obsidian's `file.stat` is not used for these:
       it is cached and can lag a write made outside Obsidian, which is exactly
@@ -227,17 +227,17 @@ profiles whose mode isn't `off`:
       upload (§7). Because the stat precedes the hash, a write during hashing
       leaves a stat that no longer matches the file, so the next check
       re-hashes instead of trusting a torn hash.
-- [ ] **Kind** comes from the extension: the default image, audio and video sets
+- [x] **Kind** comes from the extension: the default image, audio and video sets
       above, otherwise `file`. An extension the user adds to the allow-list is
       `file`.
-- [ ] If `getFileCache` returns null (the note isn't indexed yet), the list is
+- [x] If `getFileCache` returns null (the note isn't indexed yet), the list is
       empty. The note then publishes with every attachment link unpublished,
       which fails closed.
-- [ ] A note blocked by access resolution (`access.ok === false`) returns before
+- [x] A note blocked by access resolution (`access.ok === false`) returns before
       this step, so its attachments are never collected or staged.
-- [ ] This step runs **before** the raw scrub and the hash in `queueNote`,
+- [x] This step runs **before** the raw scrub and the hash in `queueNote`,
       because obscured `raw` (§4) needs each published file's hash.
-- [ ] The shared scrub helper used by `rebuildContentIndex` (P1 §4) collects the
+- [x] The shared scrub helper used by `rebuildContentIndex` (P1 §4) collects the
       list the same way, using the hash cache, so the index can't drift from
       the published `raw`.
 
@@ -248,19 +248,19 @@ cache already excludes them.
 
 ### New built-in parser stage: `remark-attachments`
 
-- [ ] New scaffold `src/utils/parser/scaffolds/remark-attachments.ts`, stage
+- [x] New scaffold `src/utils/parser/scaffolds/remark-attachments.ts`, stage
       `remark`, **order 38**: after `remark-block-ids` (35), before
       `remark-obsidian-links` (40). Registered in `scaffolds/index.ts`.
-- [ ] The plugin itself in `src/utils/remarkAttachments.ts`, exposed to vault
+- [x] The plugin itself in `src/utils/remarkAttachments.ts`, exposed to vault
       stages as `libs.remarkAttachments`.
-- [ ] The scaffold's doc block states the contract with the site: the
+- [x] The scaffold's doc block states the contract with the site: the
       `data-cpn-attachment` attribute, `data-cpn-fragment` and the classes.
 
 A separate stage, rather than more code in `remarkObsidianLinks`, keeps
 existing vault overrides of `remark-obsidian-links` working unchanged.
 Attachment references never reach that stage.
 
-- [ ] `ParserContext` (`src/utils/parser/types.ts`) gains:
+- [x] `ParserContext` (`src/utils/parser/types.ts`) gains:
 
   ```ts
   /**
@@ -274,7 +274,7 @@ Attachment references never reach that stage.
     | { published: false; fileName: string };
   ```
 
-- [ ] `NoteManager.markdownToHtml` takes the note's `AttachmentRef[]` and builds
+- [x] `NoteManager.markdownToHtml` takes the note's `AttachmentRef[]` and builds
       `resolveAttachment` from it. It resolves the linkpath with
       `getFirstLinkpathDest`. If the target is a non-Markdown file, it returns
       `published: true` when the file is in the note's list, otherwise
@@ -288,14 +288,14 @@ embedded becomes a working link, because the file is published anyway.
 
 The stage handles:
 
-- [ ] **Wikilinks** in `text` nodes (`[[…]]` and `![[…]]`), parsed with the
+- [x] **Wikilinks** in `text` nodes (`[[…]]` and `![[…]]`), parsed with the
       shared `parseWikilinkInner`. Matching text is split out of the text node.
       The rest of the text node, including any note wikilinks, stays for
       `remark-obsidian-links`.
-- [ ] **Markdown** `image` and `link` mdast nodes whose `url` is relative: no
+- [x] **Markdown** `image` and `link` mdast nodes whose `url` is relative: no
       scheme (`/^[a-z][a-z0-9+.-]*:/i`), not starting with `#`, `/` or `//`.
       The URL is percent-decoded before lookup.
-- [ ] Inside a heading, embeds render as attachment links (as transclusions do:
+- [x] Inside a heading, embeds render as attachment links (as transclusions do:
       a heading can't hold media).
 
 ### Output
@@ -309,16 +309,16 @@ The stage handles:
 | plain link (any kind) | `<a class="cpn-attachment cpn-attachment-file" data-cpn-attachment="…" target="_blank" rel="noopener">display text</a>` |
 | `published: false` | `<span class="unpublished-link">display text</span>`, the same markup as today, built as an mdast node (below) |
 
-- [ ] `<key>` is `<sha256>/<fileName>`, HTML-attribute-escaped. File names can
+- [x] `<key>` is `<sha256>/<fileName>`, HTML-attribute-escaped. File names can
       hold `"`, `<`, `&`, `#`, `?`, spaces and Unicode.
-- [ ] A `#page=N` fragment on a PDF link is kept as `data-cpn-fragment="page=N"`.
+- [x] A `#page=N` fragment on a PDF link is kept as `data-cpn-fragment="page=N"`.
       The site appends it to the URL.
-- [ ] The HTML never contains an `src` or `href` for an attachment (see "Why no
+- [x] The HTML never contains an `src` or `href` for an attachment (see "Why no
       URL in the HTML" below).
-- [ ] **`alt`** for an image is the wikilink's alias (when it isn't a size
+- [x] **`alt`** for an image is the wikilink's alias (when it isn't a size
       alias) or the Markdown alt text without its size suffix, otherwise the
       file name.
-- [ ] **Display text** for links and unpublished spans is the alias when there
+- [x] **Display text** for links and unpublished spans is the alias when there
       is one (not a size alias), otherwise the file name. The HTML never shows
       the folder path.
 
@@ -333,13 +333,13 @@ note.
 
 ### Escaping
 
-- [ ] Output elements are built as mdast nodes with `data.hName` and
+- [x] Output elements are built as mdast nodes with `data.hName` and
       `data.hProperties` (as `noteLink` in `remarkObsidianLinks.ts` does), not
       as raw `html` strings, so hast escapes every attribute and every text
       child.
-- [ ] This includes the `published: false` span:
+- [x] This includes the `published: false` span:
       `{ data: { hName: 'span', hProperties: { className: ['unpublished-link'] } }, children: [{ type: 'text', value }] }`.
-- [ ] `unpublishedSpan` in `remarkObsidianLinks.ts` switches to the same form,
+- [x] `unpublishedSpan` in `remarkObsidianLinks.ts` switches to the same form,
       so unpublished note links get the same escaping. Today it builds a raw
       `html` node from unescaped text, so a file named `a&b.png` or `x<y.mp3`
       would break the markup. The HTML for names without `&`, `<` or `>` is
@@ -394,7 +394,7 @@ note").
 
 ### Raw scrub: published targets
 
-- [ ] `NoteManager.rewriteRawWikilinks` passes
+- [x] `NoteManager.rewriteRawWikilinks` passes
       `{ kind: 'file', sha256, ext }` with the file's hash when the file is in
       the note's attachment list, so published files get `<sha256>.<ext>`
       (P1 §4, Targets). Files not in the list keep `null.<ext>`.
@@ -403,7 +403,7 @@ note").
 
 ### Note hash
 
-- [ ] The content hash (`notes.ts`, `currentHash`) gains an attachment segment
+- [x] The content hash (`notes.ts`, `currentHash`) gains an attachment segment
       **only when the note has attachment references**, the way access groups
       and `cpn-style` are added:
 
@@ -431,7 +431,7 @@ As a result:
 
 ### Note JSON
 
-- [ ] Each staged note JSON (`writeNoteToStaging`) gains, when non-empty:
+- [x] Each staged note JSON (`writeNoteToStaging`) gains, when non-empty:
 
   ```jsonc
   "attachments": [
@@ -439,9 +439,9 @@ As a result:
   ]
   ```
 
-- [ ] Sorted by key. It is the same in every area copy and relative to the area,
+- [x] Sorted by key. It is the same in every area copy and relative to the area,
       like the HTML.
-- [ ] Omitted when empty, so notes without attachments keep their JSON shape.
+- [x] Omitted when empty, so notes without attachments keep their JSON shape.
 
 It is used by:
 
@@ -458,7 +458,7 @@ next to `publish-history.json`. The hash cache is shared by all profiles and
 lives one level up, in the plugin folder. See design.md, Assumptions, for how
 these reach other machines.
 
-- [ ] New module `src/utils/attachmentState.ts` owns `attachments.json` and the
+- [x] New module `src/utils/attachmentState.ts` owns `attachments.json` and the
       hash cache.
 
 ### `attachments.json`: references and upload manifest
@@ -477,15 +477,15 @@ One file, so its presence and completeness can be judged as a whole:
 }
 ```
 
-- [ ] `refs` entries are written in `commitPendingNotes`, next to the publish
+- [x] `refs` entries are written in `commitPendingNotes`, next to the publish
       history. Revisions without attachments are omitted.
 - [ ] `uploaded` entries are added as uploads succeed (§7).
-- [ ] **Load or create at the start of every AWS publish** whose attachment mode
+- [x] **Load or create at the start of every AWS publish** whose attachment mode
       isn't `off`, in the setup step beside `accessManager.load`, so **before**
       `commitPendingNotes` writes `refs` and before anything uploads. With the
       mode `off`, an existing file is still loaded, so the sweeps (P3 §2) can
       use it. The publish lock (§1) makes loading from disk here safe.
-- [ ] **Completeness on creation.** `complete` starts as `true` when either:
+- [x] **Completeness on creation.** `complete` starts as `true` when either:
   1. the profile's publish history is empty, or
   2. a **bucket probe** finds no attachment objects: `ListObjectsV2` with
      `MaxKeys: 1` on `<s3Prefix>attachments/`, and on
@@ -495,7 +495,7 @@ One file, so its presence and completeness can be judged as a whole:
 
   Otherwise (attachments were already published from this or another machine,
   then the file was lost, or never synced here) it starts `false`.
-- [ ] **If the probe fails** (credentials, network), the file is still created,
+- [x] **If the probe fails** (credentials, network), the file is still created,
       with `complete: false`. The publish continues and writes `refs` and
       `uploaded` into it.
 
@@ -520,15 +520,15 @@ local flag can't tell whether another machine has published attachments.
 Hashing a large file on every publish is wasteful. One cache serves every
 profile, because a file's hash doesn't depend on the profile.
 
-- [ ] **Machine ID.** A random ID (`crypto.randomUUID()`) stored with
+- [x] **Machine ID.** A random ID (`crypto.randomUUID()`) stored with
       `app.saveLocalStorage('cpn-machine-id', …)` and read with
       `app.loadLocalStorage`. Obsidian's local storage is per device and never
       synced.
-- [ ] **Raise `minAppVersion` to 1.8.7** in `manifest.json`, because
+- [x] **Raise `minAppVersion` to 1.8.7** in `manifest.json`, because
       `loadLocalStorage` and `saveLocalStorage` are `@since 1.8.7` and the
       plugin requires 1.7.2 today. `version-bump.mjs` then records 1.8.7 in
       `versions.json` for this release. The release notes say so (§11).
-- [ ] **File.** `<configDir>/plugins/commonplace-notes/attachment-hash-cache.<machineId>.json`
+- [x] **File.** `<configDir>/plugins/commonplace-notes/attachment-hash-cache.<machineId>.json`
       (`manifest.dir`). Each machine reads and writes only its own file, so a
       synced plugin folder never makes two machines overwrite each other's
       cache, and `ctimeMs` (local to each machine) is only ever compared on the
@@ -538,19 +538,19 @@ profile, because a file's hash doesn't depend on the profile.
 { "<vaultPath>": { "size": 1234567, "mtime": 1763900000000, "ctime": 1763900000123, "sha256": "…" } }
 ```
 
-- [ ] **Re-hash** when `size`, `mtime` or `ctime` differ from the cached values.
+- [x] **Re-hash** when `size`, `mtime` or `ctime` differ from the cached values.
       All three come from one `fs.stat`, taken before hashing (§3, "One stat per
       file").
-- [ ] `ctime` is Node's `fs.stat(fullPath).ctimeMs`, the inode change time,
+- [x] `ctime` is Node's `fs.stat(fullPath).ctimeMs`, the inode change time,
       **not** Obsidian's `file.stat.ctime`, which is the creation time.
 - [ ] **Eviction on mismatch.** Any mismatch found at upload (§7) deletes the
       file's cache entry, so a stale entry can never cause a second failure.
-- [ ] **Streamed hashing.** `fs.createReadStream` on the adapter's full path
+- [x] **Streamed hashing.** `fs.createReadStream` on the adapter's full path
       (`FileSystemAdapter.getFullPath`) piped through Node's
       `crypto.createHash('sha256')`. The plugin is desktop-only and bundled for
       Node, and `src/utils/ssoLogin.ts` already uses `fs`. `vault.readBinary` and
       `crypto.subtle.digest` would need the whole file in memory.
-- [ ] **Rename and delete.** In `src/main.ts`, a vault `rename` or `delete`
+- [x] **Rename and delete.** In `src/main.ts`, a vault `rename` or `delete`
       event drops the entry for the old path. A rename isn't carried over to the
       new path: renaming updates `ctimeMs` on macOS and Linux, so a moved entry
       would usually miss anyway, and dropping it costs at most one re-hash.
@@ -574,16 +574,16 @@ batch needs:
     "sha256": "…", "fileName": "song.mp3", "size": 1234567 } ]
 ```
 
-- [ ] It sits **beside** `staged-notes/`, not inside it, because
+- [x] It sits **beside** `staged-notes/`, not inside it, because
       `listStagedNoteUploads` treats every top-level `.json` in `staged-notes/`
       as a note.
-- [ ] Written by `commitPendingNotes`, one entry per (area, key) of each staged
+- [x] Written by `commitPendingNotes`, one entry per (area, key) of each staged
       revision (§7, "Which areas get a file").
-- [ ] Entries are keyed by `area + key` and **merged** with any entries a failed
+- [x] Entries are keyed by `area + key` and **merged** with any entries a failed
       earlier batch left. The next upload sends everything in staging, so the
       two must stay in step.
-- [ ] `cleanupStagedFiles` deletes it.
-- [ ] `handlePublishError` copies it into the error session directory with the
+- [x] `cleanupStagedFiles` deletes it.
+- [x] `handlePublishError` copies it into the error session directory with the
       staged notes, and keeps it (§1).
 
 ## 7. Upload
@@ -1004,50 +1004,50 @@ Every publish re-stages and re-uploads each note it queues
 
 For `src/utils/attachments.ts`:
 
-- [ ] Reference filtering: mode, extensions, `*`, files without an extension,
+- [x] Reference filtering: mode, extensions, `*`, files without an extension,
       user-added types such as `html` and `canvas`, excluded directories, size.
-- [ ] Kind and MIME/disposition maps, RFC 5987 file names.
-- [ ] Every active type (`html`, `js`, `xml`, `wasm`, …) maps to
+- [x] Kind and MIME/disposition maps, RFC 5987 file names.
+- [x] Every active type (`html`, `js`, `xml`, `wasm`, …) maps to
       `application/octet-stream` with `attachment`, even when allowed, and `svg`
       gets `attachment`.
-- [ ] Key encoding for odd file names: spaces, `#`, `?`, `%`, `"`, Unicode.
-- [ ] The `::att=` segment is order-independent, de-duplicated, and absent when
+- [x] Key encoding for odd file names: spaces, `#`, `?`, `%`, `"`, Unicode.
+- [x] The `::att=` segment is order-independent, de-duplicated, and absent when
       there are no refs.
-- [ ] Staged-entry merge across a failed batch.
-- [ ] Re-check before upload: a staged entry from a failed batch whose folder
+- [x] Staged-entry merge across a failed batch.
+- [x] Re-check before upload: a staged entry from a failed batch whose folder
       was excluded afterwards is dropped, and so are entries whose extension
       was removed from the allow-list, entries over a lowered cap, entries under
       the mode `off`, and entries whose file was moved or deleted. Entries that
       still pass are kept.
-- [ ] Re-check hash check: an earlier batch's entry whose file changed is
+- [x] Re-check hash check: an earlier batch's entry whose file changed is
       dropped and the publish continues. This batch's entry whose file changed
       stops the publish with staging kept, and on the next publish the same
       entry is dropped rather than stopping it again. An entry from an earlier
       batch that this batch merged into counts as this batch's.
-- [ ] The updated-since rule (§8): a file whose mtime is before
+- [x] The updated-since rule (§8): a file whose mtime is before
       `lastFullPublishTimestamp` but whose `ctimeMs` is after it counts as
       changed.
-- [ ] The large-file limiter: with five large files queued, no more than two are
+- [x] The large-file limiter: with five large files queued, no more than two are
       mid-upload at once.
 
 ### `test-attachment-state.ts` (new)
 
-- [ ] Completeness on creation: `true` with an empty history.
-- [ ] `true` with a non-empty history when the probe finds no attachment objects
+- [x] Completeness on creation: `true` with an empty history.
+- [x] `true` with a non-empty history when the probe finds no attachment objects
       (public or any group).
-- [ ] `false` when the probe finds one in any area.
-- [ ] When the probe fails, the file is still created, with `complete: false`.
+- [x] `false` when the probe finds one in any area.
+- [x] When the probe fails, the file is still created, with `complete: false`.
       It keeps the `refs` that publish commits, and a later probe of an empty
       bucket doesn't turn it `true`.
-- [ ] The file exists before `commitPendingNotes` runs.
-- [ ] Hash cache hit and miss on size, mtime and `ctime`: a rewrite that keeps
+- [x] The file exists before `commitPendingNotes` runs.
+- [x] Hash cache hit and miss on size, mtime and `ctime`: a rewrite that keeps
       size and restores mtime with `utimes` still misses.
-- [ ] Eviction on an upload mismatch.
-- [ ] Rename and delete both drop the old path's entry.
-- [ ] A write during hashing: the stat taken first no longer matches, so the
+- [x] Eviction on an upload mismatch.
+- [x] Rename and delete both drop the old path's entry.
+- [x] A write during hashing: the stat taken first no longer matches, so the
       next check re-hashes.
-- [ ] A streamed hash matches `crypto.subtle.digest` on the same bytes.
-- [ ] Two machine IDs use two cache files, and neither reads the other's.
+- [x] A streamed hash matches `crypto.subtle.digest` on the same bytes.
+- [x] Two machine IDs use two cache files, and neither reads the other's.
 
 ### Publish error handling
 
@@ -1062,19 +1062,19 @@ For `src/utils/attachments.ts`:
 
 ### `test-obscure-wikilinks.ts` (extended)
 
-- [ ] Published targets become `<sha256>.<ext>`, unpublished ones stay
+- [x] Published targets become `<sha256>.<ext>`, unpublished ones stay
       `null.<ext>`, and files without an extension `<sha256>` / `null`.
-- [ ] A plain link to a file the note also embeds gets `<sha256>.<ext>` in
+- [x] A plain link to a file the note also embeds gets `<sha256>.<ext>` in
       `embeds` mode.
 
 ### Parser
 
-- [ ] Cases for `remark-attachments`: each output row in §4, headings, size
+- [x] Cases for `remark-attachments`: each output row in §4, headings, size
       aliases, `alt` from alias, alt text and file name, mixed paragraphs,
       escaping, `published: false`.
-- [ ] Unpublished file and note links whose names hold `&`, `<` or `>` (escaped
+- [x] Unpublished file and note links whose names hold `&`, `<` or `>` (escaped
       in the span's text).
-- [ ] Re-capture `e2e/fixtures/parser-golden.json`, reviewing every diff.
+- [x] Re-capture `e2e/fixtures/parser-golden.json`, reviewing every diff.
       Expected diffs are only attachment links, and unpublished links whose
       text holds `&`, `<` or `>`.
 

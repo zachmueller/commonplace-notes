@@ -55,8 +55,8 @@ const UID_BY_PATH: Record<string, string> = {
 
 const resolveUid = (notePath: string): string | null => UID_BY_PATH[notePath] ?? null;
 
-// Non-Markdown vault files. Nothing publishes as an attachment in phase 1, so
-// each resolves with a null hash and becomes `null.<ext>`.
+// Non-Markdown vault files. By default each resolves with a null hash and
+// becomes `null.<ext>`; the "Published" block supplies hashes for a note's list.
 const FILES = new Set([
 	'Media/2024/song.mp3', 'Media/song.mp3', 'Media/pic.png', 'Media/2024/my pic.png', 'Media/my pic.png',
 	'Docs/slides.pdf', 'Docs/a.pdf', 'Docs/README', 'private/scan.pdf', 'pic.png'
@@ -364,6 +364,7 @@ function count(haystack: string, needle: string): number {
 
 async function main() {
 	let failures = 0;
+	let publishedCount = 0;
 
 	for (const c of [...CASES, ...ATTACHMENT_CASES]) {
 		const got = scrub(c.input, c.opts);
@@ -375,6 +376,40 @@ async function main() {
 			console.log(`        input:    ${JSON.stringify(c.input)}`);
 			console.log(`        expected: ${JSON.stringify(c.expected)}`);
 			console.log(`        got:      ${JSON.stringify(got)}`);
+		}
+	}
+
+	// --- Published targets (attachment spec P2 §4, "Raw scrub: published
+	// targets"): files in the note's attachment list get `<sha256>.<ext>`, as
+	// NoteManager.rewriteRawWikilinks supplies them (by vault path).
+	{
+		const SHA_SONG = 'a'.repeat(64);
+		const SHA_README = 'c'.repeat(64);
+		// The note's list in `embeds` mode: only embedded files, but every
+		// reference to a listed file resolves to its hash.
+		const LIST = new Map([['Media/2024/song.mp3', SHA_SONG], ['Docs/README', SHA_README]]);
+		const withList: ResolveTarget = (path) => {
+			const t = resolveTarget(path);
+			if (t?.kind !== 'file') return t;
+			return { ...t, sha256: LIST.get(path) ?? null };
+		};
+		const PUBLISHED_CASES: Array<[string, string, string]> = [
+			['Published — embed gets <sha256>.<ext>', '![[Media/2024/song.mp3]]', `![[${SHA_SONG}.mp3]]`],
+			['Published — unlisted file stays null.<ext>', '![[Media/pic.png|300]]', '![[null.png|300]]'],
+			['Published — no extension → <sha256>, unlisted → null', '[[Docs/README]] [x](Docs/a.pdf) ![[Docs/README]]', `[[${SHA_README}]] [x](null.pdf) ![[${SHA_README}]]`],
+			['Published — plain link to a file the note also embeds (embeds mode)', '![[Media/2024/song.mp3]] and [[Media/2024/song.mp3|again]]', `![[${SHA_SONG}.mp3]] and [[${SHA_SONG}.mp3|again]]`],
+			['Published — Markdown image', '![s](Media/2024/song.mp3)', `![s](${SHA_SONG}.mp3)`],
+		];
+		for (const [name, input, expected] of PUBLISHED_CASES) {
+			const got = scrubRawWikilinks(input, withList, BOTH);
+			publishedCount++;
+			if (got === expected) console.log(`PASS  ${name}`);
+			else {
+				failures++;
+				console.log(`FAIL  ${name}`);
+				console.log(`        expected: ${JSON.stringify(expected)}`);
+				console.log(`        got:      ${JSON.stringify(got)}`);
+			}
 		}
 	}
 
@@ -434,7 +469,7 @@ async function main() {
 	}
 
 	const total = CASES.length + ATTACHMENT_CASES.length + OFFSET_CASES.length + TABLE_CASES.length
-		+ ATTACHMENT_OFFSET_CASES.length + ATTACHMENT_TABLE_CASES.length + 1;
+		+ ATTACHMENT_OFFSET_CASES.length + ATTACHMENT_TABLE_CASES.length + publishedCount + 1;
 	console.log('');
 	if (failures === 0) {
 		console.log(`All ${total} obscure-wikilink cases passed.`);

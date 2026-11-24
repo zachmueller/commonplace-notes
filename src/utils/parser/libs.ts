@@ -43,6 +43,7 @@ import rehypeAutolinkHeadings from 'rehype-autolink-headings';
 import remarkMath from 'remark-math';
 
 import remarkObsidianLinks from '../remarkObsidianLinks';
+import remarkAttachments from '../remarkAttachments';
 import remarkLineNumbers from '../remarkLineNumbers';
 import remarkBlockIds from '../remarkBlockIds';
 import remarkCallouts from '../remarkCallouts';
@@ -88,6 +89,7 @@ export function buildParserLibs(): ParserLibs {
 		rehypeStringify,
 		// CPN-internal factories
 		remarkObsidianLinks,
+		remarkAttachments,
 		remarkLineNumbers,
 		remarkBlockIds,
 		remarkCallouts,

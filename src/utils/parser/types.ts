@@ -15,6 +15,7 @@ import type { VFile } from 'vfile';
 import type { FrontmatterManager } from '../frontmatter';
 import type { ResolvedNoteInfo } from '../remarkObsidianLinks';
 import type { UrlScheme } from '../urlScheme';
+import type { AttachmentRender } from '../attachments';
 
 /** Which AST a stage operates on. Metadata/validation only — pipeline order is
  *  driven purely by {@link ParserExtensionDefinition.order}. */
@@ -31,6 +32,13 @@ export interface ParserContext {
 	profileId: string;
 	frontmatterManager: FrontmatterManager;
 	resolveInternalLinks: (notePath: string) => Promise<ResolvedNoteInfo | null>;
+	/**
+	 * Look up a link target. null: not a non-Markdown vault file (a note, an
+	 * unresolved link, an external URL), so leave it alone. Otherwise whether
+	 * the file publishes with this note (only files in the note's attachment
+	 * list do), its key and kind. Used by `remark-attachments`.
+	 */
+	resolveAttachment: (linkpath: string) => AttachmentRender | null;
 	urlScheme: UrlScheme;
 	/**
 	 * Resolved `cpn-style` for this note (`null` if unset) — the same value that
@@ -129,6 +137,7 @@ export interface ParserLibs {
 	rehypeStringify: unknown;
 	// CPN-internal factories (so overrides can delegate to the originals)
 	remarkObsidianLinks: typeof import('../remarkObsidianLinks').default;
+	remarkAttachments: typeof import('../remarkAttachments').default;
 	remarkLineNumbers: typeof import('../remarkLineNumbers').default;
 	remarkBlockIds: typeof import('../remarkBlockIds').default;
 	remarkCallouts: typeof import('../remarkCallouts').default;

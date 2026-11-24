@@ -6,6 +6,7 @@ import { slug as githubSlug } from 'github-slugger';
 import { FrontmatterManager } from '../utils/frontmatter';
 import { formatNoteUrl, UrlScheme } from '../utils/urlScheme';
 import { parseWikilinkInner, ParsedWikilink } from './wikilinkParse';
+import { unpublishedNode, type UnpublishedNode } from './remarkAttachments';
 
 export interface ResolvedNoteInfo {
 	uid: string;
@@ -44,7 +45,7 @@ interface TransclusionNode {
 	children: Link[];
 }
 
-type ReplacementNode = Text | Link | HTML | TransclusionNode | Paragraph;
+type ReplacementNode = Text | Link | HTML | TransclusionNode | Paragraph | UnpublishedNode;
 
 interface WikilinkMatch {
 	parsed: ParsedWikilink;
@@ -104,8 +105,12 @@ function transclusionProps(resolved: ResolvedNoteInfo, parsed: ParsedWikilink): 
 	return props;
 }
 
-function unpublishedSpan(text: string): HTML {
-	return { type: 'html', value: `<span class="unpublished-link">${text}</span>` };
+/**
+ * `<span class="unpublished-link">text</span>`, built as an mdast node so hast
+ * escapes the text (a raw `html` string broke on `&`, `<` and `>`).
+ */
+function unpublishedSpan(text: string): UnpublishedNode {
+	return unpublishedNode(text);
 }
 
 /** True when this match should become a transclusion placeholder. */
@@ -205,7 +210,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 											},
 											children: [noteLink(m.resolved!.uid, displayTextFor(m), m.parsed, options.urlScheme)]
 										}
-										: { type: 'paragraph', children: [unpublishedSpan(displayTextFor(m))] }
+										: { type: 'paragraph', children: [unpublishedSpan(displayTextFor(m))] as unknown as Paragraph['children'] }
 								)
 							});
 						}

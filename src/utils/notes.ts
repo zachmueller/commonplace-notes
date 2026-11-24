@@ -9,6 +9,7 @@ import { scrubRawWikilinks, type ResolvedTarget } from './rewriteRawWikilinks';
 import type { PublishingProfile } from '../types';
 import { linkVisibleFrom, partitionsFor, validateNoteAccess, visibleInPartition } from './access';
 import { NoticeManager } from './notice';
+import { attachmentHashSegment, noteJsonAttachments, type AttachmentRef } from './attachments';
 
 /** A note's resolved access: its groups, and whether it may publish with them. */
 export interface NoteAccess {
@@ -38,6 +39,8 @@ interface NoteState {
 	lastModified: number;
 	style: string | null;  // `cpn-style` frontmatter value, resolved client-side per profile
 	access: string[];      // `cpn-access-groups` ([] = public; else only restricted/<group>/ partitions)
+	/** Files this revision publishes with (attachment spec P2 §3); [] when none. */
+	attachments: AttachmentRef[];
 }
 
 interface BacklinkInfo {
@@ -161,7 +164,19 @@ export class NoteManager {
 			: { groups: normalized.groups, ok: false, reason: check.reason };
 	}
 
-	async markdownToHtml(markdown: string, currentFile: TFile, profileId: string, sourceGroups: string[] = []): Promise<string> {
+	/**
+	 * `attachments` is the note's attachment list (§3). The renderer only
+	 * publishes files in it; every other link to a non-Markdown vault file
+	 * renders as an unpublished span (always so with the mode off and on
+	 * Local profiles, where the list is empty).
+	 */
+	async markdownToHtml(
+		markdown: string,
+		currentFile: TFile,
+		profileId: string,
+		sourceGroups: string[] = [],
+		attachments: readonly AttachmentRef[] = [],
+	): Promise<string> {
 		const urlScheme: UrlScheme = this.plugin.settings.urlScheme || 'current';
 		const profile = this.plugin.settings.publishingProfiles.find(p => p.id === profileId);
 
@@ -175,6 +190,7 @@ export class NoteManager {
 			frontmatterManager: this.plugin.frontmatterManager,
 			urlScheme,
 			noteStyle: this.plugin.frontmatterManager.getNoteStyle(currentFile),
+			resolveAttachment: this.plugin.attachmentManager.resolverFor(currentFile.path, attachments),
 			resolveInternalLinks: async (notePath: string): Promise<ResolvedNoteInfo | null> => {
 				const targetFile = this.plugin.app.metadataCache.getFirstLinkpathDest(notePath, currentFile.path);
 
@@ -232,8 +248,8 @@ export class NoteManager {
 	 * - **Obscure attachment names** (`obscureRawAttachments`): links to
 	 *   non-Markdown vault files, wikilink or inline Markdown, get the file's
 	 *   content hash as their target, or `null` when it doesn't publish
-	 *   (`![[Media/song.mp3]]` → `![[null.mp3]]`). Nothing publishes as an
-	 *   attachment yet, so every file target is `null.<ext>` today.
+	 *   (`![[Media/song.mp3]]` → `![[null.mp3]]`). A file in the note's
+	 *   attachment list (`attachments`) gets `<sha256>.<ext>`.
 	 *
 	 * Returns `raw` unchanged when both are off.
 	 *
@@ -251,7 +267,13 @@ export class NoteManager {
 	 * A wikilink whose target is missing gets the note sentinel `null`, as it
 	 * always has; a Markdown link whose target is missing is left as written.
 	 */
-	async rewriteRawWikilinks(raw: string, currentFile: TFile, profile: PublishingProfile | undefined): Promise<string> {
+	async rewriteRawWikilinks(
+		raw: string,
+		currentFile: TFile,
+		profile: PublishingProfile | undefined,
+		attachments: readonly AttachmentRef[] = [],
+	): Promise<string> {
+		const published = new Map(attachments.map(r => [r.vaultPath, r.sha256]));
 		const opts = {
 			notes: profile?.obscureRawWikilinks ?? true,
 			attachments: profile?.obscureRawAttachments ?? true
@@ -263,8 +285,8 @@ export class NoteManager {
 				if (target.extension === 'md') {
 					return { kind: 'note', uid: this.plugin.frontmatterManager.getNoteUID(target) };
 				}
-				// Phase 2 supplies the hash for files in the note's attachment list.
-				return { kind: 'file', sha256: null, ext: target.extension };
+				// Files in the note's attachment list publish under their hash.
+				return { kind: 'file', sha256: published.get(target.path) ?? null, ext: target.extension };
 			}
 			return { kind: 'note', uid: null };
 		}, opts);
@@ -275,6 +297,14 @@ export class NoteManager {
 	 * stopped before committing them, so a later publish can't commit them
 	 * under a UID they no longer have.
 	 */
+	/** The queued notes of a profile with attachments, for the pre-staging re-check (P2 §7, item 1). */
+	queuedWithAttachments(profileId: string): Array<{ file: TFile; attachments: AttachmentRef[] }> {
+		const prefix = `${profileId}:`;
+		return [...this.pendingNotes.entries()]
+			.filter(([key, n]) => key.startsWith(prefix) && n.attachments.length > 0)
+			.map(([, n]) => ({ file: n.file, attachments: n.attachments }));
+	}
+
 	discardQueued(profileId: string): void {
 		const prefix = `${profileId}:`;
 		for (const key of [...this.pendingNotes.keys()]) {
@@ -317,12 +347,16 @@ export class NoteManager {
 			}
 			this.blockedNotes.delete(key);
 
+			// The files this revision publishes with, from the metadata cache
+			// only (attachment spec P2 §3). Before the scrub and the hash: the
+			// obscured raw needs each published file's hash.
+			const attachments = await this.plugin.attachmentManager.collect(file, queueProfile);
+
 			// Optionally scrub note paths and attachment paths out of the published
 			// raw Markdown (per-profile, both default on). This scrubbed text feeds
 			// the content hash and the stored `raw`/content-index — but NOT the
 			// HTML render, which must keep the original path-form links to resolve.
-			const scrubbedRaw = await this.rewriteRawWikilinks(
-				raw, file, this.plugin.settings.publishingProfiles.find(p => p.id === profileId));
+			const scrubbedRaw = await this.rewriteRawWikilinks(raw, file, queueProfile, attachments);
 
 			// Calculate current hash over the scrubbed raw so toggling the setting
 			// or a target gaining/losing a UID correctly re-publishes the note.
@@ -336,6 +370,9 @@ export class NoteManager {
 			const currentHash = await this.getSHA1Hash(
 				`${uid}::${title}::${scrubbedRaw}${style ? `::style=${style}` : ''}`
 				+ (access.groups.length ? `::access=${access.groups.join(',')}` : '')
+				// Attachment keys join only when there are any, so a note pins the
+				// exact bytes it was published with (P2 §5).
+				+ attachmentHashSegment(attachments)
 			);
 
 			// Load publish history to determine prior hash
@@ -351,11 +388,12 @@ export class NoteManager {
 				title: title,
 				// HTML is rendered from the ORIGINAL raw (path-form wikilinks) so
 				// resolveInternalLinks can resolve them; see rewriteRawWikilinks.
-				content: await this.markdownToHtml(raw, file, profileId, access.groups),
+				content: await this.markdownToHtml(raw, file, profileId, access.groups, attachments),
 				raw: scrubbedRaw,
 				lastModified: file.stat.mtime,
 				style,
 				access: access.groups,
+				attachments,
 			};
 
 			this.pendingNotes.set(key, noteState);
@@ -430,13 +468,19 @@ export class NoteManager {
 				// Write note JSON to staging directory
 				await this.writeNoteToStaging(profileId, noteState);
 
+				// Its attachment refs, and the (area, key) entries it needs uploaded.
+				this.plugin.attachmentManager.stageRevision(profileId, noteState.currentHash, noteState.access, noteState.attachments);
+
 				// Remove from pending queue
 				this.pendingNotes.delete(key);
 			}
 
 			await this.commitBlockedNotes(profileId);
 
-			// Save all changes
+			// Save all changes. attachments.json (refs) is saved beside the
+			// history, before anything uploads.
+			await this.plugin.attachmentManager.flushStaged(profileId);
+			await this.plugin.attachmentManager.saveState(profileId);
 			await this.savePublishHistory(profileId);
 			await this.plugin.mappingManager.saveMappings();
 			await this.plugin.contentIndexManager.applyQueuedUpdates(profileId);
@@ -507,6 +551,9 @@ export class NoteManager {
 			// boolean, not the group list, so members of one group don't learn the
 			// names of the note's other groups.
 			if (gated) noteJson.gated = true;
+			// Same in every area copy, keys relative to the area (P2 §5).
+			const attachmentList = noteJsonAttachments(noteState.attachments);
+			if (attachmentList) noteJson.attachments = attachmentList;
 
 			const dir = partition === null
 				? stagedNotesDir

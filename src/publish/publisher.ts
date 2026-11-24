@@ -10,6 +10,7 @@ import { restrictedPrefix } from '../utils/access';
 import { UID_KEY, normalizeUID } from '../utils/uidResolver';
 import { compileExcludePatterns } from '../utils/excludedDirectories';
 import { busyMessage, withProfileLock } from '../utils/publishLock';
+import { nameList, plural } from '../utils/attachments';
 import {
 	auditPublishedUids,
 	describePublishedUid,
@@ -151,13 +152,18 @@ export class Publisher {
 	 * root, `*` within a folder name, `**` for any depth, case-insensitive.
 	 */
 	public isFileExcluded(file: TFile, profile: PublishingProfile): boolean {
+		return this.isPathExcluded(file.path, profile);
+	}
+
+	/** {@link isFileExcluded} for a vault path (attachments re-checked before upload may no longer exist). */
+	public isPathExcluded(path: string, profile: PublishingProfile): boolean {
 		const key = profile.excludedDirectories.join('\n');
 		let cached = this.excludeMatchers.get(profile.id);
 		if (!cached || cached.key !== key) {
 			cached = { key, isExcluded: compileExcludePatterns(profile.excludedDirectories) };
 			this.excludeMatchers.set(profile.id, cached);
 		}
-		return cached.isExcluded(file.path);
+		return cached.isExcluded(path);
 	}
 
 	// TODO::extend this to allow for no filtering by profileId::
@@ -272,6 +278,9 @@ export class Publisher {
 					// Last-published access groups (re-read from disk, so a failed
 					// earlier run's unsaved transitions are recomputed).
 					await this.plugin.accessManager.load(profile.id);
+					// attachments.json, loaded or created before commitPendingNotes
+					// writes refs and before anything uploads (attachment spec P2 §6).
+					await this.plugin.attachmentManager.beginPublish(profile);
 
 					// Discover + compile parser stages once per batch (vault overrides
 					// + built-in scaffolds). markdownToHtml then assembles a per-note
@@ -296,6 +305,25 @@ export class Publisher {
 				})(),
 				`${files.length} notes processed`
 			);
+
+			const oversized = this.plugin.attachmentManager.consumeOversized(profile.id);
+			if (oversized.length > 0) {
+				const cap = this.plugin.attachmentManager.settingsFor(profile).maxFileSizeMB;
+				NoticeManager.showNotice(
+					`${plural(oversized.length, 'attachment')} over ${cap} MB ${oversized.length === 1 ? 'was' : 'were'} not published: ${nameList(oversized)}`,
+					10000,
+				);
+			}
+
+			// A file changed after it was hashed: re-queue its notes once. If it is
+			// still changing, stop before anything commits, without throwing, so
+			// staging from earlier batches stays as it was (P2 §7, item 1).
+			const stillChanging = await this.requeueChangedAttachments(profile);
+			if (stillChanging) {
+				this.plugin.noteManager.discardQueued(profile.id);
+				NoticeManager.showNotice(`${stillChanging} is still changing. Publish again when it is saved.`, 10000);
+				return;
+			}
 
 			// Commit frontmatter + write queued notes to staging, with a loading Notice
 			// covering the (potentially long) per-note JSON write-out loop.
@@ -392,7 +420,26 @@ export class Publisher {
 
 			// Copy staged files to the error directory (staging is kept)
 			await this.handlePublishError(profile.id, err);
+		} finally {
+			await this.plugin.attachmentManager.endPublish(profile.id);
 		}
+	}
+
+	/**
+	 * Compare each queued note's attachment refs with the files' current stat.
+	 * Re-queue notes whose files changed (which re-hashes); returns the name of
+	 * a file that changed again on the second check, else null.
+	 */
+	private async requeueChangedAttachments(profile: PublishingProfile): Promise<string | null> {
+		const am = this.plugin.attachmentManager;
+		for (const { file, attachments } of this.plugin.noteManager.queuedWithAttachments(profile.id)) {
+			if (!await am.firstChanged(attachments)) continue;
+			await this.plugin.noteManager.queueNote(file, profile.id);
+			const requeued = this.plugin.noteManager.queuedWithAttachments(profile.id).find(n => n.file.path === file.path);
+			const again = requeued ? await am.firstChanged(requeued.attachments) : null;
+			if (again) return again.fileName;
+		}
+		return null;
 	}
 
 	private async cleanupStagedFiles(profileId: string) {

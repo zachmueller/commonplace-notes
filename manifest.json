@@ -2,7 +2,7 @@
 	"id": "commonplace-notes",
 	"name": "Commonplace Notes",
 	"version": "0.7.2",
-	"minAppVersion": "1.7.2",
+	"minAppVersion": "1.8.7",
 	"description": "Publish your notes with sliding panes and link to others' notes.",
 	"author": "Zach Mueller",
 	"authorUrl": "https://notes.zach.nz",

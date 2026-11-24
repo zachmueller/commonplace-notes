@@ -37,7 +37,7 @@ import type {
 	ParserExtensionDefinition,
 	ParserUtils,
 } from '../../src/utils/parser/types';
-import { PARSER_FIXTURES, PUBLISHED, type Fixture } from './parser-fixtures';
+import { PARSER_FIXTURES, PUBLISHED, resolveAttachmentFixture, type Fixture } from './parser-fixtures';
 import golden from '../fixtures/parser-golden.json';
 
 // tsx wraps CJS-transpiled module exports under `.default`; unwrap to the real
@@ -58,6 +58,7 @@ const context: ParserContext = {
 	frontmatterManager: {} as any,
 	urlScheme: 'current',
 	noteStyle: 'ai',
+	resolveAttachment: resolveAttachmentFixture,
 	resolveInternalLinks: async (notePath: string) =>
 		PUBLISHED.has(notePath)
 			? { uid: `UID-${notePath}`, title: notePath, published: true }
@@ -357,10 +358,96 @@ return libs.defineTransform((tree) => {
 				not: ['!', 'data-uid', 'cpn-transclusion'],
 			},
 			{
-				name: 'embed · attachment with size alias → path, no !',
-				md: '![[pic.png|300]]',
-				has: ['<span class="unpublished-link">pic.png</span>'],
+				name: 'embed · unknown file with size alias → path, no !',
+				md: '![[other.png|300]]',
+				has: ['<span class="unpublished-link">other.png</span>'],
 				not: ['!', '300', 'data-uid'],
+			},
+			// remark-attachments (attachment spec P2 §4, §10)
+			{
+				name: 'attachment · image embed',
+				md: '![[pic.png]]',
+				has: [`<img class="cpn-attachment cpn-attachment-image" data-cpn-attachment="${'b'.repeat(64)}/pic.png" alt="pic.png" loading="lazy">`],
+				not: ['src=', 'href=', 'unpublished-link'],
+			},
+			{
+				name: 'attachment · image size alias sets width/height',
+				md: '![[pic.png|300]] ![[pic.png|300x200]]',
+				has: ['alt="pic.png" loading="lazy" width="300">', 'width="300" height="200">'],
+				not: ['>300<'],
+			},
+			{
+				name: 'attachment · alt from alias, Markdown alt and file name',
+				md: '![[pic.png|A diagram]] ![Cat|120](Media/cat%20pic.png) ![](Media/cat%20pic.png)',
+				has: ['alt="A diagram"', 'alt="Cat" loading="lazy" width="120"', 'alt="cat pic.png"'],
+				not: ['src='],
+			},
+			{
+				name: 'attachment · audio embed',
+				md: '![[song.mp3]]',
+				has: [`<audio class="cpn-attachment cpn-attachment-audio" controls preload="metadata" data-cpn-attachment="${'a'.repeat(64)}/song.mp3"></audio>`],
+				not: ['src='],
+			},
+			{
+				name: 'attachment · video embed, sized',
+				md: '![[clip.mp4|640x360]]',
+				has: ['<video class="cpn-attachment cpn-attachment-video" controls preload="metadata"', 'width="640" height="360"></video>'],
+			},
+			{
+				name: 'attachment · pdf embed opens in a new tab, fragment kept',
+				md: '![[slides.pdf#page=3]]',
+				has: ['<a class="cpn-attachment cpn-attachment-file"', 'target="_blank" rel="noopener" data-cpn-fragment="page=3">slides.pdf</a>'],
+				not: ['href='],
+			},
+			{
+				name: 'attachment · plain links of any kind are file links with display text',
+				md: '[[song.mp3]] [[slides.pdf|the slides]] [notes **here**](Media/doc.pdf#page=2)',
+				has: ['data-cpn-attachment="' + 'a'.repeat(64) + '/song.mp3" target="_blank" rel="noopener">song.mp3</a>',
+					'>the slides</a>', 'data-cpn-fragment="page=2">notes <strong class="line" data-line="1">here</strong></a>'],
+				not: ['<audio', 'href='],
+			},
+			{
+				name: 'attachment · embeds in a heading become links',
+				md: '## Listen ![[song.mp3]] ![[pic.png|300]]',
+				has: ['>song.mp3</a>', '>pic.png</a>'],
+				not: ['<audio', '<img'],
+			},
+			{
+				name: 'attachment · mixed paragraph keeps the note embed inline',
+				md: '![[pic.png]] ![[a]]',
+				has: ['<img class="cpn-attachment', '<span class="cpn-transclusion" data-uid="UID-a"'],
+				not: ['<div class="line cpn-transclusion"'],
+			},
+			{
+				name: 'attachment · escaping of odd file names',
+				md: '![[odd "q" x<y & ü.png]] [[odd "q" x<y & ü.png]]',
+				// `<` is valid inside a quoted attribute; `"` and `&` are escaped there.
+				has: ['/odd &#x22;q&#x22; x<y &#x26; ü.png"', 'alt="odd &#x22;q&#x22; x<y &#x26; ü.png"', '>odd "q" x&#x3C;y &#x26; ü.png</a>'],
+				not: ['>odd "q" x<y', '"q" x<y & '],
+			},
+			{
+				name: 'attachment · published: false → unpublished span with the file name, no folder',
+				md: '![[Media/secret.mp3]] [[secret.mp3|my take]] ![x](Media/secret.mp3)',
+				has: ['<span class="unpublished-link">secret.mp3</span>', '<span class="unpublished-link">my take</span>', '<span class="unpublished-link">x</span>'],
+				not: ['Media/', 'data-cpn-attachment'],
+			},
+			{
+				name: 'unpublished · file and note names with & < > are escaped',
+				md: '[[a&b>c.png]] ![[x<y.mp3]] [[missing & x<y]]',
+				has: ['<span class="unpublished-link">a&#x26;b>c.png</span>', '<span class="unpublished-link">x&#x3C;y.mp3</span>', '<span class="unpublished-link">missing &#x26; x&#x3C;y</span>'],
+				not: ['x<y', 'b&c'],
+			},
+			{
+				name: 'attachment · external, absolute and unresolved URLs untouched',
+				md: '![ext](https://example.com/x.png) [abs](/Media/doc.pdf) ![u](nope.png)',
+				has: ['<img src="https://example.com/x.png" alt="ext"', '<a href="/Media/doc.pdf"', '<img src="nope.png" alt="u"'],
+				not: ['data-cpn-attachment'],
+			},
+			{
+				name: 'attachment · code is left alone',
+				md: '`![[song.mp3]]`',
+				has: ['data-line="1">![[song.mp3]]</code>'],
+				not: ['<audio'],
 			},
 			{
 				name: 'embed · inside a heading → plain link',
