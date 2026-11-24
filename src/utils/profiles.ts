@@ -98,6 +98,25 @@ export class ProfileManager {
 		return `${this.getProfileDir(profileId)}/staged-notes`;
 	}
 
+	/**
+	 * The attachments the staged batch needs (attachment spec P2 §6). Beside
+	 * staged-notes/, not inside it: every top-level `.json` in staged-notes/ is
+	 * uploaded as a note.
+	 */
+	getStagedAttachmentsPath(profileId: string): string {
+		return `${this.getProfileDir(profileId)}/staged-attachments.json`;
+	}
+
+	/** Attachment references and the per-area upload manifest (attachment spec P2 §6). */
+	getAttachmentsStatePath(profileId: string): string {
+		return `${this.getProfileDir(profileId)}/attachments.json`;
+	}
+
+	/** The plugin folder (`<configDir>/plugins/commonplace-notes`), home of the shared hash cache. */
+	getPluginDir(): string {
+		return this.plugin.manifest.dir ?? '';
+	}
+
 	getStagedErrorDir(profileId: string): string {
 		return `${this.getProfileDir(profileId)}/staged-error`;
 	}

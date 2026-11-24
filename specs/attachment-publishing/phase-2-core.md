@@ -37,7 +37,7 @@ at the start (§6), so a second publish can overwrite `refs` that the first hold
 in memory and hasn't saved yet, and a later sweep (P3 §2) could then delete a
 file that a live revision uses.
 
-- [ ] New module `src/utils/publishLock.ts`:
+- [x] New module `src/utils/publishLock.ts`:
 
   ```ts
   /** Runs fn while holding profileId's lock. Returns { ran: false, heldBy } without
@@ -48,27 +48,27 @@ file that a live revision uses.
 
   The lock is in memory, one per profile ID. Different profiles never block
   each other. It is released in `finally`, and quitting Obsidian releases it.
-- [ ] When the lock is held, the second request is **refused, not queued**:
+- [x] When the lock is held, the second request is **refused, not queued**:
       notice "`<profile>` is busy (`<heldBy>`). Try again when it finishes." It
       returns without doing anything. A queued request could run against a
       selection or settings that changed meanwhile.
 - [ ] Held for the whole of:
-  - [ ] `Publisher.publishNotes`, from setup through upload, sweeps (P3 §2) and
+  - [x] `Publisher.publishNotes`, from setup through upload, sweeps (P3 §2) and
         invalidation. This covers every publish command (`publishSingle`,
         `publishConnected`, **Publish updates since last full publish**,
         **Publish all notes**), because they all go through it. Label:
         "publishing".
-  - [ ] `Publisher.deletePublishedUid` (delete picker). Label: "deleting a
+  - [x] `Publisher.deletePublishedUid` (delete picker). Label: "deleting a
         note".
-  - [ ] The group purge in `src/settings/profile/accessGroups.ts`
+  - [x] The group purge in `src/settings/profile/accessGroups.ts`
         (`purgeRestrictedPartition`). Label: "removing a group's notes".
-  - [ ] `rebuildContentIndex` in `src/main.ts`, which writes the content index
+  - [x] `rebuildContentIndex` in `src/main.ts`, which writes the content index
         and may mint UIDs. Label: "rebuilding the content index".
   - [ ] From phase 3: the attachment-state rebuild and the audit's delete offer
         (P3 §3, P3 §4). Label: "checking attachments".
-- [ ] Callers inside a locked operation call the unlocked internals, never a
+- [x] Callers inside a locked operation call the unlocked internals, never a
       locked entry point, because the lock isn't re-entrant.
-- [ ] Settings changes aren't locked. The re-check before upload (§7) handles a
+- [x] Settings changes aren't locked. The re-check before upload (§7) handles a
       settings change in the middle of a publish.
 
 The lock covers one machine. Several machines publishing one profile is still
@@ -82,12 +82,12 @@ an earlier failed batch, whose history and mappings were already saved locally,
 so the next successful publish pushes mappings that point at note JSON that was
 never uploaded. The `uidConflicts` throw in `publishNotes` already hits this.
 
-- [ ] `handlePublishError` only copies. It no longer calls
+- [x] `handlePublishError` only copies. It no longer calls
       `cleanupStagedFiles`.
-- [ ] Staging is cleared only after a successful upload, so its entries are
+- [x] Staging is cleared only after a successful upload, so its entries are
       retried on the next publish. Uploading a staged note JSON that no mapping
       uses is harmless, because the site never fetches it.
-- [ ] It also copies `staged-attachments.json` (§6) into the error session
+- [x] It also copies `staged-attachments.json` (§6) into the error session
       directory.
 
 ### Publish timestamp taken at the start
@@ -97,7 +97,7 @@ finishes. A note or attachment edited during a long full publish, after it was
 read, is then older than the timestamp and missed by the next **Publish updates
 since last full publish**.
 
-- [ ] Record `const startedAt = Date.now()` at the start of `publishNotes`,
+- [x] Record `const startedAt = Date.now()` at the start of `publishNotes`,
       before anything is queued, and write `startedAt` on success. An edit made
       during the publish is then picked up by the next updates run. A note
       re-queued that way with unchanged bytes has an unchanged hash, so it
@@ -992,10 +992,10 @@ Every publish re-stages and re-uploads each note it queues
 
 ### `test-publish-lock.ts` (new)
 
-- [ ] A second `withProfileLock` on the same profile while the first runs
+- [x] A second `withProfileLock` on the same profile while the first runs
       returns `{ ran: false, heldBy }` and doesn't run its function.
-- [ ] Different profiles run concurrently.
-- [ ] The lock is released when the function throws.
+- [x] Different profiles run concurrently.
+- [x] The lock is released when the function throws.
 - [ ] Two publishes started together: the second is refused, and the first's
       `refs` are all in `attachments.json` afterwards.
 - [ ] The delete picker during a publish is refused.

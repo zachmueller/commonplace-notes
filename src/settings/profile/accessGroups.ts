@@ -9,6 +9,7 @@ import {
 	normalizeMembers,
 } from '../../utils/access';
 import { purgeRestrictedPartition } from '../../publish/awsUpload';
+import { busyMessage, withProfileLock } from '../../utils/publishLock';
 import { Logger, errorMessage } from '../../utils/logging';
 
 /**
@@ -155,8 +156,13 @@ function renderGroup(ctx: ProfileContext, containerEl: HTMLElement, name: string
 				// group are unpublished at their next publish (fail closed).
 				if (ctx.profile.publishMechanism === 'AWS' && ctx.profile.awsSettings?.bucketName) {
 					try {
-						const n = await purgeRestrictedPartition(plugin, ctx.profile.id, currentName);
-						new Notice(`Removed group "${currentName}" (${n} published object(s) deleted).`);
+						const purge = await withProfileLock(ctx.profile.id, "removing a group's notes", () =>
+							purgeRestrictedPartition(plugin, ctx.profile.id, currentName));
+						if (purge.ran) {
+							new Notice(`Removed group "${currentName}" (${purge.result} published object(s) deleted).`);
+						} else {
+							new Notice(`Group removed, but its published files weren't deleted: ${busyMessage(ctx.profile.name, purge.heldBy)} Its notes are unpublished at their next publish.`, 10000);
+						}
 					} catch (err) {
 						Logger.error(`Could not purge restricted/${currentName}/:`, err);
 						new Notice(`Group removed, but its published files could not be deleted: ${errorMessage(err)}`);

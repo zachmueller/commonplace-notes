@@ -9,6 +9,7 @@ import { NoticeManager } from '../utils/notice';
 import { restrictedPrefix } from '../utils/access';
 import { UID_KEY, normalizeUID } from '../utils/uidResolver';
 import { compileExcludePatterns } from '../utils/excludedDirectories';
+import { busyMessage, withProfileLock } from '../utils/publishLock';
 import {
 	auditPublishedUids,
 	describePublishedUid,
@@ -231,12 +232,33 @@ export class Publisher {
 		return Array.from(connections.values());
 	}
 
+	/**
+	 * Publish `files` to `profile`. Holds the profile's publish lock for the
+	 * whole run (setup through upload, sweeps and invalidation), so every
+	 * publish command, which all come through here, refuses to overlap another
+	 * publish, a delete, a group purge or a content-index rebuild.
+	 */
 	async publishNotes(
 		files: TFile[],
 		profile: PublishingProfile,
 		updatePublishTimestamp: boolean = false,
 		triggerCloudFrontInvalidation: boolean = false
-	) {
+	): Promise<void> {
+		const lock = await withProfileLock(profile.id, 'publishing', () =>
+			this.publishNotesLocked(files, profile, updatePublishTimestamp, triggerCloudFrontInvalidation));
+		if (!lock.ran) NoticeManager.showNotice(busyMessage(profile.name, lock.heldBy));
+	}
+
+	private async publishNotesLocked(
+		files: TFile[],
+		profile: PublishingProfile,
+		updatePublishTimestamp: boolean,
+		triggerCloudFrontInvalidation: boolean
+	): Promise<void> {
+		// Taken before anything is queued: a note or attachment edited during a
+		// long publish, after it was read, is newer than this and so is picked
+		// up by the next "Publish updates since last full publish".
+		const startedAt = Date.now();
 		try {
 			await NoticeManager.showProgress(
 				`Processing ${files.length} notes`,
@@ -343,7 +365,7 @@ export class Publisher {
 					.findIndex(p => p.id === profile.id);
 				if (profileIndex !== -1) {
 					this.plugin.settings.publishingProfiles[profileIndex]
-						.lastFullPublishTimestamp = Date.now();
+						.lastFullPublishTimestamp = startedAt;
 					await this.plugin.saveSettings();
 				}
 			}
@@ -368,7 +390,7 @@ export class Publisher {
 			NoticeManager.showNotice(`Error during publishing: ${err.message}`);
 			Logger.error('Publishing error:', err);
 
-			// Move staged files to error directory
+			// Copy staged files to the error directory (staging is kept)
 			await this.handlePublishError(profile.id, err);
 		}
 	}
@@ -380,6 +402,10 @@ export class Publisher {
 		const restrictedDir = `${stagedDir}/restricted`;
 		if (await this.plugin.app.vault.adapter.exists(restrictedDir)) {
 			await this.plugin.app.vault.adapter.rmdir(restrictedDir, true);
+		}
+		const stagedAttachments = this.plugin.profileManager.getStagedAttachmentsPath(profileId);
+		if (await this.plugin.app.vault.adapter.exists(stagedAttachments)) {
+			await this.plugin.app.vault.adapter.remove(stagedAttachments);
 		}
 	}
 
@@ -395,7 +421,7 @@ export class Publisher {
 			// Ensure error session directory exists
 			await PathUtils.ensureDirectory(this.plugin, errorSessionDir);
 
-			// Move staged files to error directory (gated copies keep their
+			// Copy staged files to the error directory (gated copies keep their
 			// restricted/<group>/ subpath)
 			const adapter = this.plugin.app.vault.adapter;
 			const copyDir = async (from: string, to: string) => {
@@ -409,7 +435,12 @@ export class Publisher {
 					await copyDir(folder, sub);
 				}
 			};
-			await copyDir(stagedDir, errorSessionDir);
+			if (await adapter.exists(stagedDir)) await copyDir(stagedDir, errorSessionDir);
+			// Staged attachment entries sit beside staged-notes/, not in it.
+			const stagedAttachments = this.plugin.profileManager.getStagedAttachmentsPath(profileId);
+			if (await adapter.exists(stagedAttachments)) {
+				await adapter.copy(stagedAttachments, `${errorSessionDir}/staged-attachments.json`);
+			}
 
 			// Write error details
 			await this.plugin.app.vault.adapter.write(
@@ -421,8 +452,9 @@ export class Publisher {
 				})
 			);
 
-			// Clean up staged directory
-			await this.cleanupStagedFiles(profileId);
+			// Staging is kept. An earlier failed batch's history and mappings are
+			// already saved locally, so its staged note JSON must still upload;
+			// only a successful upload clears staging (cleanupStagedFiles).
 
 			NoticeManager.showNotice(`Publish failed. Error details saved to ${errorSessionDir}`);
 		} catch (moveError) {
@@ -717,6 +749,15 @@ export class Publisher {
 	 * history is kept. Returns true on success.
 	 */
 	async deletePublishedUid(profile: PublishingProfile, uid: string, label: string = uid): Promise<boolean> {
+		const lock = await withProfileLock(profile.id, 'deleting a note', () =>
+			this.deletePublishedUidLocked(profile, uid, label));
+		if (lock.ran) return lock.result;
+		NoticeManager.showNotice(busyMessage(profile.name, lock.heldBy));
+		return false;
+	}
+
+	/** {@link deletePublishedUid} without taking the lock, for callers that hold it. */
+	private async deletePublishedUidLocked(profile: PublishingProfile, uid: string, label: string): Promise<boolean> {
 		if (profile.publishMechanism !== 'AWS' || !profile.awsSettings) {
 			NoticeManager.showNotice('Delete is only supported for AWS publishing profiles');
 			return false;

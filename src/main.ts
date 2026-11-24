@@ -30,6 +30,7 @@ import { AccessManager } from './utils/accessManager';
 import { buildGroupsJson } from './utils/access';
 import { sha256HexBytes } from './infrastructure/lambdaZip';
 import { NoticeManager } from './utils/notice';
+import { busyMessage, withProfileLock } from './utils/publishLock';
 import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
 import { Publisher } from './publish/publisher';
@@ -1435,9 +1436,16 @@ export default class CommonplaceNotesPlugin extends Plugin {
 const cpn = app.plugins.plugins['commonplace-notes'];
 cpn.rebuildContentIndex();
 		*/
-		// Process each note
 		const profile = await this.publisher.promptForProfile();
 		if (!profile) return;
+		// Writes the content index and may mint UIDs, so it mustn't overlap a
+		// publish of the same profile.
+		const lock = await withProfileLock(profile.id, 'rebuilding the content index', () =>
+			this.rebuildContentIndexLocked(profile));
+		if (!lock.ran) NoticeManager.showNotice(busyMessage(profile.name, lock.heldBy));
+	}
+
+	private async rebuildContentIndexLocked(profile: PublishingProfile): Promise<void> {
 		const files = await this.publisher.getAllPublishableNotes(profile.id);
 		for (const file of files) {
 			if (profile.publishContentIndex || profile.chat?.enabled) {
