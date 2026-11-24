@@ -366,7 +366,7 @@ note").
 
 ### Known limitations
 
-- [ ] Written into the scaffold doc block and `docs/parser-extensions.md`:
+- [x] Written into the scaffold doc block and `docs/parser-extensions.md`:
 
 - **Mixed paragraphs.** A paragraph that mixes an attachment embed with a note
   embed (`![[pic.png]] ![[Note]]`) now has several children, so the note embed
@@ -1141,17 +1141,17 @@ In the style of `test-transclusions-runtime.ts`:
 
 ## 11. Docs and release
 
-- [ ] `docs/publishing-model.md`: replace the "attachments aren't published"
+- [x] `docs/publishing-model.md`: replace the "attachments aren't published"
       limitation, marking attachment publishing as **Beta**. Cover pinning,
       access areas, the publish lock, the one-publishing-machine assumption and
       the known limitations (§4).
-- [ ] `docs/settings.md`: the **Attachments (Beta)** group, the allow-list and
+- [x] `docs/settings.md`: the **Attachments (Beta)** group, the allow-list and
       active types, the size cap, and the **Publish all notes** advice.
-- [ ] `docs/parser-extensions.md`: the `remark-attachments` stage, its order,
+- [x] `docs/parser-extensions.md`: the `remark-attachments` stage, its order,
       `resolveAttachment`, and the site contract.
-- [ ] `docs/auth-and-access.md`: attachment access per area, private caching for
+- [x] `docs/auth-and-access.md`: attachment access per area, private caching for
       one session length, headers fixed at upload.
-- [ ] The S3 permissions publishing now uses: `s3:GetObject` for HEAD,
+- [x] The S3 permissions publishing now uses: `s3:GetObject` for HEAD,
       `s3:ListBucket` for the completeness probe, `s3:AbortMultipartUpload`.
 - [ ] Release notes (with phase 3): "Attachments (Beta)", off by default. The
       release requires Obsidian 1.8.7 or later (§6, Machine ID).

@@ -28,7 +28,7 @@ The default order is:
 
 ## The built-in stages
 
-There are **ten** built-in stages:
+There are **eleven** built-in stages:
 
 | Order | Name | Tree | What it does |
 |-------|------|------|--------------|
@@ -36,6 +36,7 @@ There are **ten** built-in stages:
 | 20 | `remark-gfm` | remark | GitHub Flavored Markdown: tables, strikethrough, task lists, autolinks. |
 | 30 | `line-numbers` | remark | Tags each node with `class="line"` and `data-line=<source line>`. |
 | 35 | `remark-block-ids` | remark | Turns Obsidian `^block-id` markers into `data-block-id` attributes. |
+| 38 | `remark-attachments` | remark | *(Beta)* Renders links and embeds of non-Markdown vault files as published attachments (`<img>`, `<audio>`, `<video>`, new-tab links) or unpublished spans. |
 | 40 | `remark-obsidian-links` | remark | Resolves `[[wikilinks]]` to published-note URLs (or unpublished spans), and `![[embeds]]` to transclusion placeholders. |
 | 45 | `remark-callouts` | remark | Renders Obsidian `[!type]` callout blockquotes as styled callout boxes. |
 | 47 | `remark-highlights` | remark | Renders `==highlights==` as `<mark>`; a leading color emoji (`==🔴text==`) sets `data-highlight="red"` etc. |
@@ -59,6 +60,25 @@ A few couplings to respect if you override these:
   `data-uid` (plus `data-heading` or `data-block`), which the published site
   fills with the target's latest content. Override the stage with
   `transclusions: false` in its options to render embeds as plain links.
+- **Attachments (site contract).** `remark-attachments` (38) runs before
+  `remark-obsidian-links`, so links to vault files never reach that stage and
+  overrides of it keep working. It reads `context.resolveAttachment(linkpath)`:
+  `null` leaves the link alone (a note, an unresolved link, an external URL);
+  `{ published: false, fileName }` renders `<span class="unpublished-link">`
+  with the file name; `{ published: true, key, fileName, kind }` renders the
+  attachment. Only files in the note's attachment list (collected from
+  Obsidian's metadata cache) are ever `published: true`, so the renderer can't
+  show a file that won't be uploaded. The output never holds an `src` or `href`:
+  each element carries `data-cpn-attachment="<sha256>/<fileName>"` (and
+  `data-cpn-fragment`, e.g. `page=3` on a PDF link), and the site builds
+  `/<area>attachments/<sha256>/<fileName>` for the access area it loaded the note
+  from. The classes are `cpn-attachment` plus `cpn-attachment-image`, `-audio`,
+  `-video` or `-file`. Keep the attribute and class names if you replace the
+  stage. Known limitations: a paragraph mixing an attachment embed with a note
+  embed renders the note embed inline; raw HTML (`<img src>`) and reference
+  definitions (`[ref]: path`) aren't visited and pass through as written; a link
+  the Markdown parser splits into several nodes (`![[my *draft* take.mp3]]`, a
+  name holding `<tag>`-like text) is uploaded but not rendered as an attachment.
 - **Callout CSS.** `remark-callouts` emits `data-callout-type` values that must
   match the published site's `[data-callout-type="…"]` CSS. Keep the type list in
   sync if you customize it.

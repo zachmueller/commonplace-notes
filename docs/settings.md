@@ -57,15 +57,49 @@ rest of this section configures the active profile, in these subsections:
   default on) — replace links to images, audio, PDFs and other non-Markdown
   vault files in the published raw Markdown with the file's content hash, or
   `null` when the file isn't published, keeping the extension:
-  `![[Media/song.mp3]]` → `![[null.mp3]]`, `![](Media/pic.png)` →
-  `![](null.png)`. Folder paths stay out of the raw Markdown, the content index
+  `![[Media/song.mp3]]` → `![[3fa9….mp3]]` (or `![[null.mp3]]`),
+  `![](Media/pic.png)` → `![](null.png)`. Folder paths stay out of the raw Markdown, the content index
   and the chat corpus. Aliases, alt text and link text are kept, so as with note
   titles, a file's name still shows unless the link has an alias. Applies to
   wikilinks and inline Markdown links; raw HTML (`<img src>`) and reference
   definitions (`[ref]: path`) are left as written. Rendered HTML and search are
   unaffected.
-- **Excluded directories** — notes in these folders are never published. See
-  [Excluded directories](#excluded-directories) below.
+- **Excluded directories** — notes in these folders are never published, and
+  neither are files in them. See [Excluded directories](#excluded-directories)
+  below.
+- **Attachments (Beta)** — see [Attachments](#attachments-beta) below.
+
+#### Attachments (Beta)
+
+*Beta: attachment publishing is new and may change.* Publishes the files your
+notes link to. AWS profiles only: on Local profiles the group shows but is
+disabled. See [Attachments](publishing-model.md#attachments-beta) for how
+publishing, access and pinning work.
+
+- **Publish attachments** (`attachments.mode`, default **Off**) — which links
+  publish a file: **Off**, **Embeds** (`![[file]]`, `![](file)`), or **Embeds and
+  links** (also `[[file]]`, `[text](file)`). Changing it gives affected notes a
+  new revision on their next publish. Narrowing it or turning it off leaves files
+  in the bucket while older revisions reference them. When you first turn it on,
+  run **Publish all notes** once so existing notes pick up their attachments.
+- **Allowed extensions** (`attachments.allowedExtensions`) — space- or
+  comma-separated, case-insensitive. Default: `png jpg jpeg gif webp avif svg`
+  (images), `mp3 m4a aac ogg oga opus wav flac` (audio), `mp4 m4v webm mov`
+  (video), `pdf`. There's no deny-list: add any extension, or `*` for every file
+  (including files without one). Images, audio and video in the default lists
+  play in the note; every other type opens in a new tab.
+  **Active files download.** Types that a browser could run as a page on your
+  site (`html`, `htm`, `xhtml`, `xml`, `xsl`, `js`, `mjs`, `wasm`, …) and any
+  type the site doesn't know are served as `application/octet-stream` with
+  `Content-Disposition: attachment`, so opening them downloads the file under
+  its own name instead of running it. An SVG shows in the note but downloads
+  when opened directly.
+- **Maximum file size (MB)** (`attachments.maxFileSizeMB`, default 50, 1–500) —
+  larger files are skipped, and one notice per publish names them. Files are
+  streamed from disk for hashing and upload, so the cap bounds upload time and
+  storage, not memory.
+
+Files under an excluded directory never publish, whichever note links them.
 
 #### Excluded directories
 

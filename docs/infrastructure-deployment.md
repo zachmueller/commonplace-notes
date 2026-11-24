@@ -19,6 +19,12 @@ The deploying user/role needs at minimum:
 - If using custom domains: `acm:RequestCertificate`, `acm:DescribeCertificate`, `acm:ListCertificates` (to offer reuse of existing certificates)
 - If using Route53: `route53:ListHostedZones`, `route53:ChangeResourceRecordSets`, `route53:CreateHostedZone` (only if creating a new zone)
 
+Publishing needs `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` on the
+site bucket. With [attachments](publishing-model.md#attachments-beta) turned on it
+also uses `s3:GetObject` (for `HeadObject`, to skip files already uploaded),
+`s3:ListBucket` (a one-time check for existing attachment objects) and
+`s3:AbortMultipartUpload` (files over 16 MB upload in parts).
+
 ---
 
 ## New Deployment (From Scratch)

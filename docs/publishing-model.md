@@ -73,14 +73,115 @@ shape the output:
 - **Obscure attachment names** (`obscureRawAttachments`, default on) — rewrites
   links to non-Markdown vault files in the published raw Markdown to the file's
   content hash, or `null` when it isn't published, keeping the extension (e.g.
-  `![[Media/song.mp3]]` → `![[null.mp3]]`). Attachments aren't published yet,
-  so every target is `null.<ext>` for now. It covers wikilinks and inline
-  Markdown links and images, not raw HTML or reference definitions. The
-  rendered HTML still shows these links' folder paths until attachment
-  publishing ships.
+  `![[Media/song.mp3]]` → `![[3fa9….mp3]]`, or `![[null.mp3]]` for a file that
+  doesn't publish). It covers wikilinks and inline Markdown links and images,
+  not raw HTML or reference definitions. It applies whatever the
+  [attachment mode](#attachments-beta). The rendered HTML never shows folder
+  paths: links to vault files show the file name (or the link's alias).
 
 Both obscure settings change the note's content hash, so turning either on or
 off republishes the notes it affects on the next publish.
+
+## Attachments (Beta)
+
+> **Beta.** Attachment publishing is new and may change. It is off by default.
+
+A note can publish the images, audio, video, PDFs and other files it links to.
+Turn it on per profile in **Settings → Content → Attachments (Beta)**, then run
+**Publish all notes** once so existing notes pick up their files.
+
+**What publishes.** The **mode** decides which links publish a file:
+
+- **Off** (default): none.
+- **Embeds**: `![[file.ext]]` and `![](file.ext)`.
+- **Embeds and links**: also plain `[[file.ext]]` and `[text](file.ext)`.
+
+A file also has to have an allowed extension, be within the size cap, and not
+sit in an [excluded directory](settings.md#excluded-directories). Links to
+Markdown files are always notes, never attachments. The list of files comes only
+from Obsidian's metadata cache, so a note Obsidian hasn't indexed yet publishes
+with every file link unpublished. Attachments publish on AWS profiles only.
+
+**How readers see them.** `![[image]]`, `![[audio]]` and `![[video]]` play in the
+note. PDF and other embeds, and every plain link, open the file in a new tab. A
+file that didn't publish shows its name as an unpublished link. HTML, JavaScript
+and other files that could run code on the site download instead of opening.
+
+**Access follows the notes.** A file is uploaded to every access area that has a
+note referencing it: the public area, and each `restricted/<group>/` area of a
+gated note. It is readable by exactly the readers who can read some note that
+references it. A file becomes public as soon as any public note references it.
+See [Authentication & access](auth-and-access.md#attachments).
+
+**Pinning.** A note revision references the exact bytes it was published with.
+The note's content hash includes each attachment's SHA-256 and file name, so:
+
+- editing a file gives every note that uses it a new revision on its next
+  publish, and old permalinks keep the old bytes;
+- turning the mode on, widening it, narrowing it or turning it off changes the
+  hashes of the notes it affects;
+- notes without links to non-Markdown files keep their hashes.
+
+Files are stored under `attachments/<sha256>/<file name>` in each area. A key's
+bytes never change, so files are cached for a long time and never need a
+CloudFront invalidation. **Publish updates since last full publish** also picks
+up notes whose files changed (it checks each linked file's modification and
+change time, so a tag editor that keeps the modification time is still seen).
+
+**Diffs.** Attachments get no diff of their own. The note diff shows file names
+instead of content hashes, and says **Attachments changed: …** when the files
+differ. A change to a file's bytes alone shows **The text is identical.
+Attachments changed: …**.
+
+**Publishing safety.**
+
+- **Publish lock.** A publish, a delete, a group purge or a content-index
+  rebuild for one profile never overlap. A second request while one runs is
+  refused with a "busy" notice; run it again when the first finishes.
+- Every staged file is re-checked against the current settings just before
+  upload. Files that are now excluded, no longer allowed, over the cap, moved,
+  or changed since an earlier failed publish staged them are dropped with a
+  notice. Their notes show **Attachment unavailable** for them.
+- A file that changes while a publish reads or uploads it stops the publish
+  with "`<file>` is still changing" or "`<file>` changed while publishing".
+  Publish again once it is saved.
+- Files are uploaded before any note, so a note never points at a missing file.
+- Turning the mode off or narrowing it leaves files in the bucket while older
+  revisions still reference them.
+
+**One publishing machine per profile.** The profile's local state
+(`publish-history.json`, the mappings, `access.json` and `attachments.json`)
+lives in the plugin folder and reaches other machines only through whatever
+syncs it. Publish each profile from one machine, or let the plugin folder finish
+syncing before publishing from another. **Audit published notes** finds and
+repairs objects that went missing because of overlapping publishes.
+
+**Known limitations.**
+
+- **Raw HTML and reference-style links.** `<img src="Media/x.png">`,
+  `<audio src=…>`, `<a href=…>` and reference definitions
+  (`[ref]: Media/a.pdf`, used by `![alt][ref]` and `[text][ref]`) aren't in
+  Obsidian's metadata cache. They are never published and pass through as
+  written, folder path included. Use wikilinks or inline Markdown links for
+  attachments.
+- **Links Obsidian and remark read differently.** A link Obsidian indexes but
+  the Markdown parser doesn't read as one link is uploaded with the note but
+  neither rendered nor obscured in the published raw Markdown, so its folder
+  path stays there. Known cases: a wikilink holding emphasis markers
+  (`![[my *draft* take.mp3]]`), and a file name holding something that reads as
+  an HTML tag (`![[a<b>.png]]`).
+- **Mixed paragraphs.** A paragraph that mixes an attachment embed with a note
+  embed (`![[pic.png]] ![[Note]]`) renders the note embed inline.
+- **Headers are fixed at upload.** Changing the read gate or the session length
+  later doesn't change the caching headers of files already uploaded.
+- **Media and sign-in sessions.** Playback stops when a reader's sign-in session
+  ends; the player then offers **Sign in again**.
+
+> **Upgrading.** Every publish re-uploads the current revision of each note it
+> includes, so notes pick up the new link rendering (file names instead of
+> folder paths, escaped unpublished links) on their next publish. **Publish all
+> notes** refreshes every note. Old permalinks keep their old HTML. The release
+> with attachments requires Obsidian 1.8.7 or later.
 
 ## Embeds (transclusions)
 
@@ -109,8 +210,8 @@ chain more than four embeds deep, stops at a plain link.
 
 Limitations:
 
-- Images and other attachments (`![[pic.png]]`) aren't published; they render as
-  unpublished links.
+- Embedded notes show their own *latest* attachments, as they show their latest
+  text. Pinning (below) covers a note's own attachments only.
 - Site search and chat index each note's own text only, not embedded content.
 - A target republished while the page is open appears after a reload.
 - `\![[Note]]` (escaped) is still treated as an embed.

@@ -145,6 +145,36 @@ kept out of everything readable site-wide:
   linking note can also read the target.
 - **Backlinks** from a gated note appear only in copies its readers can see.
 
+### Attachments
+
+*Beta.* A [published attachment](publishing-model.md#attachments-beta) follows
+the notes that reference it. It is uploaded to every area with a referencing
+note: `attachments/` for public notes and `restricted/<group>/attachments/` for
+each group of a gated one. The edge function checks it like any other object in
+that area, so it is readable by exactly the readers of some note that uses it.
+No edge-function change is needed.
+
+- **Caching.** Files in a `restricted/<group>/` area are sent with
+  `Cache-Control: private, max-age=<one sign-in session>, immutable`, so a
+  reader's browser keeps a recording for at most one session length instead of
+  re-downloading it on every play. Shared caches never store them. A member
+  removed from a group can replay only what their own browser already holds, for
+  at most one session. Public files on a whole-site gate are `private` too; on a
+  public site they are `public`. With `private`, CloudFront caches a file only
+  briefly, so gated media is fetched from S3 on most requests.
+- **Headers are fixed at upload.** A file's key never changes, so it is never
+  re-uploaded. Changing the read gate or the session length later only affects
+  files uploaded afterwards. A file uploaded while the site was public keeps
+  `public` after a whole-site gate is added; the edge function still checks
+  every request.
+- **Expired sessions.** A recording that fails because the reader's session
+  ended shows **Your session has ended. Sign in again to play this.** The page
+  never reloads by itself. On a public site with access groups, a signed-out
+  reader of a gated note's file gets the **Sign in again** link.
+- **New tabs.** A PDF or other file opened in a new tab shows the raw response
+  when it's missing or forbidden. On a whole-site gate, a signed-out new tab goes
+  through sign-in and back to the file.
+
 ### Fail-closed rules
 
 CPN never publishes a gated note publicly. A note that lists groups is removed
