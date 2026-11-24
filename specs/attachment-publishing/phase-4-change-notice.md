@@ -32,12 +32,12 @@ remember to republish.
 - [x] A file no published note references produces no notice.
 - [x] **Republish them** publishes exactly the referencing notes, and is refused
       while a publish runs.
-- [ ] End-to-end (sandbox `random` only): publish a note with an mp3, edit the
+- [x] End-to-end (sandbox `random` only): publish a note with an mp3, edit the
       mp3, click **Republish them**. The note records a new revision with the
       new bytes.
 - [x] `docs/publishing-model.md` describes the notice.
 
 ## Done when
 
-- [ ] Every box in §1–§2 is ticked.
-- [ ] The end-to-end check passes on the sandbox site.
+- [x] Every box in §1–§2 is ticked.
+- [x] The end-to-end check passes on the sandbox site.
