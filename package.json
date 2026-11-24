@@ -55,6 +55,7 @@
 		"test:publish-lock": "npx tsx e2e/scripts/test-publish-lock.ts",
 		"test:attachments": "npx tsx e2e/scripts/test-attachments.ts",
 		"test:attachment-state": "npx tsx e2e/scripts/test-attachment-state.ts",
+		"test:attachment-upload": "npx tsx e2e/scripts/test-attachment-upload.ts",
 		"test:parser": "npx tsx e2e/scripts/test-parser-pipeline.ts",
 		"test:parser:capture-golden": "npx tsx e2e/scripts/capture-parser-golden.ts > e2e/fixtures/parser-golden.json",
 		"test:deploy-hooks": "npx tsx e2e/scripts/test-deploy-hooks.ts",

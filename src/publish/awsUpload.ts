@@ -8,6 +8,7 @@ import { NoticeManager } from '../utils/notice';
 import { renderConfigJson, renderSiteAssets } from './siteRenderer';
 import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
 import { partitionRecord, partitionSlugMap, restrictedPrefix, type Partition } from '../utils/access';
+import { uploadStagedAttachments } from './attachmentUpload';
 
 /** Cache-Control for objects in a `restricted/<group>/` partition: never stored by browsers. */
 const RESTRICTED_CACHE_CONTROL = 'private, no-store';
@@ -122,8 +123,9 @@ export async function pushLocalJsonsToS3(
 		// restricted/<group>/ (see NoteManager.writeNoteToStaging).
 		const noteFiles = await listStagedNoteUploads(plugin, profileId, s3Prefix);
 		const hasAccessChanges = plugin.accessManager.peekTransitions(profileId).length > 0;
+		const hasStagedAttachments = (await plugin.attachmentManager.loadStaged(profileId)).length > 0;
 
-		if (noteFiles.length === 0 && !hasAccessChanges) {
+		if (noteFiles.length === 0 && !hasAccessChanges && !hasStagedAttachments) {
 			Logger.debug('No staged note files to upload');
 			NoticeManager.showNotice('No staged notes to upload');
 			return true;
@@ -137,6 +139,11 @@ export async function pushLocalJsonsToS3(
 			Logger.warn('Access-group membership sync failed:', err);
 			NoticeManager.showNotice(`Could not sync access-group membership: ${errorMessage(err)}`, 10000);
 		}
+
+		// Attachments before any note JSON, so no note or mapping ever points at
+		// a missing file. A failure (or a file that changed mid-publish) stops
+		// here with staging kept (attachment spec P2 §7).
+		if (!await uploadStagedAttachments(plugin, profile)) return false;
 
 		const { success, error } = await NoticeManager.showProgressWithCounter(
 			'Uploading notes to S3',

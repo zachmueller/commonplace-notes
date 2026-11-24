@@ -479,7 +479,7 @@ One file, so its presence and completeness can be judged as a whole:
 
 - [x] `refs` entries are written in `commitPendingNotes`, next to the publish
       history. Revisions without attachments are omitted.
-- [ ] `uploaded` entries are added as uploads succeed (§7).
+- [x] `uploaded` entries are added as uploads succeed (§7).
 - [x] **Load or create at the start of every AWS publish** whose attachment mode
       isn't `off`, in the setup step beside `accessManager.load`, so **before**
       `commitPendingNotes` writes `refs` and before anything uploads. With the
@@ -543,7 +543,7 @@ profile, because a file's hash doesn't depend on the profile.
       file").
 - [x] `ctime` is Node's `fs.stat(fullPath).ctimeMs`, the inode change time,
       **not** Obsidian's `file.stat.ctime`, which is the creation time.
-- [ ] **Eviction on mismatch.** Any mismatch found at upload (§7) deletes the
+- [x] **Eviction on mismatch.** Any mismatch found at upload (§7) deletes the
       file's cache entry, so a stale entry can never cause a second failure.
 - [x] **Streamed hashing.** `fs.createReadStream` on the adapter's full path
       (`FileSystemAdapter.getFullPath`) piped through Node's
@@ -600,8 +600,8 @@ at a missing object:
 5. Access transitions, then the orphan sweep (P3 §2).
 6. Invalidation.
 
-- [ ] Add the attachment step between membership sync and note JSON.
-- [ ] **On any attachment failure, `pushLocalJsonsToS3` returns `false`**, as it
+- [x] Add the attachment step between membership sync and note JSON.
+- [x] **On any attachment failure, `pushLocalJsonsToS3` returns `false`**, as it
       does today when a note upload fails. It doesn't throw. `publishNotes`
       then shows "Publishing failed. Staged files preserved for retry.", keeps
       staging and doesn't run `handlePublishError`.
@@ -614,7 +614,7 @@ keys is ensured in each of those areas.
 
 ### Re-check before upload
 
-- [ ] At the start of the attachment step, every entry in
+- [x] At the start of the attachment step, every entry in
       `staged-attachments.json` is checked against the profile's **current**
       settings, and against the vault:
   - the vault file still exists at `vaultPath`;
@@ -623,10 +623,10 @@ keys is ensured in each of those areas.
   - the attachment mode is not `off`;
   - its bytes still match the entry's `sha256`, looked up in the hash cache
     (§6), which re-hashes only when size, mtime or `ctimeMs` changed.
-- [ ] Entries that fail any of the first four checks are **dropped**: they
+- [x] Entries that fail any of the first four checks are **dropped**: they
       aren't uploaded, they're removed from `staged-attachments.json`, and
       they're logged to the console. The publish continues.
-- [ ] One notice covers the batch: "2 attachments weren't uploaded because
+- [x] One notice covers the batch: "2 attachments weren't uploaded because
       they're now excluded, no longer allowed, or changed since they were
       staged: take1.wav, scan.pdf."
 
@@ -638,11 +638,11 @@ of a publish.
 this batch when this publish's `commitPendingNotes` staged it or merged into it
 (§6). The set is kept in memory for the length of the publish.
 
-- [ ] **This batch's entry:** the file changed after the pre-staging check
+- [x] **This batch's entry:** the file changed after the pre-staging check
       (change detection, item 1, below). Delete its hash-cache entry and stop
       the publish before any upload, keeping staging, as for a mismatch at
       upload (item 2).
-- [ ] **An earlier batch's entry:** drop it with a console warning and name it
+- [x] **An earlier batch's entry:** drop it with a console warning and name it
       in the notice above. Its revision shows "Attachment unavailable" (item 3).
 
 On the next publish, an entry that stopped this one belongs to an earlier
@@ -665,22 +665,22 @@ records a revision without them.
 
 This runs only on entries that passed the re-check above.
 
-- [ ] **Step 1.** If `uploaded[area]` lists it, skip it.
-- [ ] **Step 2.** Otherwise, send a `HeadObject`. On 200, record it and skip it.
+- [x] **Step 1.** If `uploaded[area]` lists it, skip it.
+- [x] **Step 2.** Otherwise, send a `HeadObject`. On 200, record it and skip it.
       This recovers a lost manifest. On 404 continue. A 403 also counts as
       missing, because without `s3:ListBucket` S3 reports a missing key as 403.
-- [ ] **Step 3.** Upload, hashing the bytes **as they are sent** (see change
+- [x] **Step 3.** Upload, hashing the bytes **as they are sent** (see change
       detection below), so the object can only ever hold bytes that match its
       key:
-  - [ ] Files up to 16 MB: read into memory, hash, compare, then one
+  - [x] Files up to 16 MB: read into memory, hash, compare, then one
         `PutObject`.
-  - [ ] Larger files: multipart, through `CreateMultipartUpload` /
+  - [x] Larger files: multipart, through `CreateMultipartUpload` /
         `UploadPart` / `CompleteMultipartUpload`. Parts are 8 MB, read in order
         from an `fs.promises.open` file handle and fed to the running hash, with
         up to 4 part uploads in flight. Before `CompleteMultipartUpload`, the
         final digest is compared with the key's hash. On a mismatch, or any
         other failure, call `AbortMultipartUpload`, so no object is created.
-  - [ ] **Checksums.** The bundled `@aws-sdk/client-s3` (3.744) adds a CRC32
+  - [x] **Checksums.** The bundled `@aws-sdk/client-s3` (3.744) adds a CRC32
         checksum to `PutObject` and `UploadPart` by default (since 3.729).
         Make the multipart path consistent with that, without changing the
         shared S3 client's defaults: pass `ChecksumAlgorithm: 'CRC32'` on
@@ -688,13 +688,13 @@ This runs only on entries that passed the re-check above.
         `ChecksumCRC32` from its `UploadPart` response, beside its `ETag` and
         `PartNumber`. The multipart end-to-end check (§10) confirms it against
         S3.
-  - [ ] Headers (below) are set on `PutObject` and on `CreateMultipartUpload`.
-- [ ] **Step 4.** Record it in `uploaded[area]`. Save `attachments.json` after
+  - [x] Headers (below) are set on `PutObject` and on `CreateMultipartUpload`.
+- [x] **Step 4.** Record it in `uploaded[area]`. Save `attachments.json` after
       the attachment step, including on failure, so finished uploads aren't
       repeated.
-- [ ] Uploads run with the existing `runWithConcurrency` (5) and a progress
+- [x] Uploads run with the existing `runWithConcurrency` (5) and a progress
       notice counting files.
-- [ ] Large (multipart) files also take one of **two** slots in a separate
+- [x] Large (multipart) files also take one of **two** slots in a separate
       limiter, so at most two of them upload at once.
 
 Peak memory is about 4 × 8 MB per large file in flight, whatever the file size.
@@ -721,7 +721,7 @@ Every allowed file publishes. The headers only decide whether the browser
 the site's origin must download: same-origin script would run with the reader's
 session cookie and could read their gated notes.
 
-- [ ] **`Content-Type`** comes from an extension map in a new pure module
+- [x] **`Content-Type`** comes from an extension map in a new pure module
       `src/utils/attachments.ts`. The map deliberately holds only **passive**
       types, which browsers display without running site code:
 
@@ -737,13 +737,13 @@ session cookie and could read their gated notes.
   | webm | video/webm | mov | video/quicktime |
   | pdf | application/pdf | *(anything else)* | application/octet-stream |
 
-- [ ] **Active types are never mapped**, whatever the user allows: `html htm
+- [x] **Active types are never mapped**, whatever the user allows: `html htm
       xhtml xht xml xsl xslt js mjs cjs wasm`, and any other type a browser can
       render as a document with script. They are served as
       `application/octet-stream`, the same as any unmapped extension. The unit
       tests pin this list, so adding a passive type to the map can't map one of
       these by accident.
-- [ ] **`Content-Disposition`**:
+- [x] **`Content-Disposition`**:
   - `inline; filename*=UTF-8''<percent-encoded name>` for mapped types except
     `svg`, so a PDF opens in the browser's viewer in the new tab, under its own
     name.
@@ -752,7 +752,7 @@ session cookie and could read their gated notes.
     `page.html` or `script.js` downloads under its own name instead of opening.
     `<img>` ignores the header and renders SVG normally, while opening an SVG's
     URL directly downloads it instead of running any script it holds.
-- [ ] **`Cache-Control`**:
+- [x] **`Cache-Control`**:
 
   | Area | Site | Value |
   |------|------|-------|
@@ -805,7 +805,7 @@ docs say so.
 
 A file can change while a publish is running:
 
-- [ ] **Item 1, before staging.** In `publishNotes`, after queuing and
+- [x] **Item 1, before staging.** In `publishNotes`, after queuing and
       **before** the staging step's `frontmatterManager.process()` and
       `commitPendingNotes`, compare each pending note's refs against the file's
       current size, mtime and `ctimeMs`. If any differ, re-run `queueNote` for
@@ -816,13 +816,13 @@ A file can change while a publish is running:
       `handlePublishError` doesn't run. Any frontmatter queued this batch is
       written at the start of the next publish, as it is today after a failed
       run.
-- [ ] **Item 2, at upload.** If the hash of the bytes sent in step 3 above
+- [x] **Item 2, at upload.** If the hash of the bytes sent in step 3 above
       doesn't match (the multipart upload is aborted, or the `PutObject` never
       sent), delete the file's hash-cache entry (§6) and return `false` before
       any note JSON uploads, keeping staged files as other upload failures do:
       "`song.mp3` changed while publishing. Publish the notes that use it
       again."
-- [ ] **Item 3, the next publish.** History and mappings were already committed
+- [x] **Item 3, the next publish.** History and mappings were already committed
       for the staged revision, and its bytes are gone from the vault. The
       re-check before upload (above) **drops** the staged entry, now an earlier
       batch's, because its vault file no longer matches its hash, and logs a
