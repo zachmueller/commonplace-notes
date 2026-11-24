@@ -53,8 +53,50 @@ rest of this section configures the active profile, in these subsections:
 - **Obscure wikilinks in published Markdown** (`obscureRawWikilinks`, default on)
   — replace note paths with UIDs in the published raw Markdown (`[[Note]]` →
   `[[UID|Note]]`). Rendered HTML and search are unaffected.
-- **Excluded directories** — one folder per line; notes in these are never
-  published.
+- **Obscure attachment names in published Markdown** (`obscureRawAttachments`,
+  default on) — replace links to images, audio, PDFs and other non-Markdown
+  vault files in the published raw Markdown with the file's content hash, or
+  `null` when the file isn't published, keeping the extension:
+  `![[Media/song.mp3]]` → `![[null.mp3]]`, `![](Media/pic.png)` →
+  `![](null.png)`. Folder paths stay out of the raw Markdown, the content index
+  and the chat corpus. Aliases, alt text and link text are kept, so as with note
+  titles, a file's name still shows unless the link has an alias. Applies to
+  wikilinks and inline Markdown links; raw HTML (`<img src>`) and reference
+  definitions (`[ref]: path`) are left as written. Rendered HTML and search are
+  unaffected.
+- **Excluded directories** — notes in these folders are never published. See
+  [Excluded directories](#excluded-directories) below.
+
+#### Excluded directories
+
+One folder pattern per line, matched from the vault root:
+
+| Entry | Excludes | Doesn't exclude |
+|-------|----------|-----------------|
+| `private/` (also `private`, `/private`) | `private/…` | `Projects/private/…`, `privateer/…`, `private.md` |
+| `Projects/private/` | `Projects/private/…` | `private/…` |
+| `**/private/` | `private/…`, `a/private/…`, `a/b/private/…` | `a/privateer/…` |
+| `*-private/` | `work-private/…` | `a/work-private/…` |
+| `Projects/*/drafts/` | `Projects/alpha/drafts/…` | `Projects/drafts/…` |
+| `Archive/**/raw/` | `Archive/raw/…`, `Archive/2024/05/raw/…` | `raw/…` |
+
+- Lines are trimmed; a leading `/` or `./` and the trailing `/` are optional.
+- Patterns match whole folder names, never file names. A file is excluded when
+  any folder above it matches.
+- `*` matches any run of characters within one folder name; a `**` segment
+  matches any number of folders, including none.
+- Matching is case-insensitive. Other characters (`?`, `[`, `{`, `\`) are
+  literal; there's no escaping or negation.
+
+**Upgrading from earlier versions.** Entries used to match by substring, so
+`private` also excluded `Projects/private/` and `privateer/`. On the first load
+after upgrading, CPN keeps every folder the old rule excluded: for each entry
+without a trailing `/` it appends `**/<entry>/` and `<entry>*/`. Your own
+entries are kept as typed, and entries ending in `/` (like the default
+`private/`) gain nothing. A notice per profile lists what was added. Files the
+old rule matched only by their own name (a root `private.md` from the entry
+`private`) can't be kept by a folder pattern; the notice lists them as no
+longer excluded, so move them into an excluded folder. It runs once per profile.
 
 ### Destination
 - **Publish mechanism** — **AWS** (primary) or **Local** (minimal/experimental).
@@ -181,6 +223,7 @@ Default profile (`Default AWS Profile`, ID `default`):
 | Public | `false` |
 | Include site-wide content search | `true` |
 | Obscure wikilinks | `true` |
+| Obscure attachment names | `true` |
 | Publish mechanism | `AWS` |
 | Indicator | color block, `#3366cc` |
 | CloudFront invalidation scheme | `individual` |

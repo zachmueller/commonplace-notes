@@ -58,41 +58,41 @@ session never changes unless its author chooses a new length with **Apply**.
 
 `infrastructure/lib/cognito-auth-stack.ts`:
 
-- [ ] New parameter `SessionHours` (Number, default **12**, `MinValue` 1,
+- [x] New parameter `SessionHours` (Number, default **12**, `MinValue` 1,
       `MaxValue` 24). 24 h is Cognito's maximum ID token lifetime.
-- [ ] `UserPoolClient`: `idTokenValidity` and `accessTokenValidity` set to
+- [x] `UserPoolClient`: `idTokenValidity` and `accessTokenValidity` set to
       `SessionHours`, with `tokenValidityUnits: { idToken: 'hours',
       accessToken: 'hours' }`. The refresh token keeps its default; the site
       doesn't use it.
-- [ ] `npm run synth` to regenerate `src/infrastructure/templates.ts`.
+- [x] `npm run synth` to regenerate `src/infrastructure/templates.ts`.
 
 ### Callback Lambda
 
 `auth-callback.js`:
 
-- [ ] The cookie's `Max-Age` becomes the ID token's `exp` minus now. It decodes
+- [x] The cookie's `Max-Age` becomes the ID token's `exp` minus now. It decodes
       the token payload without verifying it; the token came straight from
       Cognito's token endpoint over TLS.
-- [ ] The value is floored at 0 and falls back to 3600 if `exp` can't be read.
+- [x] The value is floored at 0 and falls back to 3600 if `exp` can't be read.
 
 The cookie can then never outlive its token, and `SessionHours` is the only
 setting.
 
 ### Plugin
 
-- [ ] `CloudFormationManager`: add `SessionHours` to `COGNITO_AUTH_PARAM_KEYS`
+- [x] `CloudFormationManager`: add `SessionHours` to `COGNITO_AUTH_PARAM_KEYS`
       and `buildCognitoAuthParameters`.
-- [ ] Persist `DeploymentConfig.sessionHours` and `CognitoAuthState.sessionHours`
-      (`src/types.ts`).
-- [ ] New `effectiveSessionHours(profile)`: the persisted
+- [x] Persist `DeploymentConfig.sessionHours` and `CognitoAuthState.sessionHours`
+      (`src/infrastructure/types.ts`, where both types live).
+- [x] New `effectiveSessionHours(profile)`: the persisted
       `CognitoAuthState.sessionHours`, or **1** when it is absent. Absent means
       the pool was deployed before this setting, so its tokens last Cognito's
       default of 1 hour. Every caller that needs "the session length" uses it,
       including the restricted attachments' `max-age` (P2 §7).
-- [ ] **Deployment wizard**, Cognito step: a "Sign-in session length (hours)"
+- [x] **Deployment wizard**, Cognito step: a "Sign-in session length (hours)"
       field. It defaults to 12 for a new pool and to `effectiveSessionHours`
       when the wizard re-runs against a live pool.
-- [ ] **Settings → Infrastructure → Cognito gate**
+- [x] **Settings → Infrastructure → Cognito gate**
       (`src/settings/profile/infrastructure.ts`): a "Sign-in session length"
       row with an hours field (1–24) showing `effectiveSessionHours`, and an
       **Apply** button. On a pool without a persisted value, the description
@@ -100,33 +100,44 @@ setting.
       deployed. Longer sessions mean fewer sign-ins and media that keeps
       playing, but a reader removed from a group keeps access for up to one
       session length."
-- [ ] New `updateCognitoSessionLength(profile, hours)`, which:
-  - [ ] runs `UpdateStack` on the pool stack in us-east-1 with the **current**
+- [x] New `updateCognitoSessionLength(profile, hours)`, which:
+  - [x] runs `UpdateStack` on the pool stack in us-east-1 with the **current**
         `COGNITO_AUTH_TEMPLATE` (older pools lack the parameter, so
         `UsePreviousTemplate` won't do), with
         `buildCognitoAuthUpdateParameters({ SessionHours }, deployedKeys)`, so
         the never-stored Google client secret stays `UsePreviousValue`;
-  - [ ] polls to completion with the event log;
-  - [ ] saves `sessionHours`.
-- [ ] The Apply row is disabled, with a reason, on a legacy pool that still holds
+  - [x] polls to completion with the event log;
+  - [x] saves `sessionHours`.
+- [x] The Apply row is disabled, with a reason, on a legacy pool that still holds
       its inline edge function ("Run **Upgrade Cognito gate** first"), because
       the current template would remove that function without the upgrade's
-      retain step.
-- [ ] The Apply row is disabled on imported stacks.
-- [ ] **No update ever relies on the template default.** Every pool-stack
-      update that sends the current `COGNITO_AUTH_TEMPLATE`
-      (`upgradeCognitoGate`, the update path of `deployCognitoAuthStack`,
-      `updateCognitoAuthStack`) passes `SessionHours` **explicitly** as
-      `effectiveSessionHours(profile)`. This matters for pools that predate the
-      parameter: `buildCognitoAuthUpdateParameters` omits keys the live stack
-      was never deployed with, so without an explicit value the template default
-      of 12 would apply and silently lengthen an existing site's sessions.
-- [ ] After such an update succeeds on a pool without a persisted value, persist
+      retain step. Settings can't see the deployed template, so the row uses
+      "not on the current template yet" (`accessGroupsKey` absent), and
+      `updateCognitoSessionLength` refuses when the deployed template still
+      holds `AuthEdgeFn`, `AuthEdgeFnVersion` or `EdgeFnRole`.
+- [x] The Apply row is disabled on imported stacks. (The whole Cognito gate
+      section is hidden for them, and `updateCognitoSessionLength` refuses
+      them.)
+- [x] **No update ever relies on the template default.** Every pool-stack
+      update that sends the current `COGNITO_AUTH_TEMPLATE` passes
+      `SessionHours` **explicitly**: `upgradeCognitoGate` as
+      `effectiveSessionHours(profile)`; the update path of
+      `deployCognitoAuthStack` and `updateCognitoAuthStack` (wizard phase 2) as
+      the wizard's value, which the wizard seeds with `effectiveSessionHours`
+      for a live pool and 12 for a new one. (Phase 2 of a brand-new pool runs
+      before `CognitoAuthState` is persisted, so `effectiveSessionHours` would
+      return 1 there and undo the wizard's 12.) This matters for pools that
+      predate the parameter: `buildCognitoAuthUpdateParameters` omits keys the
+      live stack was never deployed with, so without an explicit value the
+      template default of 12 would apply and silently lengthen an existing
+      site's sessions. The helper is `currentTemplateUpdateParameters`
+      (`src/infrastructure/cognitoParams.ts`).
+- [x] After such an update succeeds on a pool without a persisted value, persist
       `sessionHours: 1`, so later updates take the usual path.
-- [ ] `updateCognitoCallbackUrl` keeps `UsePreviousTemplate`. It needs no
+- [x] `updateCognitoCallbackUrl` keeps `UsePreviousTemplate`. It needs no
       change: a pool whose template lacks the parameter omits it, and one that
       has it keeps it with `UsePreviousValue`.
-- [ ] Only a **new** pool (`CreateStack`) takes the wizard's value, 12 by
+- [x] Only a **new** pool (`CreateStack`) takes the wizard's value, 12 by
       default.
 
 ### Effect and trade-offs
@@ -182,14 +193,14 @@ Attachments (phase 2) rely on this check, so the rules are redefined.
 
 ### Matcher
 
-- [ ] New pure module `src/utils/excludedDirectories.ts`:
+- [x] New pure module `src/utils/excludedDirectories.ts`:
       `compileExcludePatterns(lines) → (path) => boolean`, implementing the
       rules above.
-- [ ] `Publisher.isFileExcluded` delegates to it, so every caller shares one
+- [x] `Publisher.isFileExcluded` delegates to it, so every caller shares one
       implementation: `getAllPublishableNotes`, `getConnectedNotes`,
       `publishSingle`, `publishConnected`, the audit, the file-tree indicators,
       and (phase 2) attachments.
-- [ ] Settings help text (`src/settings/profile/content.ts`): "One folder per
+- [x] Settings help text (`src/settings/profile/content.ts`): "One folder per
       line, from the vault root. `private/` excludes only the top-level private
       folder. Use `*` for any folder name and `**/` for any depth, e.g.
       `**/private/` excludes every folder named private."
@@ -206,7 +217,7 @@ warning.
 
 On the first load after upgrading (`src/main.ts`):
 
-- [ ] **Step 1, add patterns.** For each profile, for every entry that, once
+- [x] **Step 1, add patterns.** For each profile, for every entry that, once
       trimmed, doesn't end in `/`, append the patterns that reproduce the old
       rule's folder matches: `**/<entry>/` (any depth) and `<entry>*/`
       (prefix), skipping any already in the list.
@@ -220,21 +231,21 @@ On the first load after upgrading (`src/main.ts`):
     `**/Projects/private/` and `Projects/private*/`.
   - Entries ending in `/` meant the same thing under both rules and gain
     nothing, so the default `private/` is unchanged.
-- [ ] **Step 2, find files no pattern can keep.** Compare the old rule against
+- [x] **Step 2, find files no pattern can keep.** Compare the old rule against
       the new list over every vault file, not only Markdown. What remains are
       files the old rule matched only by their own name (`private.md` at the
       root, from the entry `private`), which no folder pattern can express.
-- [ ] **Step 3, notice.** If step 1 added anything or step 2 found anything,
+- [x] **Step 3, notice.** If step 1 added anything or step 2 found anything,
       show a persistent notice per profile: "Excluded directories now match
       from the vault root. In `<profile>`, added `**/private/` and `private*/`
       so the same folders stay excluded. Open settings". Files from step 2 are
       listed (up to five, then "and N more") with "No longer excluded. Move it
       into an excluded folder." The full file list goes to the console.
-- [ ] **Step 4, record.** Set `excludedDirsRulesVersion: 2` on the profile
+- [x] **Step 4, record.** Set `excludedDirsRulesVersion: 2` on the profile
       (`src/types.ts`), whether or not anything changed, so the upgrade runs
       once.
-- [ ] Profiles created after the upgrade start at version 2 and skip it.
-- [ ] Keep the old rule only inside the upgrade code, for step 2.
+- [x] Profiles created after the upgrade start at version 2 and skip it.
+- [x] Keep the old rule only inside the upgrade code, for step 2.
 
 The added lines only ever exclude more. The upgrade doesn't edit or remove the
 user's own entries, and it doesn't block publishing.
@@ -283,9 +294,9 @@ Separately, the `raw.includes('[[')` fast path skips `\[\[Note]]` and
 `&#91;&#91;Note]]`, which the renderer still turns into note links, so their
 paths stay in `raw`.
 
-- [ ] Matching stays on `node.value`, so the scrubber and the renderer, which
+- [x] Matching stays on `node.value`, so the scrubber and the renderer, which
       also reads `value`, see the same wikilinks.
-- [ ] Each match's start and end are mapped from positions in `value` to source
+- [x] Each match's start and end are mapped from positions in `value` to source
       offsets, using micromark's events for the node:
   - `data` chunks map one to one;
   - a `characterEscape` maps one value character to its two source characters;
@@ -296,15 +307,19 @@ paths stay in `raw`.
     have no value characters and are never part of a match.
 
   A match that starts or ends inside an escape or a reference covers all of
-  it.
-- [ ] One helper owns the micromark parse and serves both these offsets and the
+  it. A text node whose tokens don't rebuild its `value` exactly is left
+  unchanged rather than spliced at a guessed offset.
+- [x] Only the target path is spliced. A wikilink's `#heading` and alias stay
+      exactly as written in the source, escapes included, and a note link
+      without an alias gains `|` plus the path's source text.
+- [x] One helper owns the micromark parse and serves both these offsets and the
       Markdown destination offsets in §4.
-- [ ] `micromark` and `micromark-extension-gfm` become direct dependencies in
+- [x] `micromark` and `micromark-extension-gfm` become direct dependencies in
       `package.json` (today they are only transitive), pinned to the major
       versions `remark-parse` 10 and `remark-gfm` 3 use (`micromark` 3,
       `micromark-extension-gfm` 2; installed today: 3.2.0 and 2.0.3), so the
       events line up with the mdast the scrubber walks.
-- [ ] The fast path returns early only when `raw` contains neither `[` nor `&`.
+- [x] The fast path returns early only when `raw` contains neither `[` nor `&`.
 
 ### Pipes in table cells
 
@@ -321,11 +336,13 @@ written                        published today
 
 (The second row is also hit by the offset bug.)
 
-- [ ] When a rewritten link's text node has a `tableCell` ancestor
+- [x] When a rewritten link's text node has a `tableCell` ancestor
       (`visitParents`), the `|` the replacement puts before a display text,
       alias or size alias is written `\|`. This applies to note and file
-      targets alike.
-- [ ] Outside tables the separator stays a bare `|`.
+      targets alike. Because the alias is kept from the source, where a cell
+      already needs `\|`, the only separator the scrubber writes is the one
+      it adds before a note link's display text.
+- [x] Outside tables the separator stays a bare `|`.
 
 Markdown links and images need nothing: only their destination is replaced, so
 alt and link text stay byte for byte as written.
@@ -355,7 +372,7 @@ the path as display text, so the folder path is already published.
 
 ### Setting
 
-- [ ] New profile field beside `obscureRawWikilinks` (`src/types.ts`):
+- [x] New profile field beside `obscureRawWikilinks` (`src/types.ts`):
 
   ```ts
   obscureRawAttachments?: boolean; // absent ≡ true
@@ -364,10 +381,10 @@ the path as display text, so the folder path is already published.
   It is a top-level profile field rather than part of `AttachmentSettings`
   (P2 §2), because it applies whatever the attachment mode, including `off`,
   and on Local profiles too.
-- [ ] Filled in as `true` on load when missing (`src/main.ts`, beside the
+- [x] Filled in as `true` on load when missing (`src/main.ts`, beside the
       existing `obscureRawWikilinks` default), and `true` in new-profile
       defaults.
-- [ ] **UI:** a toggle directly below **Obscure wikilinks in published Markdown**
+- [x] **UI:** a toggle directly below **Obscure wikilinks in published Markdown**
       in the content settings (`src/settings/profile/content.ts`): "Obscure
       attachment names in published Markdown. Replace links to images, audio
       and other files in the published raw Markdown with the file's content
@@ -425,42 +442,46 @@ carries a hash so phase 2 only has to supply it.
 
 ### Scrubber changes
 
-- [ ] The callback becomes
+- [x] The callback becomes
       `resolveTarget(path) => { kind: 'note', uid: string | null } | { kind: 'file', sha256: string | null, ext: string } | null`.
       `null` means unresolved: leave the link as today.
-- [ ] The scrubber takes `{ notes: boolean, attachments: boolean }` from the two
+- [x] The scrubber takes `{ notes: boolean, attachments: boolean }` from the two
       settings. Note targets behave exactly as today when `notes` is on and are
       left alone when it's off. File targets are rewritten when `attachments`
       is on and left as written when it's off.
-- [ ] `NoteManager.rewriteRawWikilinks` resolves a non-Markdown `TFile` to
+- [x] `NoteManager.rewriteRawWikilinks` resolves a non-Markdown `TFile` to
       `{ kind: 'file', sha256: null, ext }` in phase 1. Phase 2 passes the hash
-      for files in the note's attachment list.
-- [ ] **Markdown links.** The same pass visits `image` and `link` nodes whose
+      for files in the note's attachment list. A wikilink whose target is
+      missing resolves to `{ kind: 'note', uid: null }`, so it keeps today's
+      `[[null|…]]` form; a Markdown link only acts on `file` results.
+- [x] **Markdown links.** The same pass visits `image` and `link` nodes whose
       `url` is relative: no scheme (`/^[a-z][a-z0-9+.-]*:/i`), not starting with
       `#`, `/` or `//`. The URL is percent-decoded before lookup. A URL that
       resolves to a non-Markdown vault file has its destination replaced by the
       new target.
-  - [ ] A `<…>` destination drops its brackets, since the target has no
+  - [x] A `<…>` destination drops its brackets, since the target has no
         spaces.
-  - [ ] The destination is spliced by source offset. mdast positions cover the
+  - [x] The destination is spliced by source offset. mdast positions cover the
         whole `![alt](dest "title")`, not the destination alone, so the
         destination's offsets come from micromark's `resourceDestination`
         tokens (or an equivalent parse of the node's source slice that handles
         `<…>`, titles, escapes and nested brackets), never from searching the
         slice for the URL text. They come from the same micromark parse as the
         wikilink offsets (§3).
-- [ ] Reference definitions (`[ref]: path`) and raw HTML are not rewritten. They
+- [x] Reference definitions (`[ref]: path`) and raw HTML are not rewritten. They
       aren't in Obsidian's metadata cache and stay as written, folder path
       included (P2 §4, "Known limitations").
-- [ ] Unresolved targets and external URLs are left as today.
-- [ ] `queueNote` (`src/utils/notes.ts`) runs the scrub when **either** setting
+- [x] Unresolved targets and external URLs are left as today.
+- [x] `queueNote` (`src/utils/notes.ts`) runs the scrub when **either** setting
       is on (today: `obscureRawWikilinks` only).
-- [ ] **Content-index and chat-corpus rebuild.** `rebuildContentIndex` in
+- [x] **Content-index and chat-corpus rebuild.** `rebuildContentIndex` in
       `src/main.ts` (beside its "Mirror the scrub applied in queueNote"
       comment) runs the same scrub outside a publish. Move the scrub into one
       helper that both call sites use, so the index can't drift from the
       published `raw`. In phase 2 the helper also collects the note's
-      attachment list (P2 §3).
+      attachment list (P2 §3). The helper is
+      `NoteManager.rewriteRawWikilinks(raw, file, profile)`, which reads both
+      settings.
 
 With the setting on, neither the folder path nor the file name of a wikilink or
 inline Markdown link target appears in `raw`, or in anything built from it (the
@@ -480,42 +501,42 @@ what they publish changes.
 
 For `src/utils/excludedDirectories.ts`, with a `package.json` script:
 
-- [ ] `private/`, `private` and `/private` all exclude `private/a.mp3` and
+- [x] `private/`, `private` and `/private` all exclude `private/a.mp3` and
       `private/x/a.md`, but not `Projects/private/a.mp3`, `privateer/a.mp3` or
       `private.md`.
-- [ ] `Projects/private/` excludes `Projects/private/a.mp3` only.
-- [ ] `**/private/` excludes `private/…`, `a/private/…` and `a/b/private/…`, but
+- [x] `Projects/private/` excludes `Projects/private/a.mp3` only.
+- [x] `**/private/` excludes `private/…`, `a/private/…` and `a/b/private/…`, but
       not `a/privateer/…`.
-- [ ] `*-private/`, `Projects/*/drafts/` and `Archive/**/raw/` (zero and several
+- [x] `*-private/`, `Projects/*/drafts/` and `Archive/**/raw/` (zero and several
       middle folders), and `a**b` treated as `*`.
-- [ ] Trimming (`private/ `, ` private/`), empty lines, `./private/`.
-- [ ] Case-insensitivity (`Private/` excludes `private/a.md`).
-- [ ] Literal `?`, `[`, `{` in folder names.
-- [ ] Patterns never match file names (`**/*.wav` doesn't exclude `a/b.wav`).
-- [ ] The upgrade: the entry `private` gains `**/private/` and `private*/`, so
+- [x] Trimming (`private/ `, ` private/`), empty lines, `./private/`.
+- [x] Case-insensitivity (`Private/` excludes `private/a.md`).
+- [x] Literal `?`, `[`, `{` in folder names.
+- [x] Patterns never match file names (`**/*.wav` doesn't exclude `a/b.wav`).
+- [x] The upgrade: the entry `private` gains `**/private/` and `private*/`, so
       `Projects/private/…` and `privateer/…` stay excluded, as does a matching
       folder created after the upgrade.
-- [ ] The upgrade: `Projects/private` gains `**/Projects/private/` and
+- [x] The upgrade: `Projects/private` gains `**/Projects/private/` and
       `Projects/private*/`. `/private` gains `**/private/`. `private/` gains
       nothing.
-- [ ] The upgrade: patterns already in the list aren't added twice.
-- [ ] The upgrade: only root `private.md` is reported as no longer excluded.
-- [ ] The upgrade: a second run (version 2) changes nothing.
+- [x] The upgrade: patterns already in the list aren't added twice.
+- [x] The upgrade: only root `private.md` is reported as no longer excluded.
+- [x] The upgrade: a second run (version 2) changes nothing.
 
 ### `test-obscure-wikilinks.ts` (extended)
 
-- [ ] Every row of the §4 raw table, with `null` targets.
-- [ ] File-target wikilinks with alias, size alias, fragment and embed `!`.
-- [ ] Files without an extension become `null`.
-- [ ] No path fallback when there is no alias. Today's leak is closed:
+- [x] Every row of the §4 raw table, with `null` targets.
+- [x] File-target wikilinks with alias, size alias, fragment and embed `!`.
+- [x] Files without an extension become `null`.
+- [x] No path fallback when there is no alias. Today's leak is closed:
       `[[Media/song.mp3]]` no longer becomes `[[null|Media/song.mp3]]`.
-- [ ] Markdown images and links in percent-encoded and `<…>` forms, with and
+- [x] Markdown images and links in percent-encoded and `<…>` forms, with and
       without a title.
-- [ ] The two switches independently: notes only, attachments only, both,
+- [x] The two switches independently: notes only, attachments only, both,
       neither.
-- [ ] Unresolved targets unchanged. External URLs unchanged. Reference
+- [x] Unresolved targets unchanged. External URLs unchanged. Reference
       definitions and raw HTML unchanged.
-- [ ] **Splice offsets**, note and file targets: an escape before a link
+- [x] **Splice offsets**, note and file targets: an escape before a link
       (`a \* [[Note]] b`), an entity before a link (`x &amp; [[Note]] y`), `\|`
       in a table cell, a trailing space and a trailing tab before a soft line
       break (`a \n[[Note]] b`), blockquote and list-item continuation lines, an
@@ -523,34 +544,37 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
       them, a link whose brackets are escaped or written as references
       (`\[\[Note]]`, `&#91;&#91;Note]]`), and Markdown destinations after each
       of these.
-- [ ] For every offset case, the output differs from the input only inside the
+- [x] For every offset case, the output differs from the input only inside the
       rewritten links: parsed again, its text outside the links is unchanged.
-- [ ] **Pipes in table cells**, note and file targets: `[[Note]]`,
+- [x] **Pipes in table cells**, note and file targets: `[[Note]]`,
       `[[Note\|alias]]`, `[[Note#Heading\|alias]]`, `![[pic.png\|300]]` and
       `![alt\|300](pic.png)` in a cell each come out with `\|`, and the parsed
       table keeps the same number of columns and the same cell boundaries.
-- [ ] The same links outside a table keep a bare `|`.
+- [x] The same links outside a table keep a bare `|`.
 
 ### `test-auth-callback.ts` (new)
 
-- [ ] `Max-Age` from `exp`.
-- [ ] The floor at 0 for an expired token.
-- [ ] The fallback to 3600 when `exp` is missing or unreadable.
+- [x] `Max-Age` from `exp`.
+- [x] The floor at 0 for an expired token.
+- [x] The fallback to 3600 when `exp` is missing or unreadable.
 
 ### `test-session-hours.ts` (new)
 
-- [ ] `effectiveSessionHours` returns the persisted value, and 1 when none is
+- [x] `effectiveSessionHours` returns the persisted value, and 1 when none is
       persisted.
-- [ ] The update parameters for `upgradeCognitoGate`, `deployCognitoAuthStack`
+- [x] The update parameters for `upgradeCognitoGate`, `deployCognitoAuthStack`
       (update path) and `updateCognitoAuthStack` include `SessionHours`
       explicitly: `1` for a pool deployed without the parameter and without a
       persisted value, otherwise the persisted value. Never `UsePreviousValue`
       on a pool that lacks the key, and never omitted.
-- [ ] `updateCognitoCallbackUrl` omits `SessionHours` for a pool that lacks it
+- [x] `updateCognitoCallbackUrl` omits `SessionHours` for a pool that lacks it
       and uses `UsePreviousValue` for one that has it.
-- [ ] A new pool's create parameters use the wizard's value, 12 by default.
+- [x] A new pool's create parameters use the wizard's value, 12 by default.
 
 ### End-to-end (sandbox `random` only)
+
+The two checks that need no AWS run in the local Obsidian harness:
+`npm run test:excluded-directories-e2e` and `npm run test:obscure-wikilinks-e2e`.
 
 - [ ] On a pool deployed before this change, run **Upgrade Cognito gate**
       without touching the session length. After signing in, the `cpn_id`
@@ -560,9 +584,9 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
       `Max-Age` is about 43200 and the token's `exp` is about 12 h out. A
       pre-upgrade pool's Google sign-in still works after Apply.
 - [ ] A new deployment with the wizard's defaults gets 12-hour sessions.
-- [ ] With `**/private/` excluded, a note in `Projects/private/` doesn't
+- [x] With `**/private/` excluded, a note in `Projects/private/` doesn't
       publish, and one in `Projects/public/` does.
-- [ ] With Obscure attachment names on, a note embedding `Media/song.mp3`
+- [x] With Obscure attachment names on, a note embedding `Media/song.mp3`
       publishes `raw` with `![[null.mp3]]`. With it off, the link appears as
       written.
 - [ ] A note with `a \* [[Note]] b` and a table row `| [[Note\|alias]] | x |`
@@ -570,24 +594,43 @@ For `src/utils/excludedDirectories.ts`, with a `package.json` script:
 
 ## 6. Docs
 
-- [ ] `docs/auth-and-access.md`: "Membership changes apply at a reader's next
+- [x] `docs/auth-and-access.md`: "Membership changes apply at a reader's next
       sign-in…" updated for the setting: 12 hours on new sites, 1 hour on sites
       deployed earlier until the author changes it, and the access trade-off.
-- [ ] `docs/infrastructure-deployment.md`: the session length field in the
+- [x] `docs/infrastructure-deployment.md`: the session length field in the
       wizard and the Apply row.
-- [ ] `docs/settings.md`: the excluded-directory matching rules with examples,
+- [x] `docs/settings.md`: the excluded-directory matching rules with examples,
       the upgrade and its notice, and Obscure attachment names.
-- [ ] `docs/publishing-model.md`: Obscure attachment names in the raw-Markdown
+- [x] `docs/publishing-model.md`: Obscure attachment names in the raw-Markdown
       section. Note that rendered HTML still shows folder paths for vault-file
       links until attachment publishing ships.
-- [ ] Release notes: the one-time hash change for notes with attachment links
+- [ ] Release notes (draft below, for the `release` skill): the one-time hash change for notes with attachment links
       or corrupted `raw`, the excluded-directories upgrade, and the session
       length setting ("Existing sites keep 1-hour sign-in sessions. To lengthen
       them, use Settings → Infrastructure → Cognito gate → Sign-in session
       length").
 
+Release-note draft:
+
+> - **Obscure attachment names** (new, on by default): links to images, audio,
+>   PDFs and other vault files in the published raw Markdown no longer show
+>   their folder path (`![[Media/song.mp3]]` → `![[null.mp3]]`). Notes with such
+>   links get a new content hash once and republish on the next publish.
+> - **Raw Markdown fixes:** with Obscure wikilinks on, links after an escape,
+>   an entity, trailing spaces, or on a blockquote or list continuation line
+>   could corrupt the published raw Markdown, and links in table cells split
+>   the cell. Affected notes get a new hash once and republish.
+> - **Excluded directories** now match folders from the vault root, with `*`
+>   and `**/` patterns (`**/private/` excludes every folder named private). On
+>   first load, entries without a trailing `/` gain patterns that keep the same
+>   folders excluded, and a notice lists what was added and any root files that
+>   are no longer excluded.
+> - **Sign-in session length:** new sites default to 12-hour sign-in sessions.
+>   Existing sites keep 1-hour sign-in sessions. To lengthen them, use
+>   Settings → Infrastructure → Cognito gate → Sign-in session length.
+
 ## Done when
 
 - [ ] Every box in §1–§6 is ticked.
-- [ ] `npm run build` and all unit tests pass.
+- [x] `npm run build` and all unit tests pass.
 - [ ] The end-to-end checks in §5 pass on the sandbox site.

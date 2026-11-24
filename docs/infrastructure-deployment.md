@@ -59,6 +59,15 @@ When you enable **Use Route53**, the wizard automatically queries your AWS accou
 
 If the wizard cannot access Route53 (e.g., missing permissions), it falls back to manual text inputs.
 
+#### Cognito sign-in
+
+When the site uses Cognito sign-in (the `cognito` read gate, per-note access
+groups, or comment identity), the form also asks for the Google client ID and
+secret, an auth domain prefix, and the **Sign-in session length (hours)**:
+1–24, 12 by default for a new pool. Re-running the wizard against a live pool
+shows that pool's current length, which is 1 hour for pools deployed before
+this setting. See [Sign-in session length](auth-and-access.md#sign-in-session-length).
+
 Click **Next** to proceed.
 
 ### Step 3: Certificate (Custom Domain Only)
@@ -199,6 +208,15 @@ CPN refuses the update instead, with an error, when:
   certificates in `us-east-1`.
 - the distribution can't be read, for example because
   `cloudfront:GetDistributionConfig` is missing.
+
+### Sign-in session length
+
+**Settings → Infrastructure → Cognito gate → Sign-in session length** changes a
+live pool's session length: enter 1–24 hours and click **Apply**. It updates
+the pool stack in `us-east-1` (keeping the Google client secret) and applies at
+each reader's next sign-in. The row is disabled until **Upgrade Cognito gate**
+has run on pools that need it, and isn't shown for imported stacks. See
+[Sign-in session length](auth-and-access.md#sign-in-session-length).
 
 ### DNS Management
 

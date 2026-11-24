@@ -47,6 +47,28 @@ The `googleClientId` and `authDomainPrefix` are persisted as author intent; the
 **Google client secret is never stored** — it's captured transiently and passed
 as a NoEcho CloudFormation parameter at deploy time (re-enter it on each deploy).
 
+### Sign-in session length
+
+A sign-in lasts one **session length**: the lifetime of the Cognito ID token,
+which the `cpn_id` cookie holds and never outlives. It covers whole-site
+sign-in, access-group sign-in on public sites and comment sign-in, which share
+one sign-in pool.
+
+- **New sites** default to **12 hours**. The wizard's **Sign-in session length
+  (hours)** field takes 1–24.
+- **Sites deployed before this setting** keep **1-hour** sessions, Cognito's
+  default, until you change them. **Upgrade Cognito gate** and wizard re-runs
+  never lengthen them on their own.
+- To change it on a live site, use **Settings → Infrastructure → Cognito gate →
+  Sign-in session length**, enter the hours and click **Apply**. A pool that
+  still needs **Upgrade Cognito gate** must run that first. Imported stacks are
+  changed through CDK instead.
+
+A change applies at each reader's next sign-in; existing cookies keep their
+expiry. The trade-off is access: a reader removed from a group, or from the
+site, keeps access for up to one session length, and a copied cookie is valid
+that long too. Shorter sessions mean more sign-ins.
+
 ## Password gating
 
 Choosing `password` reads prompts for a **site password**. It's hashed (sha256)
@@ -110,8 +132,8 @@ Group names use lowercase letters, digits, and hyphens (up to 40 characters).
   note exists. On a public site, signed-out readers also see a **Sign in** link
   there and in the header. The link appears for any missing note, so it gives
   nothing away.
-- **Membership changes** apply at a reader's next sign-in. The session cookie
-  lasts an hour, so removing someone takes effect within about an hour.
+- **Membership changes** apply at a reader's next sign-in, so removing someone
+  takes effect within one [sign-in session length](#sign-in-session-length).
 
 ### What a gated note leaves out
 

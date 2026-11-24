@@ -59,7 +59,9 @@ For a given profile, CPN publishes every non-excluded Markdown note whose
 `cpn-publish-contexts` includes that profile's ID. Three per-profile settings
 shape the output:
 
-- **Excluded directories** — folders skipped entirely (default `private/`).
+- **Excluded directories** — folders skipped entirely (default `private/`),
+  matched from the vault root, with `*` and `**` patterns. See
+  [Settings](settings.md#excluded-directories).
 - **Include site-wide content search** (`publishContentIndex`) — when on, CPN
   builds a per-profile `contentIndex.json` of each note's plaintext to power
   site-wide search.
@@ -68,6 +70,17 @@ shape the output:
   `[[UID|Note]]`) so note titles/paths aren't leaked in the raw source. Rendered
   HTML and search are unaffected. Turn it off if your own tooling consumes the
   raw Markdown and needs literal titles.
+- **Obscure attachment names** (`obscureRawAttachments`, default on) — rewrites
+  links to non-Markdown vault files in the published raw Markdown to the file's
+  content hash, or `null` when it isn't published, keeping the extension (e.g.
+  `![[Media/song.mp3]]` → `![[null.mp3]]`). Attachments aren't published yet,
+  so every target is `null.<ext>` for now. It covers wikilinks and inline
+  Markdown links and images, not raw HTML or reference definitions. The
+  rendered HTML still shows these links' folder paths until attachment
+  publishing ships.
+
+Both obscure settings change the note's content hash, so turning either on or
+off republishes the notes it affects on the next publish.
 
 ## Embeds (transclusions)
 
