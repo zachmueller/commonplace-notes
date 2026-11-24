@@ -173,6 +173,14 @@ export interface InfrastructureState {
 	passwordAuth?: PasswordAuthState;
 	comment?: CommentState;
 	chat?: ChatState;
+	/**
+	 * The site stack's `NoncurrentVersionDays`: days until a noncurrent object
+	 * version expires (0 = kept). Absent: the stack was deployed before the
+	 * bucket cleanup rule existed, so old versions are kept. Set by the wizard
+	 * (read back from the stack) and by Settings -> Infrastructure -> Bucket
+	 * cleanup rule. See bucketLifecycle.ts.
+	 */
+	bucketLifecycleDays?: number;
 }
 
 export interface DeploymentConfig {

@@ -52,7 +52,7 @@ file that a live revision uses.
       notice "`<profile>` is busy (`<heldBy>`). Try again when it finishes." It
       returns without doing anything. A queued request could run against a
       selection or settings that changed meanwhile.
-- [ ] Held for the whole of:
+- [x] Held for the whole of:
   - [x] `Publisher.publishNotes`, from setup through upload, sweeps (P3 §2) and
         invalidation. This covers every publish command (`publishSingle`,
         `publishConnected`, **Publish updates since last full publish**,
@@ -64,7 +64,7 @@ file that a live revision uses.
         (`purgeRestrictedPartition`). Label: "removing a group's notes".
   - [x] `rebuildContentIndex` in `src/main.ts`, which writes the content index
         and may mint UIDs. Label: "rebuilding the content index".
-  - [ ] From phase 3: the attachment-state rebuild and the audit's delete offer
+  - [x] From phase 3: the attachment-state rebuild and the audit's delete offer
         (P3 §3, P3 §4). Label: "checking attachments".
 - [x] Callers inside a locked operation call the unlocked internals, never a
       locked entry point, because the lock isn't re-entrant.

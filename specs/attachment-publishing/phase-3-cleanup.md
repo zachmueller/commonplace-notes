@@ -25,7 +25,7 @@ The set of files an area needs is **derived**, not reference-counted:
 > required(area) = ⋃ `refs[h]` for every revision `h` in `publish-history[uid]`,
 > for every UID currently published whose current access areas include `area`.
 
-- [ ] Implement `required`, candidate and orphan derivation as pure functions in
+- [x] Implement `required`, candidate and orphan derivation as pure functions in
       `src/utils/attachments.ts`.
 
 The two inputs come from different files:
@@ -61,19 +61,19 @@ bytes.
 
 ### When to sweep
 
-- [ ] **After `applyAccessTransitions`**, once the new mappings are live, in
+- [x] **After `applyAccessTransitions`**, once the new mappings are live, in
       each area a note left. This includes blocked notes (`to: null`). This is
       the important one: without it, a note moving from public to gated would
       leave its audio publicly fetchable.
-  - [ ] `applyAccessTransitions` (`src/publish/awsUpload.ts`) consumes the
+  - [x] `applyAccessTransitions` (`src/publish/awsUpload.ts`) consumes the
         transitions itself and today returns only `boolean | null`. Change it
         to also return the note hashes it removed from each area (its
         `byPartition` map), which become this sweep's candidates.
-- [ ] **After `deletePublishedUid`** (delete picker), in each area it deleted
+- [x] **After `deletePublishedUid`** (delete picker), in each area it deleted
       from (public plus every group area). The sweep runs **after**
       `removeUidFromMappings` and `accessManager.remove`, so required(area) no
       longer counts the deleted UID.
-- [ ] **After `purgeRestrictedPartition`** removes a whole group area
+- [x] **After `purgeRestrictedPartition`** removes a whole group area
       (`src/settings/profile/accessGroups.ts`). Its `attachments/` goes with it,
       because the deletion is prefix-based. Drop that area from `uploaded`.
 
@@ -82,9 +82,9 @@ bytes.
 - candidates = ⋃ `refs[h]` for the removed revisions `h`.
 - orphans = candidates − required(area).
 
-- [ ] Delete orphans with `DeleteObjects` (batches of 1000), and remove them
+- [x] Delete orphans with `DeleteObjects` (batches of 1000), and remove them
       from `uploaded[area]`.
-- [ ] Only keys of the removed revisions are candidates, which bounds what a
+- [x] Only keys of the removed revisions are candidates, which bounds what a
       sweep can delete.
 
 required(area) comes from local state, so the sweep relies on the
@@ -92,7 +92,7 @@ one-publishing-machine assumption (design.md, Assumptions).
 
 ### Sweeps ignore the attachment mode
 
-- [ ] All three sweeps run on every AWS profile, including with the mode `off`.
+- [x] All three sweeps run on every AWS profile, including with the mode `off`.
 
 Gating attachment work on the mode would fail open: a user who publishes
 attachments, turns the mode off, then gates a note would leave that note's files
@@ -106,15 +106,15 @@ file then exists.
 
 ### When a sweep can't finish
 
-- [ ] The sweep needs `attachments.json` to be `complete`. If it isn't, rebuild
+- [x] The sweep needs `attachments.json` to be `complete`. If it isn't, rebuild
       first (§3).
-- [ ] If the rebuild fails, skip the sweep and show a persistent notice:
+- [x] If the rebuild fails, skip the sweep and show a persistent notice:
       "Couldn't check `<note>`'s attachments. They may still be readable in
       `<area>`. Run **Audit published notes**."
-- [ ] If the `DeleteObjects` call fails, or reports per-key errors, show the
+- [x] If the `DeleteObjects` call fails, or reports per-key errors, show the
       same persistent notice and keep the keys that weren't deleted in
       `uploaded[area]`.
-- [ ] In both cases the note's own deletion and the access change still happen.
+- [x] In both cases the note's own deletion and the access change still happen.
 
 A failed sweep's candidates aren't kept: the transitions were already consumed
 and saved. **Audit published notes** (§4) is the recovery path. It finds every
@@ -146,21 +146,21 @@ Any orphan deletion (§2) and the audit's delete offer (§4) first run a
 file holding only new revisions would look authoritative and could delete files
 that older live revisions still use.
 
-- [ ] **Step 1.** List `notes/` and `restricted/*/notes/` with `ListObjectsV2`.
-- [ ] **Step 2.** GET each note JSON (concurrency 5, progress notice) and record
+- [x] **Step 1.** List `notes/` and `restricted/*/notes/` with `ListObjectsV2`.
+- [x] **Step 2.** GET each note JSON (concurrency 5, progress notice) and record
       its `attachments` keys under its hash. Pre-feature revisions have no
       field, so they correctly record nothing.
-- [ ] **Step 3.** List `attachments/` and `restricted/*/attachments/` to rebuild
+- [x] **Step 3.** List `attachments/` and `restricted/*/attachments/` to rebuild
       `uploaded`.
-- [ ] **Step 4.** Merge `refs` with the local file (a union: a note hash always
+- [x] **Step 4.** Merge `refs` with the local file (a union: a note hash always
       maps to the same keys, so entries never conflict). **Replace** `uploaded`
       with the listing from step 3 instead of merging it, because the bucket is
       the truth. Merging would keep local entries for keys deleted outside the
       plugin, and the next publish would then skip uploading them. Set
       `complete: true`.
-- [ ] If the rebuild fails (credentials, network), the operation that needed it
+- [x] If the rebuild fails (credentials, network), the operation that needed it
       skips its deletes and says so (§2).
-- [ ] When run outside a publish or delete, the rebuild takes the publish lock.
+- [x] When run outside a publish or delete, the rebuild takes the publish lock.
 
 ## 4. Audit
 
@@ -168,12 +168,12 @@ that older live revisions still use.
 also lists the bucket (it needs `s3:ListBucket`) and reports in the console
 summary:
 
-- [ ] **Unreferenced objects:** keys under `attachments/` and
+- [x] **Unreferenced objects:** keys under `attachments/` and
       `restricted/*/attachments/` that are not in required(area). These come
       from out-of-band changes, a skipped sweep or a failed sweep. Offer to
       delete them, only after a rebuild if `complete` is false. The delete offer
       takes the publish lock.
-- [ ] **Missing objects:** keys in required(area) with no object. If the vault
+- [x] **Missing objects:** keys in required(area) with no object. If the vault
       still has matching bytes, clear them from `uploaded`, so the next publish
       of a referencing note re-uploads them. Otherwise list them as "referenced,
       never uploaded (bytes no longer in the vault)".
@@ -188,13 +188,13 @@ linger the same way.
 
 ### Template change (both site stacks)
 
-- [ ] New parameter `NoncurrentVersionDays` (Number, default **30**, `0`
+- [x] New parameter `NoncurrentVersionDays` (Number, default **30**, `0`
       disables that rule).
-- [ ] A `LifecycleConfiguration` on the bucket:
+- [x] A `LifecycleConfiguration` on the bucket:
   - `NoncurrentVersionExpiration: { NoncurrentDays: NoncurrentVersionDays }`,
     through `Fn::If` and `AWS::NoValue` when it is `0`;
   - `AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }`, always.
-- [ ] `npm run synth` to regenerate `src/infrastructure/templates.ts`.
+- [x] `npm run synth` to regenerate `src/infrastructure/templates.ts`.
 
 This applies to the whole bucket. Overwritten or deleted note JSON, mappings and
 `config.json` also become unrecoverable 30 days after they stop being current.
@@ -202,39 +202,39 @@ That is the point of the rule, and the docs say so.
 
 ### Rollout
 
-- [ ] New deployments get it from the wizard with the default.
-- [ ] Existing deployments: a new row in **Settings → Infrastructure**
+- [x] New deployments get it from the wizard with the default.
+- [x] Existing deployments: a new row in **Settings → Infrastructure**
       (`src/settings/profile/infrastructure.ts`), "Bucket cleanup rule", showing
       the current state, a days field and an **Apply** button.
-- [ ] Apply runs a targeted site-stack update in `cloudFormationManager.ts` (the
+- [x] Apply runs a targeted site-stack update in `cloudFormationManager.ts` (the
       `updateFullStackOrigins` pattern: current template,
       `NoncurrentVersionDays` overridden, every other parameter
       `UsePreviousValue`, `preserveLiveDomain` applied). It polls to completion
       with the event log used elsewhere.
-- [ ] Imported stacks show "Managed outside the plugin; add a lifecycle rule in
+- [x] Imported stacks show "Managed outside the plugin; add a lifecycle rule in
       CDK" instead of the button.
-- [ ] The applied value is persisted as `InfrastructureState.bucketLifecycleDays`
+- [x] The applied value is persisted as `InfrastructureState.bucketLifecycleDays`
       (`src/types.ts`).
 
 ## 6. Tests
 
 ### `test-attachments.ts` (extended)
 
-- [ ] required/candidate/orphan derivation across an access change, a UID
+- [x] required/candidate/orphan derivation across an access change, a UID
       delete, a blocked note, and two notes sharing a file in different areas.
-- [ ] A published UID missing from the access map counts as public, so a file
+- [x] A published UID missing from the access map counts as public, so a file
       its revisions use is never an orphan in the public area.
-- [ ] Sweeps with the mode `off`: a note whose revisions reference a file moves
+- [x] Sweeps with the mode `off`: a note whose revisions reference a file moves
       from public to gated, and the public copy is still an orphan.
-- [ ] A sweep after `deletePublishedUid` doesn't count the deleted UID.
-- [ ] A failed `DeleteObjects` keeps the undeleted keys in `uploaded`.
+- [x] A sweep after `deletePublishedUid` doesn't count the deleted UID.
+- [x] A failed `DeleteObjects` keeps the undeleted keys in `uploaded`.
 
 ### `test-attachment-state.ts` (extended)
 
-- [ ] Rebuild merge: `refs` is a union with the local file.
-- [ ] Rebuild: `uploaded` equals the bucket listing, so a local entry for a key
+- [x] Rebuild merge: `refs` is a union with the local file.
+- [x] Rebuild: `uploaded` equals the bucket listing, so a local entry for a key
       that is no longer in the bucket is dropped.
-- [ ] A file created after a failed probe makes the next sweep rebuild first.
+- [x] A file created after a failed probe makes the next sweep rebuild first.
 
 ### End-to-end (sandbox `random` only)
 
@@ -260,17 +260,17 @@ That is the point of the rule, and the docs say so.
 
 ## 7. Docs
 
-- [ ] `docs/publishing-model.md`: cleanup, the one-publishing-machine
+- [x] `docs/publishing-model.md`: cleanup, the one-publishing-machine
       assumption, and that **Audit published notes** finds and repairs missing
       or leftover attachment objects.
-- [ ] `docs/infrastructure-deployment.md`: the bucket cleanup rule, its default,
+- [x] `docs/infrastructure-deployment.md`: the bucket cleanup rule, its default,
       and that noncurrent note JSON, mappings and `config.json` expire too.
-- [ ] The S3 permissions cleanup uses: `s3:ListBucket` for the audit and the
+- [x] The S3 permissions cleanup uses: `s3:ListBucket` for the audit and the
       rebuild, `s3:GetObject` for the rebuild, `s3:DeleteObject` for sweeps.
 
 ## Done when
 
 - [ ] Every box in §1–§7 is ticked.
 - [ ] Phase 2 is done too, because they ship together.
-- [ ] `npm run build`, `npm run synth` and all unit tests pass.
+- [x] `npm run build`, `npm run synth` and all unit tests pass.
 - [ ] The end-to-end checks in §6 pass on the sandbox site.

@@ -13,7 +13,7 @@ Commonplace Notes can provision its own AWS infrastructure (S3 bucket + CloudFro
 The deploying user/role needs at minimum:
 
 - `cloudformation:CreateStack`, `cloudformation:DescribeStacks`, `cloudformation:DescribeStackEvents`, `cloudformation:DeleteStack`
-- `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutBucketPolicy`, `s3:PutPublicAccessBlock`
+- `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutBucketPolicy`, `s3:PutPublicAccessBlock`, `s3:PutLifecycleConfiguration` (the [bucket cleanup rule](#bucket-cleanup-rule))
 - `cloudfront:CreateDistribution`, `cloudfront:CreateOriginAccessControl` (or `CreateCloudFrontOriginAccessIdentity` for OAI)
 - `cloudfront:GetDistributionConfig`, to check the site's live domains before every site-stack update (see [Domains changed outside the plugin](#domains-changed-outside-the-plugin))
 - If using custom domains: `acm:RequestCertificate`, `acm:DescribeCertificate`, `acm:ListCertificates` (to offer reuse of existing certificates)
@@ -24,6 +24,14 @@ site bucket. With [attachments](publishing-model.md#attachments-beta) turned on 
 also uses `s3:GetObject` (for `HeadObject`, to skip files already uploaded),
 `s3:ListBucket` (a one-time check for existing attachment objects) and
 `s3:AbortMultipartUpload` (files over 16 MB upload in parts).
+
+[Attachment cleanup](publishing-model.md#attachments-beta) runs whatever the
+attachment mode, after an access change or a note delete. It uses
+`s3:DeleteObject` to remove files no published note uses any more, and, when it
+has to rebuild its local state, `s3:ListBucket` and `s3:GetObject` to read the
+published notes' file lists. **Audit published notes** uses `s3:ListBucket` to
+list attachment objects, and `s3:DeleteObject` if you accept its offer to delete
+unreferenced ones.
 
 ---
 
@@ -103,7 +111,7 @@ If you close the wizard before validation completes, you can return to it later 
 ### Step 5: Full Stack Deployment
 
 The wizard deploys the main infrastructure:
-- S3 bucket (versioned, private, with retention policy)
+- S3 bucket (versioned, private, with retention policy and a [cleanup rule](#bucket-cleanup-rule) that deletes old versions after 30 days)
 - CloudFront distribution (HTTPS, HTTP/2, global edge caching)
 - Bucket policy granting CloudFront read access
 - Route53 records (if enabled)
@@ -197,7 +205,8 @@ the CloudFront console, would be wiped by the next update, and the site would
 stop serving HTTPS on those domains.
 
 So before every site-stack update (wizard re-runs, adding comments or chat,
-attaching an edge function, upgrading the Cognito gate), CPN reads the live
+attaching an edge function, upgrading the Cognito gate, applying the bucket
+cleanup rule), CPN reads the live
 distribution. If its aliases, ACM certificate, or TLS security policy differ
 from the stack's, CPN carries the live values into the update: the domain that
 matches the profile's base URL becomes the custom domain, the rest become extra
@@ -223,6 +232,36 @@ the pool stack in `us-east-1` (keeping the Google client secret) and applies at
 each reader's next sign-in. The row is disabled until **Upgrade Cognito gate**
 has run on pools that need it, and isn't shown for imported stacks. See
 [Sign-in session length](auth-and-access.md#sign-in-session-length).
+
+### Bucket cleanup rule
+
+The site bucket is versioned, so every overwritten or deleted object (a
+removed attachment, an old copy of a note) stays behind as an old
+(noncurrent) version. It can't be reached through the site, but S3 still
+stores and bills it. The site stack gives the bucket two lifecycle rules:
+
+- **Old versions** expire a set number of days after they stop being current:
+  **30** by default. `0` turns this rule off and keeps old versions
+  indefinitely.
+- **Abandoned multipart uploads** (a large attachment upload that never
+  finished) are aborted 7 days after they started. This rule is always on.
+
+The rule covers the whole bucket, not just attachments. Overwritten or
+deleted note JSON, mappings and `config.json` also expire, and can't be
+recovered once their old versions are gone (30 days after they stop being
+current, by default).
+
+New sites get the 30-day rule from the wizard. Sites deployed before the rule
+existed keep their old versions: other site-stack updates add only the
+multipart rule, with the old-versions rule off. To turn it on, or change the
+number of days, go to **Settings → Infrastructure → Bucket cleanup rule**,
+enter the days (0–3650) and click **Apply**. It updates the site stack in the
+site's region with the current template and keeps every other setting, and
+takes a few minutes. It needs `cloudformation:UpdateStack` and
+`s3:PutLifecycleConfiguration`.
+
+Imported stacks show "Managed outside the plugin; add a lifecycle rule in
+CDK" instead: add the rule to your CDK stack.
 
 ### DNS Management
 

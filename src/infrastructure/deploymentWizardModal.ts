@@ -13,7 +13,7 @@ import type { CloudFormationManager } from './cloudFormationManager';
 import type { CertificateMatch, CognitoAuthOutputs, CommentStackOutputs, ChatStackOutputs, DeploymentConfig, HostedZoneInfo, InfrastructureState, OriginAccessMethod, StackEvent, StackOutputs } from './types';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation, hasRestrictedObjects } from '../publish/awsUpload';
 import { edgeEnforcesGroups } from '../utils/access';
-import { errorMessage } from '../utils/logging';
+import { Logger, errorMessage } from '../utils/logging';
 import { cognitoHostedUiDomain, googleOAuthUrls } from './cognitoUrls';
 
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
@@ -54,6 +54,8 @@ export class DeploymentWizardModal extends Modal {
 	private chatStackName: string = '';
 	private passwordStackName: string = '';
 	private passwordEdgeArn: string = '';
+	/** The site stack's NoncurrentVersionDays after the deploy (undefined: predates it). */
+	private bucketLifecycleDays: number | undefined;
 	private aborted = false;
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin, cfManager: CloudFormationManager, profile: PublishingProfile) {
@@ -1304,7 +1306,19 @@ export class DeploymentWizardModal extends Modal {
 
 			if (isDeploySuccess(finalStatus)) {
 				this.stackOutputs = await this.cfManager.getStackOutputs(stackName, this.activeProfile, this.config.region);
-				await this.updateInfraState({ status: 'deployed', lastDeployTimestamp: Date.now() });
+				// A new site has the 30-day cleanup rule; a re-run keeps the live
+				// value. Read it back rather than guess which path the deploy took.
+				try {
+					this.bucketLifecycleDays = await this.cfManager.getBucketLifecycleDays(stackName, this.activeProfile, this.config.region);
+				} catch (err) {
+					// Non-fatal: the persisted value (if any) stays.
+					Logger.warn('Could not read the bucket cleanup rule from the site stack:', err);
+				}
+				await this.updateInfraState({
+					status: 'deployed',
+					lastDeployTimestamp: Date.now(),
+					...(this.bucketLifecycleDays !== undefined ? { bucketLifecycleDays: this.bucketLifecycleDays } : {}),
+				});
 
 				// Phase 2: point the Cognito app client's callback URL at the now-known
 				// site domain. Skipped for custom-domain sites (already correct in phase 1).
@@ -1674,6 +1688,7 @@ export class DeploymentWizardModal extends Modal {
 			passwordAuth: this.buildPasswordAuthState(),
 			comment: this.buildCommentState(),
 			chat: this.buildChatState(),
+			bucketLifecycleDays: this.bucketLifecycleDays ?? profile.infrastructureState?.bucketLifecycleDays,
 		};
 
 		// Persist read-gate intent (mode + low-sensitivity hash for redeploys).

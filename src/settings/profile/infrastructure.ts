@@ -15,12 +15,18 @@ import {
 	MAX_SESSION_HOURS,
 	MIN_SESSION_HOURS,
 } from '../../infrastructure/cognitoParams';
+import {
+	bucketCleanupRow,
+	MAX_NONCURRENT_VERSION_DAYS,
+	MIN_NONCURRENT_VERSION_DAYS,
+	parseNoncurrentDays,
+} from '../../infrastructure/bucketLifecycle';
 
 /**
  * "Infrastructure" section (AWS profiles): deployment status and the large,
  * state-dependent set of actions — auth Lambda, password gate upgrade, Cognito
- * gate upgrade + sign-in session length, Google OAuth URLs + callback sync, commenting info, sync-from-stack, DNS, deploy,
- * import, and unlink.
+ * gate upgrade + sign-in session length, bucket cleanup rule, Google OAuth URLs + callback sync, commenting info,
+ * sync-from-stack, DNS, deploy, import, and unlink.
  */
 export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HTMLElement): void {
 	const { app, plugin, profile, index } = ctx;
@@ -71,6 +77,8 @@ export function renderInfrastructureSection(ctx: ProfileContext, containerEl: HT
 				.onClick(() => {
 					openAuthLambdaModal(ctx, profile);
 				}));
+
+		renderBucketCleanupRow(ctx, containerEl);
 
 		// Password read-gate: offer an in-place upgrade to the S3-asset edge
 		// packaging (escapes the 4096-byte inline cap and Safari ITP cookie
@@ -456,4 +464,71 @@ function renderSessionLengthRow(ctx: ProfileContext, containerEl: HTMLElement, c
 			});
 		});
 	if (blocked) setting.descEl.addClass('mod-warning');
+}
+
+/**
+ * "Bucket cleanup rule": how long the site bucket keeps noncurrent object
+ * versions (0 = indefinitely); abandoned multipart uploads are aborted after
+ * 7 days either way. Sites deployed before the rule keep their old versions
+ * until the author applies it here. Imported stacks are managed in CDK.
+ */
+function renderBucketCleanupRow(ctx: ProfileContext, containerEl: HTMLElement): void {
+	const { plugin, profile } = ctx;
+	const row = bucketCleanupRow(profile.infrastructureState);
+	if (row.kind === 'hidden') return;
+	if (row.kind === 'imported') {
+		new Setting(containerEl).setName('Bucket cleanup rule').setDesc(row.desc);
+		return;
+	}
+	let raw = String(row.initialDays);
+	const eventLog = containerEl.createDiv({ cls: 'cpn-wizard-event-log' });
+	eventLog.hide();
+	new Setting(containerEl)
+		.setName('Bucket cleanup rule')
+		.setDesc(row.desc)
+		.addText(text => {
+			text.inputEl.type = 'number';
+			text.inputEl.min = String(MIN_NONCURRENT_VERSION_DAYS);
+			text.inputEl.max = String(MAX_NONCURRENT_VERSION_DAYS);
+			text.inputEl.addClass('cpn-bucket-lifecycle-days');
+			text.setPlaceholder('Days')
+				.setValue(raw)
+				.onChange(v => { raw = v; });
+		})
+		.addButton(btn => {
+			btn.setButtonText('Apply');
+			if (row.current === undefined) btn.setCta();
+			btn.onClick(async () => {
+				const days = parseNoncurrentDays(raw);
+				if (days === null) {
+					new Notice(`Enter a whole number of days from ${MIN_NONCURRENT_VERSION_DAYS} to ${MAX_NONCURRENT_VERSION_DAYS} (0 keeps old versions).`);
+					return;
+				}
+				btn.setDisabled(true);
+				btn.setButtonText('Applying...');
+				eventLog.empty();
+				eventLog.show();
+				try {
+					await plugin.cloudFormationManager.updateBucketLifecycle(profile, days, (event) => {
+						const line = eventLog.createDiv({ cls: 'cpn-wizard-event-line' });
+						if (event.status.includes('FAILED') || event.status.includes('ROLLBACK')) {
+							line.addClass('cpn-event-error');
+						} else if (event.status.includes('COMPLETE')) {
+							line.addClass('cpn-event-success');
+						}
+						line.setText(`${event.logicalResourceId} - ${event.status}`);
+						eventLog.scrollTop = eventLog.scrollHeight;
+					});
+					new Notice(days === 0
+						? 'Bucket cleanup rule applied: old versions are kept, abandoned uploads are removed after 7 days.'
+						: `Bucket cleanup rule applied: old versions are deleted ${days} day${days === 1 ? '' : 's'} after they're replaced or deleted.`);
+					ctx.rerenderProfile();
+				} catch (err: unknown) {
+					Logger.error('Error applying the bucket cleanup rule:', err);
+					new Notice(`Bucket cleanup rule change failed: ${errorMessage(err)}`);
+					btn.setDisabled(false);
+					btn.setButtonText('Apply');
+				}
+			});
+		});
 }

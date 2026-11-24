@@ -73,6 +73,20 @@ export class FullStackOac extends cdk.Stack {
 			description: 'Optional ARN of a Lambda@Edge function for viewer-request authentication',
 		});
 
+		// Bucket cleanup rule. Versioning keeps every overwritten or deleted object
+		// (a swept attachment, an old note JSON) as a noncurrent version, billed
+		// forever. Noncurrent versions expire this many days after they stop being
+		// current; 0 turns that rule off. Stacks deployed before this parameter get
+		// an explicit 0 from the plugin on later updates, so only a new site (or
+		// Settings -> Infrastructure -> Bucket cleanup rule) turns expiry on.
+		const noncurrentVersionDays = new cdk.CfnParameter(this, 'NoncurrentVersionDays', {
+			type: 'Number',
+			default: 30,
+			minValue: 0,
+			maxValue: 3650,
+			description: 'Days after which noncurrent object versions expire (0 = keep them; 0-3650)',
+		});
+
 		// Conditions
 		const hasVariantName = new cdk.CfnCondition(this, 'HasVariantName', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(variantName.valueAsString, '')),
@@ -105,6 +119,10 @@ export class FullStackOac extends cdk.Stack {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(authLambdaEdgeArn.valueAsString, '')),
 		});
 
+		new cdk.CfnCondition(this, 'HasNoncurrentVersionExpiry', {
+			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(noncurrentVersionDays.valueAsString, '0')),
+		});
+
 		// S3 Bucket
 		const bucketName = cdk.Fn.conditionIf(
 			'HasVariantName',
@@ -115,6 +133,25 @@ export class FullStackOac extends cdk.Stack {
 		const bucket = new s3.CfnBucket(this, 'PublishedNotesBucket', {
 			bucketName,
 			versioningConfiguration: { status: 'Enabled' },
+			// Two rules, so the abort rule stays when noncurrent expiry is off.
+			lifecycleConfiguration: {
+				rules: [
+					cdk.Fn.conditionIf(
+						'HasNoncurrentVersionExpiry',
+						{
+							Id: 'ExpireNoncurrentVersions',
+							Status: 'Enabled',
+							NoncurrentVersionExpiration: { NoncurrentDays: noncurrentVersionDays.valueAsNumber },
+						},
+						cdk.Aws.NO_VALUE,
+					),
+					{
+						id: 'AbortIncompleteMultipartUploads',
+						status: 'Enabled',
+						abortIncompleteMultipartUpload: { daysAfterInitiation: 7 },
+					},
+				],
+			},
 			publicAccessBlockConfiguration: {
 				blockPublicAcls: true,
 				blockPublicPolicy: true,

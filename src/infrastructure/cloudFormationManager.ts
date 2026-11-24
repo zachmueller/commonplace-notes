@@ -77,6 +77,13 @@ import {
 	MIN_SESSION_HOURS,
 } from './cognitoParams';
 import { DEFAULT_MIN_TLS, hostOf, reconcileLiveDomain, type LiveDomainConfig } from './domainDrift';
+import {
+	DEFAULT_NONCURRENT_VERSION_DAYS,
+	deployedNoncurrentDays,
+	isValidNoncurrentDays,
+	MAX_NONCURRENT_VERSION_DAYS,
+	MIN_NONCURRENT_VERSION_DAYS,
+} from './bucketLifecycle';
 import { Logger, errorMessage, errorCode } from '../utils/logging';
 
 const POLL_INTERVAL_MS = 5000;
@@ -811,6 +818,8 @@ export class CloudFormationManager {
 			{ ParameterKey: 'CommentBucketDomainName', ParameterValue: config.commentBucketDomainName || '' },
 			{ ParameterKey: 'CommentApiDomainName', ParameterValue: config.commentApiDomainName || '' },
 			{ ParameterKey: 'ChatFunctionUrlDomainName', ParameterValue: config.chatFunctionUrlDomainName || '' },
+			// A new site gets the bucket cleanup rule (bucketLifecycle.ts).
+			{ ParameterKey: 'NoncurrentVersionDays', ParameterValue: String(DEFAULT_NONCURRENT_VERSION_DAYS) },
 		];
 	}
 
@@ -880,12 +889,18 @@ export class CloudFormationManager {
 		'HostedZoneId', 'HostedZoneName', 'AuthLambdaEdgeArn',
 		'CallbackApiDomainName', 'CommentBucketDomainName', 'CommentApiDomainName',
 		'ChatFunctionUrlDomainName', 'AdditionalAliases', 'MinimumProtocolVersion',
+		'NoncurrentVersionDays',
 	] as const;
 
 	/** Values for params a live stack predates whose template default isn't ''. */
 	private static readonly FULL_STACK_PARAM_DEFAULTS: Partial<Record<string, string>> = {
 		UseRoute53: 'false',
 		MinimumProtocolVersion: DEFAULT_MIN_TLS,
+		// Not the template default (30): a site deployed before the bucket cleanup
+		// rule keeps its old versions until its author applies the rule, so an
+		// unrelated update never starts expiring history. The abort-incomplete-
+		// uploads rule is added either way.
+		NoncurrentVersionDays: '0',
 	};
 
 	/**
@@ -1237,6 +1252,73 @@ export class CloudFormationManager {
 		});
 
 		return stackName;
+	}
+
+	/**
+	 * The site stack's live `NoncurrentVersionDays`, or undefined when the stack
+	 * predates the bucket cleanup rule. The wizard persists it after a deploy.
+	 */
+	async getBucketLifecycleDays(stackName: string, profile: PublishingProfile, region?: string): Promise<number | undefined> {
+		const client = this.getCloudFormationClientForProfile(profile, region);
+		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
+		return deployedNoncurrentDays(response.Stacks?.[0]?.Parameters);
+	}
+
+	/**
+	 * Set the site bucket's cleanup rule: noncurrent versions expire `days` days
+	 * after they stop being current (0 keeps them); abandoned multipart uploads
+	 * are aborted after 7 days either way. The updateFullStackOrigins pattern:
+	 * the current template (a stack deployed before the rule lacks the
+	 * parameter, so UsePreviousTemplate can't set it), NoncurrentVersionDays
+	 * overridden, every other parameter UsePreviousValue (or its default where
+	 * the live stack lacks it), live domains preserved. Polls to completion and
+	 * persists `bucketLifecycleDays`. Refused on imported stacks.
+	 */
+	async updateBucketLifecycle(
+		profile: PublishingProfile,
+		days: number,
+		onEvent?: (event: StackEvent) => void,
+	): Promise<void> {
+		if (!isValidNoncurrentDays(days)) {
+			throw new Error(`Days must be a whole number from ${MIN_NONCURRENT_VERSION_DAYS} to ${MAX_NONCURRENT_VERSION_DAYS}.`);
+		}
+		const state = profile.infrastructureState;
+		if (!state?.fullStackName) throw new Error('This profile has no deployed site stack.');
+		if (state.imported) throw new Error('Imported stacks are managed outside the plugin; add a lifecycle rule in CDK.');
+
+		const config = this.configForProfile(profile);
+		const stackName = state.fullStackName;
+		const client = this.getCfClient(config.awsProfile, config.region);
+		const template = config.originAccessMethod === 'oac'
+			? FULL_STACK_OAC_TEMPLATE
+			: FULL_STACK_OAI_TEMPLATE;
+		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
+		const guarded = await this.preserveLiveDomain(client, stackName, config.awsProfile, profile.id,
+			{ NoncurrentVersionDays: String(days) });
+
+		let changed = true;
+		try {
+			await client.send(new UpdateStackCommand({
+				StackName: stackName,
+				TemplateBody: template,
+				Parameters: this.buildFullStackUpdateParameters(guarded, deployedKeys),
+				Capabilities: ['CAPABILITY_IAM'],
+				Tags: [
+					{ Key: 'cpn:managed', Value: 'true' },
+					{ Key: 'cpn:profile', Value: profile.id },
+				],
+			}));
+		} catch (err) {
+			if (!this.isNoUpdatesError(err)) throw err;
+			changed = false;
+		}
+		if (changed) {
+			const status = await this.pollStackUntilComplete(stackName, profile, onEvent || (() => {}), config.region);
+			if (status !== 'UPDATE_COMPLETE') throw new Error(`Site stack update ended with status ${status}`);
+		}
+
+		state.bucketLifecycleDays = days;
+		await this.plugin.saveSettings();
 	}
 
 	/**
