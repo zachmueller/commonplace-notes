@@ -18,15 +18,30 @@
  *      (earlier batch dropped, this batch stops, then dropped next publish).
  *   9. The updated-since rule (§8).
  *  10. The large-file limiter: five queued, at most two at once.
+ *  11. Cleanup derivation (P3 §1, §2): required/candidates/orphans across an
+ *      access change, a UID delete, a blocked note, and two notes sharing a
+ *      file in different areas; a published UID missing from the access map
+ *      counts as public; a sweep has no mode input, so a note moving from
+ *      public to gated with the mode off still orphans its public copy.
+ *  12. DeleteObjects (P3 §2): batches of 1000; per-key errors and a failed
+ *      call keep the undeleted keys in `uploaded`.
+ *  13. The audit's comparison with the bucket (P3 §4).
  *
  * Run: npx tsx e2e/scripts/test-attachments.ts
  */
 
 import * as attModule from '../../src/utils/attachments';
 import * as exclModule from '../../src/utils/excludedDirectories';
+import * as stateModule from '../../src/utils/attachmentState';
+import * as s3Module from '../../src/publish/attachmentS3';
+import { fakeBucket } from './fake-s3-bucket';
 
 const att: typeof import('../../src/utils/attachments') =
 	(attModule as any).attachmentKind ? attModule : (attModule as any).default;
+const st: typeof import('../../src/utils/attachmentState') =
+	(stateModule as any).forgetUploaded ? stateModule : (stateModule as any).default;
+const s3m: typeof import('../../src/publish/attachmentS3') =
+	(s3Module as any).deleteAttachmentObjects ? s3Module : (s3Module as any).default;
 const compileExcludePatterns: typeof import('../../src/utils/excludedDirectories').compileExcludePatterns =
 	(exclModule as any).compileExcludePatterns ?? (exclModule as any).default?.compileExcludePatterns;
 
@@ -228,6 +243,135 @@ async function main(): Promise<void> {
 	await limit1(async () => { throw new Error('x'); }).catch(() => undefined);
 	await limit1(async () => { errAfter = true; });
 	check('limiter frees its slot after a throw', errAfter);
+
+	// 11. Cleanup derivation (P3 §1, §2) ------------------------------------------
+	const kSong = att.attachmentKey(H('a'), 'song.mp3');
+	const kPic = att.attachmentKey(H('b'), 'pic.png');
+	const kOld = att.attachmentKey(H('c'), 'song.mp3');
+	const kShared = att.attachmentKey(H('d'), 'shared.pdf');
+	const refs = {
+		n1v1: [kOld], n1v2: [kSong],    // note 1: edited its mp3 (old revision keeps the old bytes)
+		n2v1: [kPic],                   // note 2
+		n3v1: [kShared], n4v1: [kShared], // notes 3 and 4 share one file
+	};
+	const history = { u1: ['n1v1', 'n1v2'], u2: ['n2v1'], u3: ['n3v1'], u4: ['n4v1'] };
+	const uidToHash = { u1: 'n1v2', u2: 'n2v1', u3: 'n3v1', u4: 'n4v1' };
+	const access: Record<string, string[]> = { u1: [], u2: [], u3: [], u4: ['family'] };
+	const inputs = (over: Partial<import('../../src/utils/attachments').RequiredInputs> = {}): import('../../src/utils/attachments').RequiredInputs => ({
+		uidToHash, accessOf: uid => access[uid], history, refs, ...over,
+	});
+	const fam = 'restricted/family/';
+	const req = att.requiredByArea(inputs());
+	check('required(public): every revision of every public UID, old bytes included',
+		JSON.stringify([...(req.get('') ?? [])].sort()) === JSON.stringify([kSong, kPic, kOld, kShared].sort()), [...(req.get('') ?? [])]);
+	check('required(family): only the gated UID’s keys', JSON.stringify([...(req.get(fam) ?? [])]) === JSON.stringify([kShared]), [...(req.get(fam) ?? [])]);
+	check('the live hash counts even when history lacks it',
+		att.requiredKeys(inputs({ history: { u2: ['n2v1'] }, uidToHash: { u1: 'n1v2' } }), '').has(kSong));
+	check('areasForGroups: [] and undefined are public; groups map to restricted/<g>/',
+		JSON.stringify(att.areasForGroups([])) === '[""]' && JSON.stringify(att.areasForGroups(undefined)) === '[""]'
+		&& JSON.stringify(att.areasForGroups(['a', 'b'])) === JSON.stringify(['restricted/a/', 'restricted/b/']));
+	check('describeArea', att.describeArea('') === 'the public site' && att.describeArea(fam) === 'group "family"');
+
+	// Access change: note 1 moves public -> family. Its revisions leave the public area.
+	const gated = { ...access, u1: ['family'] };
+	const planGate = att.planSweep(new Map([['', new Set(history.u1)]]), inputs({ accessOf: uid => gated[uid] }));
+	check('access change: both of note 1’s files are public orphans',
+		JSON.stringify(planGate.get('')) === JSON.stringify([kSong, kOld].sort()), Object.fromEntries(planGate));
+	check('access change: nothing is swept in the area the note entered', !planGate.has(fam));
+	check('access change: required(family) now includes note 1’s files',
+		att.requiredKeys(inputs({ accessOf: uid => gated[uid] }), fam).has(kSong));
+	// Mode off: the derivation has no mode input, so the same plan results whatever the settings say.
+	check('mode off: the sweep still orphans the gated note’s public copy (no mode input)',
+		att.resolveAttachmentSettings({ mode: 'off' }).mode === 'off' && planGate.get('')?.includes(kSong) === true);
+
+	// Two notes share a file in different areas: ungating/deleting one keeps the other's copy.
+	const { u3: _u3, ...afterDelete3 } = uidToHash;
+	const planShared = att.planSweep(new Map([['', new Set(history.u3)]]), inputs({ uidToHash: afterDelete3 }));
+	check('shared file: deleting the public note orphans its public copy', planShared.get('')?.includes(kShared) === true);
+	check('shared file: the family copy is untouched (other area, not a candidate area)', !planShared.has(fam));
+	const planShared2 = att.planSweep(new Map([[fam, new Set(history.u4)]]), inputs({ accessOf: uid => ({ ...access, u4: [] })[uid] }));
+	check('shared file: ungating the family note orphans only its family copy', JSON.stringify(planShared2.get(fam)) === JSON.stringify([kShared]) && !planShared2.has(''));
+	const both = { ...access, u3: ['family'] };
+	const planKeep = att.planSweep(new Map([['', new Set(history.u3)]]), inputs({ accessOf: uid => both[uid] }));
+	check('shared file: a candidate another note in the area still needs is kept',
+		!att.planSweep(new Map([[fam, new Set(history.u3)]]), inputs({ accessOf: uid => ({ ...access, u3: [] })[uid] })).has(fam) && planKeep.get('')?.includes(kShared) === true);
+
+	// UID delete: the sweep runs after removeUidFromMappings + accessManager.remove.
+	const { u2: _u2, ...noU2 } = uidToHash;
+	const accessNoU2 = { ...access }; delete accessNoU2.u2;
+	const planDelete = att.planSweep(new Map([['', new Set(history.u2)], [fam, new Set(history.u2)]]),
+		inputs({ uidToHash: noU2, accessOf: uid => accessNoU2[uid] }));
+	check('UID delete: the deleted UID isn’t counted, its file is an orphan', JSON.stringify(planDelete.get('')) === JSON.stringify([kPic]));
+	check('UID delete: history is kept, but a UID out of the mappings never counts',
+		!att.requiredKeys(inputs({ uidToHash: noU2 }), '').has(kPic));
+	// The delete sweeps every group area (the UID may have been in any); there
+	// its keys are no-op deletes, and nothing a family note needs is planned.
+	check('UID delete: in a group area it was never in, only its own keys are planned (no-op deletes)',
+		JSON.stringify(planDelete.get(fam)) === JSON.stringify([kPic]), planDelete.get(fam));
+
+	// Blocked note: commitBlockedNotes drops it from the mappings and the access map.
+	const { u1: _u1, ...noU1 } = uidToHash;
+	const planBlocked = att.planSweep(new Map([['', new Set(history.u1)]]), inputs({ uidToHash: noU1, accessOf: uid => (uid === 'u1' ? undefined : access[uid]) }));
+	check('blocked note (to: null): its files are orphans', JSON.stringify(planBlocked.get('')) === JSON.stringify([kSong, kOld].sort()));
+
+	// A published UID missing from the access map is public.
+	const sparse: Record<string, string[]> = { u4: ['family'] };
+	const reqSparse = att.requiredKeys(inputs({ accessOf: uid => sparse[uid] }), '');
+	check('UID missing from the access map counts as public', reqSparse.has(kSong) && reqSparse.has(kPic));
+	check('…so a file its revisions use is never a public orphan',
+		!att.planSweep(new Map([['', new Set(['n2v1'])]]), inputs({ accessOf: uid => sparse[uid] })).has(''));
+
+	check('candidates: only the removed revisions’ keys', JSON.stringify([...att.sweepCandidates(['n2v1', 'nope'], refs)]) === JSON.stringify([kPic]));
+	check('orphans: candidates − required, sorted', JSON.stringify(att.sweepOrphans([kSong, kPic, kSong], new Set([kSong]))) === JSON.stringify([kPic]));
+	check('uidsRequiring: names users of a key in an area', JSON.stringify(att.uidsRequiring(inputs(), '', kShared)) === JSON.stringify(['u3'])
+		&& JSON.stringify(att.uidsRequiring(inputs(), fam, kShared)) === JSON.stringify(['u4']));
+
+	// 12. DeleteObjects (P3 §2) ----------------------------------------------------
+	const pfx = 'site/';
+	const objKey = (area: string, k: string) => att.attachmentObjectKey(pfx, area, k);
+	{
+		const bucket = fakeBucket({ [objKey('', kSong)]: 'x', [objKey('', kPic)]: 'y', [objKey('', kOld)]: 'z' },
+			{ failDeleteKeys: new Set([objKey('', kPic)]) });
+		const state = st.emptyAttachmentState(true);
+		state.uploaded[''] = [kSong, kPic, kOld];
+		const r = await s3m.deleteAttachmentObjects(bucket, 'b', pfx, '', [kSong, kPic, kOld]);
+		st.forgetUploaded(state, '', r.deleted);
+		check('per-key DeleteObjects errors: failed keys reported', JSON.stringify(r.failed) === JSON.stringify([kPic]) && r.deleted.length === 2, r);
+		check('per-key DeleteObjects errors: undeleted key kept in uploaded', JSON.stringify(state.uploaded['']) === JSON.stringify([kPic]), state.uploaded);
+		check('per-key DeleteObjects errors: the others are gone from the bucket', !bucket.store.has(objKey('', kSong)) && bucket.store.has(objKey('', kPic)));
+	}
+	{
+		const bucket = fakeBucket({ [objKey(fam, kSong)]: 'x' }, { failDeleteCall: true });
+		const state = st.emptyAttachmentState(true);
+		state.uploaded[fam] = [kSong, kShared];
+		const r = await s3m.deleteAttachmentObjects(bucket, 'b', pfx, fam, [kSong]);
+		st.forgetUploaded(state, fam, r.deleted);
+		check('failed DeleteObjects call: never throws, every key failed', r.deleted.length === 0 && JSON.stringify(r.failed) === JSON.stringify([kSong]) && r.error instanceof Error);
+		check('failed DeleteObjects call: uploaded unchanged', JSON.stringify(state.uploaded[fam]) === JSON.stringify([kSong, kShared]));
+	}
+	{
+		const many = Array.from({ length: 2345 }, (_, i) => att.attachmentKey(H('e'), `f${i}.png`));
+		const bucket = fakeBucket({});
+		const r = await s3m.deleteAttachmentObjects(bucket, 'b', pfx, '', many);
+		const sizes = bucket.calls.filter(c => c.name === 'DeleteObjectsCommand').map(c => c.input.Delete.Objects.length);
+		check('DeleteObjects in batches of 1000', JSON.stringify(sizes) === JSON.stringify([1000, 1000, 345]) && r.deleted.length === 2345, sizes);
+		check('DeleteObjects keys carry prefix and area', bucket.calls[0].input.Delete.Objects[0].Key === `site/attachments/${many[0]}`);
+	}
+	{
+		const state = st.emptyAttachmentState(true);
+		state.uploaded[fam] = [kSong];
+		state.uploaded[''] = [kSong];
+		st.forgetUploaded(state, fam, [kSong]);
+		st.dropArea(state, '');
+		check('forgetUploaded drops an emptied area; dropArea forgets a purged area', !(fam in state.uploaded) && !('' in state.uploaded));
+	}
+
+	// 13. Audit comparison (P3 §4) ------------------------------------------------
+	const cmp = att.compareWithBucket({ '': [kSong, kPic], [fam]: [kShared, kOld] }, new Map([['', new Set([kSong, kOld])], [fam, new Set([kShared])], ['restricted/x/', new Set([kPic])]]));
+	check('audit: unreferenced = in the bucket, not required',
+		JSON.stringify(cmp.unreferenced) === JSON.stringify([{ area: '', key: kPic }, { area: fam, key: kOld }]), cmp.unreferenced);
+	check('audit: missing = required, not in the bucket (an unlisted area counts as empty)',
+		JSON.stringify(cmp.missing) === JSON.stringify([{ area: '', key: kOld }, { area: 'restricted/x/', key: kPic }]), cmp.missing);
 
 	console.log('');
 	if (failures.length === 0) {

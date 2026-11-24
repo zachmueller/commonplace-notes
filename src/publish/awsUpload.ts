@@ -9,6 +9,7 @@ import { renderConfigJson, renderSiteAssets } from './siteRenderer';
 import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
 import { partitionRecord, partitionSlugMap, restrictedPrefix, type Partition } from '../utils/access';
 import { uploadStagedAttachments } from './attachmentUpload';
+import { forgetArea, noteNameForUid, sweepRemovedRevisions } from './attachmentCleanup';
 
 /** Cache-Control for objects in a `restricted/<group>/` partition: never stored by browsers. */
 const RESTRICTED_CACHE_CONTROL = 'private, no-store';
@@ -181,12 +182,21 @@ export async function pushLocalJsonsToS3(
 
 		// Remove copies from partitions notes left (e.g. public -> gated). Runs
 		// after the new mappings are live so no mapping points at a deleted key.
-		const removedAny = await applyAccessTransitions(plugin, profileId);
-		if (removedAny === null) return false; // credential error, already reported
+		const access = await applyAccessTransitions(plugin, profileId);
+		if (access === null) return false; // credential error, already reported
+
+		// Then the files only those revisions used, in each area a note left,
+		// whatever the attachment mode (attachment spec P3 §2). Never fails the
+		// publish: a sweep that can't finish says so and points at the audit.
+		if (access.removed.size > 0) {
+			await sweepRemovedRevisions(plugin, profile, access.removed,
+				area => (access.uids.get(area) ?? []).map(uid => noteNameForUid(plugin, uid)));
+		}
 
 		// An access change must reach the edge cache now, whatever the profile's
-		// invalidation scheme: a formerly public copy may still be cached.
-		if (triggerCloudFrontInvalidation || removedAny) {
+		// invalidation scheme: a formerly public copy (note or attachment) may
+		// still be cached.
+		if (triggerCloudFrontInvalidation || access.removedAny) {
 			await createCloudFrontInvalidation(plugin, profileId);
 		}
 
@@ -516,30 +526,42 @@ async function listStagedNoteUploads(
 	return out;
 }
 
+/** What {@link applyAccessTransitions} removed. */
+export interface AccessTransitionResult {
+	/** Whether anything was deleted (note copies or the home copy). */
+	removedAny: boolean;
+	/** Area ('' or `restricted/<g>/`) → note hashes removed from it: the sweep's candidates (P3 §2). */
+	removed: Map<string, Set<string>>;
+	/** Area → the UIDs that left it, for notices. */
+	uids: Map<string, string[]>;
+}
+
 /**
  * Delete note copies from the partitions notes left this publish (drained from
  * AccessManager), then persist the access map. Every historical hash of the
  * note is removed from each partition it left, so old permalinks there go too.
- * Returns true if anything was deleted, false if nothing to do, or null on a
- * credential error (already reported).
+ * Returns what was removed from each area, or null on a credential error
+ * (already reported).
  */
 export async function applyAccessTransitions(
 	plugin: CommonplaceNotesPlugin,
 	profileId: string,
-): Promise<boolean | null> {
+): Promise<AccessTransitionResult | null> {
+	const nothing = (): AccessTransitionResult => ({ removedAny: false, removed: new Map(), uids: new Map() });
 	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
-	if (!profile?.awsSettings) return false;
+	if (!profile?.awsSettings) return nothing();
 
 	const transitions = plugin.accessManager.consumeTransitions(profileId);
 	const homeRemoved = plugin.accessManager.consumeHomeRemoved(profileId);
 	if (transitions.length === 0 && !homeRemoved) {
 		await plugin.accessManager.save(profileId);
-		return false;
+		return nothing();
 	}
 
 	const history = await plugin.noteManager.loadPublishHistory(profileId);
 	// Group the deletes per partition to batch them.
 	const byPartition = new Map<string, Set<string>>();
+	const uidsByPartition = new Map<string, string[]>();
 	const leftPublic: string[] = [];
 	for (const t of transitions) {
 		const hashes = history[t.uid] || [];
@@ -550,6 +572,7 @@ export async function applyAccessTransitions(
 			if (p === null) leftPublic.push(t.uid);
 			if (!byPartition.has(k)) byPartition.set(k, new Set());
 			hashes.forEach(h => byPartition.get(k)!.add(h));
+			uidsByPartition.set(k, [...(uidsByPartition.get(k) ?? []), t.uid]);
 		}
 	}
 
@@ -578,7 +601,12 @@ export async function applyAccessTransitions(
 	}
 
 	await plugin.accessManager.save(profileId);
-	return true;
+	const areaOf = (k: string) => (k === '' ? '' : restrictedPrefix(k));
+	return {
+		removedAny: true,
+		removed: new Map([...byPartition].map(([k, hashes]) => [areaOf(k), hashes])),
+		uids: new Map([...uidsByPartition].map(([k, uids]) => [areaOf(k), uids])),
+	};
 }
 
 /**
@@ -630,6 +658,12 @@ export async function purgeRestrictedPartition(
 		}
 		token = page.IsTruncated ? page.NextContinuationToken : undefined;
 	} while (token);
+	// Its attachments/ went with the prefix (attachment spec P3 §2).
+	try {
+		await forgetArea(plugin, profileId, restrictedPrefix(group));
+	} catch (e) {
+		Logger.warn(`Could not drop ${restrictedPrefix(group)} from attachments.json:`, e);
+	}
 	return deleted;
 }
 

@@ -283,6 +283,74 @@ export function recordUploaded(state: AttachmentStateFile, area: string, key: st
 	if (!list.includes(key)) list.push(key);
 }
 
+/** Remove keys from `uploaded[area]` (swept, or found missing by the audit). */
+export function forgetUploaded(state: AttachmentStateFile, area: string, keys: Iterable<string>): void {
+	const list = state.uploaded[area];
+	if (!list) return;
+	const drop = new Set(keys);
+	const kept = list.filter(k => !drop.has(k));
+	if (kept.length > 0) state.uploaded[area] = kept;
+	else delete state.uploaded[area];
+}
+
+/** Forget everything an area holds (its whole prefix was deleted, P3 §2). */
+export function dropArea(state: AttachmentStateFile, area: string): void {
+	delete state.uploaded[area];
+}
+
+// ---------------------------------------------------------------------------
+// Rebuild (attachment spec P3 §3)
+// ---------------------------------------------------------------------------
+
+/** What a rebuild read from the bucket. */
+export interface BucketAttachmentState {
+	/** Note hash → keys, from each published note JSON's `attachments`. */
+	refs: Record<string, string[]>;
+	/** Area → keys listed under its `attachments/`. */
+	uploaded: Record<string, string[]>;
+}
+
+/**
+ * Step 4: `refs` is the union of the local file's and the bucket's (a note
+ * hash always maps to the same keys, so entries never conflict). `uploaded`
+ * is **replaced** by the bucket listing, because the bucket is the truth: a
+ * local entry for a key deleted outside the plugin would otherwise make the
+ * next publish skip uploading it. The result is complete.
+ */
+export function mergeRebuiltState(local: AttachmentStateFile | null, bucket: BucketAttachmentState): AttachmentStateFile {
+	const refs: Record<string, string[]> = {};
+	for (const source of [local?.refs ?? {}, bucket.refs]) {
+		for (const [hash, keys] of Object.entries(source)) {
+			if (keys.length === 0) continue;
+			refs[hash] = [...new Set([...(refs[hash] ?? []), ...keys])].sort();
+		}
+	}
+	const uploaded: Record<string, string[]> = {};
+	for (const [area, keys] of Object.entries(bucket.uploaded)) {
+		if (keys.length > 0) uploaded[area] = [...new Set(keys)].sort();
+	}
+	return { version: 1, complete: true, refs, uploaded };
+}
+
+/**
+ * The state a sweep or the audit's delete may trust (P3 §2, §3). A complete
+ * file is used as it is. An incomplete one is rebuilt from the bucket first,
+ * merged, saved and updated in place (so a running publish's copy sees it).
+ * Throws when the rebuild fails; the caller then skips its deletes.
+ */
+export async function ensureCompleteState(
+	store: TextStore,
+	path: string,
+	state: AttachmentStateFile,
+	rebuild: () => Promise<BucketAttachmentState>,
+): Promise<{ state: AttachmentStateFile; rebuilt: boolean }> {
+	if (state.complete) return { state, rebuilt: false };
+	const merged = mergeRebuiltState(state, await rebuild());
+	await saveAttachmentState(store, path, merged);
+	Object.assign(state, merged);
+	return { state, rebuilt: true };
+}
+
 // ---------------------------------------------------------------------------
 // staged-attachments.json
 // ---------------------------------------------------------------------------

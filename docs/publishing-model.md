@@ -135,9 +135,10 @@ Attachments changed: …**.
 
 **Publishing safety.**
 
-- **Publish lock.** A publish, a delete, a group purge or a content-index
-  rebuild for one profile never overlap. A second request while one runs is
-  refused with a "busy" notice; run it again when the first finishes.
+- **Publish lock.** A publish, a delete, a group purge, a content-index
+  rebuild or an attachment check (the audit and its delete offer) for one
+  profile never overlap. A second request while one runs is refused with a
+  "busy" notice; run it again when the first finishes.
 - Every staged file is re-checked against the current settings just before
   upload. Files that are now excluded, no longer allowed, over the cap, moved,
   or changed since an earlier failed publish staged them are dropped with a
@@ -149,12 +150,57 @@ Attachments changed: …**.
 - Turning the mode off or narrowing it leaves files in the bucket while older
   revisions still reference them.
 
+**Cleanup.** A file stays in an area while any published revision of a note in
+that area references it, old revisions included. Files are removed only when
+revisions leave an area:
+
+- **An access change.** When a note moves from public to gated, between groups,
+  or is unpublished because its groups can't publish, the files only its
+  revisions used are deleted from each area it left, right after its note
+  copies. Gating a note therefore makes its files unreadable to the public as
+  soon as the publish finishes.
+- **Delete a published note.** The deleted note's files are removed from every
+  area, unless another published note there still uses them.
+- **Removing an access group** deletes its whole `restricted/<group>/` area,
+  attachments included.
+
+Cleanup runs whatever the attachment mode, including **Off**, so turning the
+mode off never leaves a gated note's files public. A file two notes share stays
+in each area that still has a note using it. Cleanup works from the profile's
+local `attachments.json`. When that file is missing or incomplete (for example
+it never synced to this machine) and the bucket already holds attachments, the
+plugin first rebuilds it by reading every published note's file list from the
+bucket, with a progress notice. If cleanup can't finish (no credentials, no
+network, a delete refused), the note change still happens, and a notice that
+stays until dismissed names the note and the area whose files may still be
+readable. Run **Audit published notes** then.
+
+**Audit published notes** also lists the bucket's attachment objects (it needs
+`s3:ListBucket`) and reports in the console:
+
+- **Unreferenced objects**: files no published revision in their area uses,
+  left by a cleanup that couldn't finish or by changes made outside the plugin.
+  The audit offers to delete them; it rebuilds `attachments.json` first if it is
+  incomplete, and checks the bucket again before deleting.
+- **Missing objects**: files a published revision uses that aren't in the
+  bucket. If the vault still has the same bytes, the next publish of a note that
+  uses the file uploads it again. Otherwise they are listed as "referenced,
+  never uploaded (bytes no longer in the vault)".
+
+Deleted files stay in the bucket as old versions until the
+[bucket cleanup rule](infrastructure-deployment.md#bucket-cleanup-rule) expires
+them (30 days by default). They can't be fetched through the site meanwhile.
+
 **One publishing machine per profile.** The profile's local state
 (`publish-history.json`, the mappings, `access.json` and `attachments.json`)
 lives in the plugin folder and reaches other machines only through whatever
-syncs it. Publish each profile from one machine, or let the plugin folder finish
-syncing before publishing from another. **Audit published notes** finds and
-repairs objects that went missing because of overlapping publishes.
+syncs it: Obsidian Sync with community plugins included, or a file sync of the
+whole vault. Publish each profile from one machine, or let the plugin folder
+finish syncing before publishing from another. Cleanup trusts that local state:
+if two machines publish the same profile before sync catches up, one machine's
+cleanup can delete a file the other's newer revision uses. **Audit published
+notes** finds such missing objects and has the next publish upload them again.
+The publish lock only prevents overlapping work on one machine.
 
 **Known limitations.**
 

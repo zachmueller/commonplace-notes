@@ -1,5 +1,6 @@
 /**
- * S3 transfer of one attachment (attachment spec P2 §7, Step 2–3). No
+ * S3 transfer of one attachment (attachment spec P2 §7, Step 2–3), and the
+ * bucket reads and deletes cleanup uses (P3 §2–§4). No
  * Obsidian imports, so the unit test can drive it with a fake S3 client
  * (e2e/scripts/test-attachment-upload.ts).
  *
@@ -11,7 +12,10 @@ import {
 	AbortMultipartUploadCommand,
 	CompleteMultipartUploadCommand,
 	CreateMultipartUploadCommand,
+	DeleteObjectsCommand,
+	GetObjectCommand,
 	HeadObjectCommand,
+	ListObjectsV2Command,
 	PutObjectCommand,
 	UploadPartCommand,
 	type CompletedPart,
@@ -20,7 +24,13 @@ import {
 import { promises as fsp } from 'fs';
 import { createHash } from 'crypto';
 import { Logger } from '../utils/logging';
-import { MULTIPART_PARTS_IN_FLIGHT, MULTIPART_PART_BYTES, type StagedAttachment } from '../utils/attachments';
+import {
+	MULTIPART_PARTS_IN_FLIGHT,
+	MULTIPART_PART_BYTES,
+	attachmentObjectKey,
+	parseAttachmentKey,
+	type StagedAttachment,
+} from '../utils/attachments';
 
 /** The part of S3Client this module uses. */
 export type S3Sender = Pick<S3Client, 'send'>;
@@ -126,4 +136,164 @@ export async function putMultipart(
 	} finally {
 		await handle.close();
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup (attachment spec P3)
+// ---------------------------------------------------------------------------
+
+/** Every key under `Prefix`, paged. */
+export async function listKeys(s3: S3Sender, Bucket: string, Prefix: string): Promise<string[]> {
+	const out: string[] = [];
+	let token: string | undefined;
+	do {
+		const page = await s3.send(new ListObjectsV2Command({ Bucket, Prefix, ContinuationToken: token }));
+		for (const o of page.Contents ?? []) if (o.Key) out.push(o.Key);
+		token = page.IsTruncated ? page.NextContinuationToken : undefined;
+	} while (token);
+	return out;
+}
+
+/** The bucket's areas: '' plus each `restricted/<g>/` that holds any object. */
+export async function listAreas(s3: S3Sender, Bucket: string, s3Prefix: string): Promise<string[]> {
+	const areas = [''];
+	const base = `${s3Prefix}restricted/`;
+	let token: string | undefined;
+	do {
+		const page = await s3.send(new ListObjectsV2Command({ Bucket, Prefix: base, Delimiter: '/', ContinuationToken: token }));
+		for (const p of page.CommonPrefixes ?? []) {
+			if (p.Prefix?.startsWith(base)) areas.push(p.Prefix.slice(s3Prefix.length));
+		}
+		token = page.IsTruncated ? page.NextContinuationToken : undefined;
+	} while (token);
+	return areas;
+}
+
+/** Area → attachment keys (`<sha256>/<fileName>`) its `attachments/` holds. */
+export async function listAttachmentObjects(s3: S3Sender, Bucket: string, s3Prefix: string, areas: readonly string[]): Promise<Record<string, string[]>> {
+	const out: Record<string, string[]> = {};
+	for (const area of areas) {
+		const prefix = attachmentObjectKey(s3Prefix, area, '');
+		const keys = (await listKeys(s3, Bucket, prefix)).map(k => k.slice(prefix.length)).filter(k => k.length > 0);
+		if (keys.length > 0) out[area] = keys.sort();
+	}
+	return out;
+}
+
+/** A published note JSON to read during a rebuild. */
+export interface NoteObject {
+	/** S3 key. */
+	key: string;
+	/** From the file name, or null for `notes/index.json` (read from its `hash`). */
+	hash: string | null;
+}
+
+/**
+ * Rebuild steps 1 and 3: the note JSONs under `notes/` and each
+ * `restricted/<g>/notes/` (one per hash, skipping hashes in `known`, whose
+ * refs are already authoritative locally), and the attachment listing that
+ * replaces `uploaded`.
+ */
+export async function listForRebuild(
+	s3: S3Sender,
+	Bucket: string,
+	s3Prefix: string,
+	known: ReadonlySet<string>,
+): Promise<{ notes: NoteObject[]; uploaded: Record<string, string[]> }> {
+	const areas = await listAreas(s3, Bucket, s3Prefix);
+	const byHash = new Map<string, NoteObject>();
+	const homes: NoteObject[] = [];
+	for (const area of areas) {
+		const prefix = `${s3Prefix}${area}notes/`;
+		for (const key of await listKeys(s3, Bucket, prefix)) {
+			const name = key.slice(prefix.length);
+			if (name.includes('/') || !name.endsWith('.json')) continue;
+			const stem = name.slice(0, -'.json'.length);
+			if (stem === 'index') {
+				homes.push({ key, hash: null });
+				continue;
+			}
+			if (!known.has(stem) && !byHash.has(stem)) byHash.set(stem, { key, hash: stem });
+		}
+	}
+	const uploaded = await listAttachmentObjects(s3, Bucket, s3Prefix, areas);
+	return { notes: [...byHash.values(), ...homes], uploaded };
+}
+
+/** Rebuild step 2 for one note JSON: its hash and `attachments` keys, or null when it is gone. */
+export async function readNoteAttachments(s3: S3Sender, Bucket: string, note: NoteObject): Promise<{ hash: string; keys: string[] } | null> {
+	let text: string;
+	try {
+		const res = await s3.send(new GetObjectCommand({ Bucket, Key: note.key }));
+		text = await (res.Body as { transformToString(): Promise<string> } | undefined)?.transformToString() ?? '';
+	} catch (e) {
+		// Deleted between the listing and the read: it records nothing.
+		const status = (e as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+		if (status === 404 || (e as { name?: string }).name === 'NoSuchKey') return null;
+		throw e;
+	}
+	let json: { hash?: unknown; attachments?: unknown };
+	try {
+		json = JSON.parse(text) as typeof json;
+	} catch {
+		Logger.warn(`Skipping unreadable note JSON ${note.key}`);
+		return null;
+	}
+	const hash = note.hash ?? (typeof json.hash === 'string' ? json.hash : null);
+	if (!hash) return null;
+	// Pre-feature revisions have no field, so they correctly record nothing.
+	const list = Array.isArray(json.attachments) ? json.attachments : [];
+	const keys = list
+		.map(a => (a && typeof a === 'object' ? (a as { key?: unknown }).key : undefined))
+		.filter((k): k is string => typeof k === 'string' && parseAttachmentKey(k) !== null);
+	return { hash, keys: [...new Set(keys)].sort() };
+}
+
+/** The outcome of deleting one area's keys. */
+export interface DeleteResult {
+	deleted: string[];
+	/** Keys not deleted: per-key errors, or every key of a batch whose call failed. */
+	failed: string[];
+	/** The first error, for the log. */
+	error?: unknown;
+}
+
+/** DeleteObjects allows at most this many keys per call. */
+export const DELETE_BATCH = 1000;
+
+/**
+ * Delete attachment keys from one area with DeleteObjects, in batches of
+ * 1000. Never throws: a failed call marks its whole batch failed and later
+ * batches still run.
+ */
+export async function deleteAttachmentObjects(
+	s3: S3Sender,
+	Bucket: string,
+	s3Prefix: string,
+	area: string,
+	keys: readonly string[],
+): Promise<DeleteResult> {
+	const result: DeleteResult = { deleted: [], failed: [] };
+	const prefix = attachmentObjectKey(s3Prefix, area, '');
+	for (let i = 0; i < keys.length; i += DELETE_BATCH) {
+		const batch = keys.slice(i, i + DELETE_BATCH);
+		try {
+			const res = await s3.send(new DeleteObjectsCommand({
+				Bucket,
+				Delete: { Objects: batch.map(k => ({ Key: prefix + k })), Quiet: true },
+			}));
+			const errored = new Set<string>();
+			for (const err of res.Errors ?? []) {
+				if (!err.Key?.startsWith(prefix)) continue;
+				errored.add(err.Key.slice(prefix.length));
+				Logger.error(`Could not delete ${err.Key}: ${err.Code} ${err.Message}`);
+				if (result.error === undefined) result.error = new Error(`${err.Code}: ${err.Message}`);
+			}
+			for (const k of batch) (errored.has(k) ? result.failed : result.deleted).push(k);
+		} catch (e) {
+			if (result.error === undefined) result.error = e;
+			result.failed.push(...batch);
+		}
+	}
+	return result;
 }

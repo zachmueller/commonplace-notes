@@ -23,6 +23,7 @@ import {
 } from '../utils/attachments';
 import {
 	AttachmentHashCache,
+	emptyAttachmentState,
 	getOrCreateMachineId,
 	hashCachePath,
 	loadOrCreateAttachmentState,
@@ -284,6 +285,35 @@ export class AttachmentManager {
 		if (probeError) Logger.warn('Attachment completeness probe failed; attachments.json starts incomplete:', probeError);
 		if (created) Logger.info(`Created ${path} (complete: ${state?.complete})`);
 		if (state) this.states.set(profile.id, state);
+	}
+
+	/**
+	 * `attachments.json` for a sweep, the audit or a rebuild (P3), whatever the
+	 * mode: the running publish's copy, else loaded from disk, else created
+	 * (complete when the history is empty or the bucket probe finds no
+	 * attachment objects; incomplete when the probe fails). A copy created
+	 * during a publish becomes that publish's state.
+	 */
+	async stateForCleanup(profile: PublishingProfile): Promise<AttachmentStateFile> {
+		const running = this.states.get(profile.id);
+		if (running) return running;
+		const path = this.plugin.profileManager.getAttachmentsStatePath(profile.id);
+		const history = await this.plugin.noteManager.loadPublishHistory(profile.id);
+		const historyEmpty = Object.values(history).every(list => list.length === 0);
+		const { state, created, probeError } = await loadOrCreateAttachmentState(this.store, path, {
+			historyEmpty,
+			probeHasAttachments: () => this.probeBucket(profile),
+		});
+		if (probeError) Logger.warn('Attachment completeness probe failed; attachments.json starts incomplete:', probeError);
+		if (created) Logger.info(`Created ${path} (complete: ${state?.complete})`);
+		// Always non-null: inputs are given, so a missing file is created.
+		const out = state ?? emptyAttachmentState(false);
+		if (this.thisBatch.has(profile.id)) this.states.set(profile.id, out);
+		return out;
+	}
+
+	statePath(profileId: string): string {
+		return this.plugin.profileManager.getAttachmentsStatePath(profileId);
 	}
 
 	getState(profileId: string): AttachmentStateFile | null {

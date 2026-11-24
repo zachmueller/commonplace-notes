@@ -12,6 +12,14 @@ import { compileExcludePatterns } from '../utils/excludedDirectories';
 import { busyMessage, withProfileLock } from '../utils/publishLock';
 import { nameList, plural } from '../utils/attachments';
 import {
+	auditAttachmentObjects,
+	auditErrorLine,
+	deleteUnreferencedAttachments,
+	formatAttachmentAudit,
+	sweepRemovedRevisions,
+	type AttachmentAudit,
+} from './attachmentCleanup';
+import {
 	auditPublishedUids,
 	describePublishedUid,
 	formatUidAudit,
@@ -81,12 +89,20 @@ class NoteSuggestModal extends SuggestModal<PublishedUid> {
 class ConfirmSuggestModal extends SuggestModal<string> {
 	options: string[];
 	onChoose: (choice: string) => void;
+	private chosen = false;
 
 	constructor(app: App, slug: string, onChoose: (choice: string) => void) {
 		super(app);
 		this.options = ['No', 'Yes'];
 		this.onChoose = onChoose;
 		this.setPlaceholder(`Type 'yes' to confirm deletion of: ${slug}`);
+	}
+
+	onClose() {
+		// Esc counts as No. The choice (if any) arrives after close, so wait a tick.
+		window.setTimeout(() => {
+			if (!this.chosen) this.onChoose('No');
+		}, 0);
 	}
 
 	getSuggestions(query: string): string[] {
@@ -100,6 +116,7 @@ class ConfirmSuggestModal extends SuggestModal<string> {
 	}
 
 	onChooseSuggestion(option: string, evt: MouseEvent | KeyboardEvent) {
+		this.chosen = true;
 		this.onChoose(option);
 	}
 }
@@ -736,6 +753,34 @@ export class Publisher {
 		if (!report) return;
 		Logger.info(`Audit of published notes for profile '${profile.id}':\n${formatUidAudit(report).join('\n')}`);
 
+		// The bucket's attachment objects (attachment spec P3 §4), whatever the
+		// attachment mode. Under the lock, because it may clear `uploaded`.
+		const canDelete = profile.publishMechanism === 'AWS' && !!profile.awsSettings;
+		let attachments: AttachmentAudit | null = null;
+		const attachmentLines: string[] = [];
+		if (canDelete) {
+			try {
+				const run = await withProfileLock(profile.id, 'checking attachments', () => auditAttachmentObjects(this.plugin, profile));
+				if (!run.ran) {
+					attachmentLines.push(`Attachments not checked: ${busyMessage(profile.name, run.heldBy)}`);
+				} else {
+					attachments = run.result;
+					Logger.info(`Attachment audit for profile '${profile.id}':\n${formatAttachmentAudit(attachments).join('\n')}`);
+					const missing = attachments.missingReupload.length + attachments.missingLost.length;
+					attachmentLines.push(`Attachments: ${attachments.unreferenced.length} unreferenced object(s), ${missing} missing.`);
+					if (attachments.missingReupload.length > 0) {
+						attachmentLines.push(`${attachments.missingReupload.length} missing file(s) re-upload at the next publish of a note that uses them.`);
+					}
+					if (attachments.missingLost.length > 0) {
+						attachmentLines.push(`${attachments.missingLost.length} referenced, never uploaded (bytes no longer in the vault).`);
+					}
+				}
+			} catch (e) {
+				Logger.error('Attachment audit failed:', e);
+				attachmentLines.push(auditErrorLine(e));
+			}
+		}
+
 		const flagged = report.orphans.length + report.unpublishedInVault.length;
 		const summary = [
 			`Audit of "${profile.name}": ${report.published.length} published UID(s).`,
@@ -746,15 +791,49 @@ export class Publisher {
 		if (report.homeIssues.length > 0) {
 			summary.push(`Home note: ${report.homeIssues.length} issue(s).`);
 		}
+		summary.push(...attachmentLines);
 		summary.push('Details are in the developer console.');
-		const canDelete = profile.publishMechanism === 'AWS' && !!profile.awsSettings;
 		if (flagged > 0 && !canDelete) {
 			summary.push('Deleting published notes is only supported for AWS profiles.');
 		}
 		NoticeManager.showNotice(summary.join('\n'), 15000);
 
+		if (attachments && attachments.unreferenced.length > 0) {
+			await this.offerUnreferencedDelete(profile, attachments.unreferenced.length);
+		}
+
 		if (flagged > 0 && canDelete) {
 			await this.deletePublishedNote(profile, true);
+		}
+	}
+
+	/**
+	 * The audit's offer to delete unreferenced attachment objects (P3 §4). The
+	 * delete takes the lock itself, rebuilds first when attachments.json is
+	 * incomplete, and re-lists the bucket, so it only deletes what is still
+	 * unreferenced then.
+	 */
+	private async offerUnreferencedDelete(profile: PublishingProfile, count: number): Promise<void> {
+		const confirmed = await new Promise<boolean>((resolve) => {
+			new ConfirmSuggestModal(this.plugin.app, `${plural(count, 'unreferenced attachment object')} (see console)`, (choice) => {
+				resolve(choice === 'Yes');
+			}).open();
+		});
+		if (!confirmed) return;
+		try {
+			const run = await withProfileLock(profile.id, 'checking attachments', () => deleteUnreferencedAttachments(this.plugin, profile));
+			if (!run.ran) {
+				NoticeManager.showNotice(busyMessage(profile.name, run.heldBy));
+				return;
+			}
+			const { deleted, failed } = run.result;
+			if (deleted > 0) await createCloudFrontInvalidation(this.plugin, profile.id);
+			NoticeManager.showNotice(failed > 0
+				? `Deleted ${plural(deleted, 'attachment object')}; ${failed} could not be deleted (see console).`
+				: `Deleted ${plural(deleted, 'unreferenced attachment object')}.`, 10000);
+		} catch (e) {
+			Logger.error('Deleting unreferenced attachments failed:', e);
+			NoticeManager.showNotice(`Nothing was deleted: couldn't check attachments (${errorMessage(e)}).`, 10000);
 		}
 	}
 
@@ -841,6 +920,8 @@ export class Publisher {
 		}
 		const selectedNote = { uid, label };
 		await this.plugin.mappingManager.loadProfileMappings(profile.id);
+		// Area → the revisions deleted from it, for the attachment sweep (P3 §2).
+		const removed = new Map<string, Set<string>>();
 		try {
 			// Step 4: Collect all hashes to delete
 			const history = await this.plugin.noteManager.loadPublishHistory(profile.id);
@@ -882,6 +963,7 @@ export class Publisher {
 						// Permission error or failure — stop without modifying local files
 						return false;
 					}
+					removed.set(prefix, hashSet);
 				}
 			}
 
@@ -908,6 +990,11 @@ export class Publisher {
 
 			// Step 8: Push updated mappings and content index to S3
 			await pushMappingAndIndexToS3(this.plugin, profile.id);
+
+			// Step 8b: Delete the files only this UID's revisions used, in each
+			// area it was deleted from. The local mappings and access map no
+			// longer count it. Never fails the delete (attachment spec P3 §2).
+			await sweepRemovedRevisions(this.plugin, profile, removed, () => [selectedNote.label]);
 
 			// Step 9: Trigger CloudFront invalidation
 			await createCloudFrontInvalidation(this.plugin, profile.id);

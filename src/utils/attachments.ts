@@ -10,8 +10,12 @@
  * - the note-hash segment and the note JSON list (§5);
  * - staged-entry merging and the re-check before upload (§6, §7);
  * - the "changed since" rule for Publish updates (§8);
- * - the large-file upload limiter (§7).
+ * - the large-file upload limiter (§7);
+ * - phase 3 cleanup: which files each area needs, sweep orphans and the
+ *   audit's comparison with the bucket (P3 §1, §2, §4).
  */
+
+import { partitionsFor, restrictedPrefix, type Partition } from './access';
 
 /** Which links to non-Markdown files publish the file. */
 export type AttachmentMode = 'off' | 'embeds' | 'embedsAndLinks';
@@ -455,3 +459,145 @@ export const SINGLE_PUT_MAX_BYTES = 16 * MB;
 export const MULTIPART_PART_BYTES = 8 * MB;
 export const MULTIPART_PARTS_IN_FLIGHT = 4;
 export const LARGE_UPLOAD_SLOTS = 2;
+
+// ---------------------------------------------------------------------------
+// Cleanup (attachment spec P3 §1, §2, §4)
+// ---------------------------------------------------------------------------
+
+/** The area of a partition: '' for public, `restricted/<g>/` for a group. */
+export function areaOfPartition(p: Partition): string {
+	return p === null ? '' : restrictedPrefix(p);
+}
+
+/** The areas a note with these access groups publishes to. [] (or none recorded) is public. */
+export function areasForGroups(groups: readonly string[] | undefined): string[] {
+	return partitionsFor([...(groups ?? [])]).map(areaOfPartition);
+}
+
+/** For logs and notices: "the public site" or `group "family"`. */
+export function describeArea(area: string): string {
+	const m = /^restricted\/([^/]+)\/$/.exec(area);
+	return m ? `group "${m[1]}"` : 'the public site';
+}
+
+/** Local state the derivation reads (P3 §1). */
+export interface RequiredInputs {
+	/**
+	 * Which UIDs are published: the keys of the profile's `uid-to-hash`
+	 * mapping. Not the access map, which can lack a published UID. The value
+	 * (the live hash) also counts as one of the UID's revisions.
+	 */
+	uidToHash: Readonly<Record<string, string>>;
+	/** A UID's current groups from `access.json`; missing or [] is public. */
+	accessOf: (uid: string) => readonly string[] | undefined;
+	/** `publish-history.json`: uid → every revision hash. */
+	history: Readonly<Record<string, readonly string[]>>;
+	/** `attachments.json` refs: note hash → keys that revision uses. */
+	refs: Readonly<Record<string, readonly string[]>>;
+}
+
+/** Every revision hash of a published UID: its history plus its live hash. */
+function revisionsOf(inputs: RequiredInputs, uid: string): Set<string> {
+	const out = new Set(inputs.history[uid] ?? []);
+	const live = inputs.uidToHash[uid];
+	if (live) out.add(live);
+	return out;
+}
+
+/**
+ * required(area) for every area at once: the union of `refs[h]` over every
+ * revision `h` of every published UID whose current areas include the area.
+ * A superset of what the area's live revisions use (an access change doesn't
+ * copy old revisions into new areas), which is the safe direction.
+ */
+export function requiredByArea(inputs: RequiredInputs): Map<string, Set<string>> {
+	const out = new Map<string, Set<string>>();
+	for (const uid of Object.keys(inputs.uidToHash)) {
+		const keys: string[] = [];
+		for (const h of revisionsOf(inputs, uid)) keys.push(...(inputs.refs[h] ?? []));
+		if (keys.length === 0) continue;
+		for (const area of areasForGroups(inputs.accessOf(uid))) {
+			const set = out.get(area) ?? new Set<string>();
+			keys.forEach(k => set.add(k));
+			out.set(area, set);
+		}
+	}
+	return out;
+}
+
+/** required(area) for one area. */
+export function requiredKeys(inputs: RequiredInputs, area: string): Set<string> {
+	return requiredByArea(inputs).get(area) ?? new Set();
+}
+
+/** The published UIDs whose revisions in `area` count `key` as required (for reports). */
+export function uidsRequiring(inputs: RequiredInputs, area: string, key: string): string[] {
+	const out: string[] = [];
+	for (const uid of Object.keys(inputs.uidToHash)) {
+		if (!areasForGroups(inputs.accessOf(uid)).includes(area)) continue;
+		for (const h of revisionsOf(inputs, uid)) {
+			if (inputs.refs[h]?.includes(key)) {
+				out.push(uid);
+				break;
+			}
+		}
+	}
+	return out.sort();
+}
+
+/** Sweep candidates: the keys the removed revisions used. Nothing else can be deleted. */
+export function sweepCandidates(removedHashes: Iterable<string>, refs: Readonly<Record<string, readonly string[]>>): Set<string> {
+	const out = new Set<string>();
+	for (const h of removedHashes) (refs[h] ?? []).forEach(k => out.add(k));
+	return out;
+}
+
+/** orphans = candidates − required, sorted. */
+export function sweepOrphans(candidates: Iterable<string>, required: ReadonlySet<string>): string[] {
+	return [...new Set(candidates)].filter(k => !required.has(k)).sort();
+}
+
+/**
+ * One sweep (P3 §2): for each area, the keys only the removed revisions used.
+ * `removed` maps an area to the note hashes removed from it. Areas with no
+ * orphans are omitted.
+ */
+export function planSweep(removed: ReadonlyMap<string, Iterable<string>>, inputs: RequiredInputs): Map<string, string[]> {
+	const required = requiredByArea(inputs);
+	const out = new Map<string, string[]>();
+	for (const [area, hashes] of removed) {
+		const orphans = sweepOrphans(sweepCandidates(hashes, inputs.refs), required.get(area) ?? new Set());
+		if (orphans.length > 0) out.set(area, orphans);
+	}
+	return out;
+}
+
+/** One object the audit reports: an area and a key in it. */
+export interface AreaKey {
+	area: string;
+	key: string;
+}
+
+/**
+ * The audit's comparison (P3 §4) of what the bucket holds with what the
+ * published revisions need. `bucket` maps each listed area to its keys.
+ * Unreferenced: in the bucket, not required. Missing: required, not in the
+ * bucket. Both sorted by area, then key.
+ */
+export function compareWithBucket(
+	bucket: Readonly<Record<string, readonly string[]>>,
+	required: ReadonlyMap<string, ReadonlySet<string>>,
+): { unreferenced: AreaKey[]; missing: AreaKey[] } {
+	const unreferenced: AreaKey[] = [];
+	const missing: AreaKey[] = [];
+	for (const [area, keys] of Object.entries(bucket)) {
+		const need = required.get(area) ?? new Set<string>();
+		for (const key of keys) if (!need.has(key)) unreferenced.push({ area, key });
+	}
+	for (const [area, keys] of required) {
+		const have = new Set(bucket[area] ?? []);
+		for (const key of keys) if (!have.has(key)) missing.push({ area, key });
+	}
+	const order = (a: AreaKey, b: AreaKey) => (a.area === b.area ? (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) : a.area < b.area ? -1 : 1);
+	return { unreferenced: unreferenced.sort(order), missing: missing.sort(order) };
+}

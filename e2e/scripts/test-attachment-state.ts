@@ -17,6 +17,15 @@
  *   6. Two machine IDs use two cache files, and neither reads the other's.
  *   7. Machine ID: reused when stored, created and saved otherwise.
  *   8. staged-attachments.json round-trip, ignoring malformed entries.
+ *   9. Rebuild (P3 §3): `refs` is a union with the local file; `uploaded`
+ *      equals the bucket listing, so a local entry for a key no longer in the
+ *      bucket is dropped; the result is complete.
+ *  10. A file created after a failed probe makes the next sweep rebuild first;
+ *      a complete file never rebuilds; a failed rebuild leaves it incomplete.
+ *  11. Reading the bucket (fake S3): notes/ and restricted/<g>/notes/ listed
+ *      with paging, hashes already known locally aren't read, index.json is
+ *      read for its `hash`, pre-feature note JSON records nothing, a note
+ *      deleted between list and read is skipped.
  *
  * Run: npx tsx e2e/scripts/test-attachment-state.ts
  */
@@ -26,9 +35,14 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { webcrypto } from 'crypto';
 import * as stateModule from '../../src/utils/attachmentState';
+import * as s3Module from '../../src/publish/attachmentS3';
+import { fakeBucket } from './fake-s3-bucket';
 
 const st: typeof import('../../src/utils/attachmentState') =
 	(stateModule as any).AttachmentHashCache ? stateModule : (stateModule as any).default;
+
+const s3m: typeof import('../../src/publish/attachmentS3') =
+	(s3Module as any).listForRebuild ? s3Module : (s3Module as any).default;
 
 const failures: string[] = [];
 let checks = 0;
@@ -204,6 +218,89 @@ async function main(): Promise<void> {
 		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
+	}
+
+	// 9. Rebuild merge (P3 §3) -------------------------------------------------
+	{
+		const k = (c: string, n: string) => `${c.repeat(64)}/${n}`;
+		const local = st.emptyAttachmentState(false);
+		local.refs = { h1: [k('a', 'x.mp3')], h2: [k('b', 'y.png')] };
+		local.uploaded = { '': [k('a', 'x.mp3'), k('z', 'gone.pdf')], 'restricted/old/': [k('b', 'y.png')] };
+		const bucket = {
+			refs: { h2: [k('b', 'y.png')], h3: [k('c', 'z.wav')] },
+			uploaded: { '': [k('a', 'x.mp3')], 'restricted/fam/': [k('c', 'z.wav')] },
+		};
+		const merged = st.mergeRebuiltState(local, bucket);
+		check('rebuild: refs is the union of local and bucket',
+			JSON.stringify(Object.keys(merged.refs).sort()) === '["h1","h2","h3"]' && JSON.stringify(merged.refs.h2) === JSON.stringify([k('b', 'y.png')]), merged.refs);
+		check('rebuild: uploaded equals the bucket listing (local-only key and area dropped)',
+			JSON.stringify(merged.uploaded) === JSON.stringify(bucket.uploaded), merged.uploaded);
+		check('rebuild: result is complete', merged.complete === true);
+		check('rebuild: no local file still works', JSON.stringify(st.mergeRebuiltState(null, bucket).refs) === JSON.stringify(bucket.refs));
+	}
+
+	// 10. Failed probe → rebuild at the next sweep ------------------------------
+	{
+		const store = memoryStore();
+		const created = await st.loadOrCreateAttachmentState(store, 'a.json', {
+			historyEmpty: false, probeHasAttachments: async () => { throw new Error('offline'); },
+		});
+		const state = created.state!;
+		st.recordRefs(state, 'mine', ['m'.repeat(64) + '/mine.mp3']);
+		let rebuilds = 0;
+		const failing = await st.ensureCompleteState(store, 'a.json', state, async () => { rebuilds++; throw new Error('still offline'); })
+			.then(() => 'resolved', (e: Error) => e.message);
+		check('failed rebuild: throws, file stays incomplete', failing === 'still offline' && state.complete === false && rebuilds === 1);
+		const r = await st.ensureCompleteState(store, 'a.json', state, async () => {
+			rebuilds++;
+			return { refs: { theirs: ['t'.repeat(64) + '/t.png'] }, uploaded: { '': ['t'.repeat(64) + '/t.png'] } };
+		});
+		check('file created after a failed probe: the next sweep rebuilds first', r.rebuilt && rebuilds === 2 && state.complete === true);
+		check('…keeping this publish’s refs and adding the bucket’s', 'mine' in state.refs && 'theirs' in state.refs, state.refs);
+		check('…and saving the rebuilt file', JSON.parse(store.files.get('a.json')!).complete === true);
+		const again = await st.ensureCompleteState(store, 'a.json', state, async () => { rebuilds++; return { refs: {}, uploaded: {} }; });
+		check('a complete file never rebuilds', !again.rebuilt && rebuilds === 2);
+	}
+
+	// 11. Reading the bucket ---------------------------------------------------
+	{
+		const P = 'pre/';
+		const att = (c: string, n: string) => `${c.repeat(64)}/${n}`;
+		const nj = (hash: string, keys: string[] | null) => JSON.stringify({ hash, ...(keys ? { attachments: keys.map(key => ({ key, name: key.slice(65), size: 1 })) } : {}) });
+		const bucket = fakeBucket({
+			[`${P}notes/h1.json`]: nj('h1', [att('a', 'x.mp3')]),
+			[`${P}notes/h2.json`]: nj('h2', null),                    // pre-feature revision
+			[`${P}notes/known.json`]: nj('known', [att('k', 'k.png')]),
+			[`${P}notes/index.json`]: nj('h1', [att('a', 'x.mp3')]),  // home copy
+			[`${P}notes/sub/odd.json`]: nj('odd', [att('o', 'o.png')]),
+			[`${P}restricted/fam/notes/h3.json`]: nj('h3', [att('c', 'z.wav'), 'not-a-key']),
+			[`${P}restricted/fam/notes/h1.json`]: nj('h1', [att('a', 'x.mp3')]),
+			[`${P}restricted/fam/attachments/${att('c', 'z.wav')}`]: 'bytes',
+			[`${P}restricted/fam/static/mapping/uid-to-hash.json`]: '{}',
+			[`${P}restricted/empty/static/mapping/uid-to-hash.json`]: '{}',
+			[`${P}attachments/${att('a', 'x.mp3')}`]: 'bytes',
+			[`${P}attachments/${att('q', 'stray.pdf')}`]: 'bytes',
+			[`other/attachments/${att('w', 'w.png')}`]: 'bytes',
+		});
+		const listed = await s3m.listForRebuild(bucket, 'b', P, new Set(['known']));
+		const hashes = listed.notes.map(n => n.hash);
+		check('rebuild listing: one read per hash, known hashes skipped, index.json read for its hash',
+			JSON.stringify(hashes) === JSON.stringify(['h1', 'h2', 'h3', null]), listed.notes);
+		check('rebuild listing: nested keys under notes/ ignored', !hashes.includes('odd'));
+		check('rebuild listing: uploaded from every area’s attachments/, other prefixes ignored',
+			JSON.stringify(listed.uploaded) === JSON.stringify({ '': [att('a', 'x.mp3'), att('q', 'stray.pdf')], 'restricted/fam/': [att('c', 'z.wav')] }), listed.uploaded);
+		const reads = await Promise.all(listed.notes.map(n => s3m.readNoteAttachments(bucket, 'b', n)));
+		check('read: attachments keys under the note hash', JSON.stringify(reads[0]) === JSON.stringify({ hash: 'h1', keys: [att('a', 'x.mp3')] }), reads[0]);
+		check('read: pre-feature note JSON records nothing', reads[1]?.keys.length === 0);
+		check('read: malformed keys dropped', JSON.stringify(reads[2]?.keys) === JSON.stringify([att('c', 'z.wav')]), reads[2]);
+		check('read: index.json uses its hash field', reads[3]?.hash === 'h1');
+		bucket.store.delete(`${P}notes/h2.json`);
+		check('read: a note deleted between list and read is skipped', await s3m.readNoteAttachments(bucket, 'b', { key: `${P}notes/h2.json`, hash: 'h2' }) === null);
+		const areas = await s3m.listAreas(bucket, 'b', P);
+		check('areas: public plus each restricted/<g>/', JSON.stringify(areas) === JSON.stringify(['', 'restricted/empty/', 'restricted/fam/']), areas);
+		const failing = fakeBucket({}, { failCommand: 'ListObjectsV2Command' });
+		const err = await s3m.listForRebuild(failing, 'b', P, new Set()).then(() => null, (e: Error) => e.message);
+		check('rebuild listing: a failed list throws (the sweep then skips its deletes)', err === 'ListObjectsV2Command failed');
 	}
 
 	console.log('');
