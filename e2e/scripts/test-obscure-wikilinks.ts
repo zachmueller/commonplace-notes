@@ -162,6 +162,79 @@ const CASES: Case[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Splice offsets — `value` isn't a byte copy of the source (P1 §3)
+// ---------------------------------------------------------------------------
+//
+// Each of these used to corrupt `raw`: the splice landed at
+// `node.position.start.offset + match.index`, which drifts by every character
+// the parser drops before the match (escapes, entities, trailing whitespace,
+// continuation-line prefixes).
+
+const OFFSET_CASES: Case[] = [
+	{ name: 'Offsets — escape before a link', input: 'a \\* [[Note A]] b', expected: 'a \\* [[AAAA1111|Note A]] b' },
+	{ name: 'Offsets — entity before a link', input: 'x &amp; [[Note A]] y', expected: 'x &amp; [[AAAA1111|Note A]] y' },
+	{ name: 'Offsets — numeric entities before a link', input: '&#169; &#x41; [[Note A]]', expected: '&#169; &#x41; [[AAAA1111|Note A]]' },
+	{ name: 'Offsets — trailing space before a soft break', input: 'a \n[[Note A]] b', expected: 'a \n[[AAAA1111|Note A]] b' },
+	{ name: 'Offsets — trailing tab before a soft break', input: 'a\t\n[[Note A]] b', expected: 'a\t\n[[AAAA1111|Note A]] b' },
+	{ name: 'Offsets — blockquote continuation line', input: '> a\n> [[Note A]] b\n', expected: '> a\n> [[AAAA1111|Note A]] b\n' },
+	{ name: 'Offsets — list-item continuation line', input: '- a\n  [[Note A]] b\n', expected: '- a\n  [[AAAA1111|Note A]] b\n' },
+	{ name: 'Offsets — indented paragraph continuation line', input: 'a\n   [[Note A]] b\n', expected: 'a\n   [[AAAA1111|Note A]] b\n' },
+	{ name: 'Offsets — nested blockquote in a list', input: '- > a\n  > b [[Note A]]\n', expected: '- > a\n  > b [[AAAA1111|Note A]]\n' },
+	{ name: 'Offsets — two links with an escape between them', input: '[[Note A]] \\_ [[Note B]]', expected: '[[AAAA1111|Note A]] \\_ [[BBBB2222|Note B]]' },
+	{ name: 'Offsets — escaped brackets still rewritten', input: '\\[\\[Note A]]', expected: '\\[\\[AAAA1111|Note A]]' },
+	{ name: 'Offsets — bracket references still rewritten', input: '&#91;&#91;Note A]]', expected: '&#91;&#91;AAAA1111|Note A]]' },
+	{ name: 'Offsets — escapes inside heading and alias kept as written', input: '[[Note A#H\\*x|a \\* b]]', expected: '[[AAAA1111#H\\*x|a \\* b]]' },
+	{ name: 'Offsets — escape inside the path kept in the display alias', input: '[[Some \\* Draft]]', expected: '[[null|Some \\* Draft]]' },
+	{ name: 'Empty alias — replaced with the path', input: '[[Note A|]]', expected: '[[AAAA1111|Note A]]' }
+];
+
+// ---------------------------------------------------------------------------
+// Pipes in table cells (P1 §3)
+// ---------------------------------------------------------------------------
+
+const TABLE_HEAD = '| h | x |\n|---|---|\n';
+
+const TABLE_CASES: Case[] = [
+	{ name: 'Table — [[Note]] gets an escaped separator', input: TABLE_HEAD + '| [[Note A]] | x |\n', expected: TABLE_HEAD + '| [[AAAA1111\\|Note A]] | x |\n' },
+	{ name: 'Table — [[Note\\|alias]]', input: TABLE_HEAD + '| [[Note A\\|alias]] | x |\n', expected: TABLE_HEAD + '| [[AAAA1111\\|alias]] | x |\n' },
+	{ name: 'Table — [[Note#Heading\\|alias]]', input: TABLE_HEAD + '| [[Note A#Heading\\|alias]] | x |\n', expected: TABLE_HEAD + '| [[AAAA1111#Heading\\|alias]] | x |\n' },
+	{ name: 'Table — heading, no alias', input: TABLE_HEAD + '| [[Note A#Heading]] | x |\n', expected: TABLE_HEAD + '| [[AAAA1111#Heading\\|Note A]] | x |\n' },
+	{ name: 'Table — two links in one cell', input: TABLE_HEAD + '| [[Note A]] [[Note B]] | x |\n', expected: TABLE_HEAD + '| [[AAAA1111\\|Note A]] [[BBBB2222\\|Note B]] | x |\n' },
+	{ name: 'Outside a table — bare separator', input: 'p [[Note A]] [[Note A\\|alias]]\n', expected: 'p [[AAAA1111|Note A]] [[AAAA1111\\|alias]]\n' }
+];
+
+/**
+ * Text outside wikilinks, plus the node-type outline, of a parsed document.
+ * The scrub may only change what's inside `[[…]]`, so this must be the same
+ * before and after.
+ */
+function outsideLinks(markdown: string): string {
+	const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown);
+	const parts: string[] = [];
+	const walk = (node: any): void => {
+		parts.push(`<${node.type}>`);
+		if (node.type === 'text') parts.push(node.value.replace(/\[\[(.*?)\]\]/g, '[[…]]'));
+		else if (typeof node.value === 'string') parts.push(node.value);
+		for (const child of node.children ?? []) walk(child);
+		parts.push(`</${node.type}>`);
+	};
+	walk(tree);
+	return parts.join('');
+}
+
+/** Cell count of every table row, e.g. `2,2,2`. */
+function tableShape(markdown: string): string {
+	const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown);
+	const rows: number[] = [];
+	const walk = (node: any): void => {
+		if (node.type === 'tableRow') rows.push(node.children.length);
+		for (const child of node.children ?? []) walk(child);
+	};
+	walk(tree);
+	return rows.join(',');
+}
+
+// ---------------------------------------------------------------------------
 // HTML renderer (for parity), mirroring NoteManager.markdownToHtml's chain
 // ---------------------------------------------------------------------------
 
@@ -207,6 +280,27 @@ async function main() {
 		}
 	}
 
+	// --- Splice offsets and table pipes: exact output, plus the invariant that
+	// only the inside of links changed, plus (tables) the same cell layout.
+	for (const c of [...OFFSET_CASES, ...TABLE_CASES]) {
+		const got = scrubRawWikilinks(c.input, resolveUid);
+		const problems: string[] = [];
+		if (got !== c.expected) problems.push(`expected ${JSON.stringify(c.expected)}`);
+		if (outsideLinks(got) !== outsideLinks(c.input)) problems.push('text outside links changed when parsed again');
+		if (tableShape(got) !== tableShape(c.input)) {
+			problems.push(`table shape ${tableShape(c.input)} → ${tableShape(got)}`);
+		}
+		if (problems.length === 0) {
+			console.log(`PASS  ${c.name}`);
+		} else {
+			failures++;
+			console.log(`FAIL  ${c.name}`);
+			console.log(`        input:    ${JSON.stringify(c.input)}`);
+			console.log(`        got:      ${JSON.stringify(got)}`);
+			for (const p of problems) console.log(`        - ${p}`);
+		}
+	}
+
 	// --- Parity: every wikilink the renderer turns into an <a> must be rewritten
 	// by the scrub, and vice versa (resolved/published links only; unpublished
 	// renderer spans still get scrubbed to a `null` sentinel, so we compare on
@@ -241,7 +335,7 @@ async function main() {
 		for (const e of parityErrors) console.log(`        - ${e}`);
 	}
 
-	const total = CASES.length + 1;
+	const total = CASES.length + OFFSET_CASES.length + TABLE_CASES.length + 1;
 	console.log('');
 	if (failures === 0) {
 		console.log(`All ${total} obscure-wikilink cases passed.`);
