@@ -107,9 +107,12 @@ function lowerBound(segments: Segment[], offset: number): number {
 
 /** Tokenize `source` once and build the lookups. */
 export function buildSourceMap(source: string): MarkdownSourceMap {
-	const events = postprocess(
-		parse({ extensions: [gfm()] }).document().write(preprocess()(source, undefined, true))
-	) as unknown as MmEvent[];
+	// Keep the tokenizer in a named local: `no-unsanitized/method` treats any
+	// `.write(x)` whose receiver text mentions "document" as `document.write`,
+	// and `parse(...).document().write(...)` trips that false positive.
+	const tokenizer = parse({ extensions: [gfm()] }).document();
+	const chunks = preprocess()(source, undefined, true);
+	const events = postprocess(tokenizer.write(chunks)) as unknown as MmEvent[];
 
 	const segments: Segment[] = [];
 	const resources: MmToken[] = [];
