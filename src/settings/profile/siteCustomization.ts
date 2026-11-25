@@ -178,7 +178,7 @@ function displayNamedStylesSettings(ctx: ProfileContext, containerEl: HTMLElemen
 				}))
 			.addButton(button => button
 				.setButtonText('Remove')
-				.setWarning()
+				.setDestructive()
 				.onClick(async () => {
 					delete ensureNamedStyles(ctx)[currentName];
 					await plugin.saveSettings();

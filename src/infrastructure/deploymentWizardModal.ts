@@ -1803,14 +1803,8 @@ export class DeploymentWizardModal extends Modal {
 	}
 
 	private refreshSettingsTab(): void {
-		// `app.setting` is an undocumented Obsidian internal (the settings modal);
-		// we only need to re-render the active tab, so type just that surface.
-		const setting = (this.app as App & {
-			setting?: { activeTab?: { display?: () => void } };
-		}).setting;
-		if (setting?.activeTab?.display) {
-			setting.activeTab.display();
-		}
+		// Rebuild the declarative tab and redraw whichever page is open.
+		this.plugin.settingTab.refresh();
 	}
 
 	private get activeProfile(): PublishingProfile {

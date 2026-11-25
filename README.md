@@ -22,7 +22,7 @@ CPN is available in Obsidian's community plugin directory:
 
 Updates arrive through Obsidian's normal community plugin updates.
 
-**Requirements:** desktop Obsidian `1.8.7` or newer, and an AWS account with
+**Requirements:** desktop Obsidian `1.13.1` or newer, and an AWS account with
 credentials configured locally for the default (AWS) publish target. See
 [Getting started](docs/getting-started.md) for the full install + first-publish
 walkthrough.

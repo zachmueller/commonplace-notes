@@ -5,7 +5,7 @@ publish target, opt a note in, and publish it.
 
 ## Requirements
 
-- **Desktop Obsidian** (`1.8.7` or newer). Commonplace Notes is desktop-only — it
+- **Desktop Obsidian** (`1.13.1` or newer). Commonplace Notes is desktop-only — it
   uses Node/AWS SDK APIs that aren't available on mobile.
 - **An AWS account** for the default (AWS) publish mechanism, plus an AWS
   credentials profile configured locally (`~/.aws/credentials`, `~/.aws/config`,

@@ -1,97 +1,115 @@
 /**
- * Verifies the Settings tab's tab-bar navigation and collapsible subsections.
+ * Verifies the declarative Settings tab (getSettingDefinitions, Obsidian 1.13+).
  *
- * Drives the real setting tab inside Obsidian: opens the plugin's setting tab,
- * asserts the tab bar renders and switches panes, toggles a collapsible
- * subsection, and confirms both the active tab and the collapsed state are
- * persisted to plugin settings (and survive a re-render).
+ * Drives the real setting tab inside Obsidian: the root shows the General rows,
+ * the Markdown parser / Note routing pages and the Publishing profiles list;
+ * a profile opens as its own page; controls write through to plugin.settings;
+ * and Obsidian's settings search finds CPN rows.
  *
  * Run with: npx playwright test --config=e2e/playwright.config.ts settings-tabs
  */
 
 import { test, expect } from "../lib/obsidian-fixture";
+import {
+	SETTINGS_CONTENT, closeSettings, currentSettingsPageTitle, openCpnSettings, openSettingsPage,
+} from "../lib/test-helpers";
+import type { Page } from "@playwright/test";
 
-/**
- * Open the CPN plugin setting tab from default UI state. The test vault's
- * data.json persists across runs (and other e2e scripts), so a leftover active
- * tab or collapsed section would otherwise leak into these assertions.
- */
-async function openCpnSettings(page: import("@playwright/test").Page) {
-	await page.evaluate(async () => {
-		const app = (window as any).app;
-		const plugin = app.plugins.plugins["commonplace-notes"];
-		delete plugin.settings.settingsUiState;
-		await plugin.saveSettings();
-		app.setting.open();
-		app.setting.openTabById("commonplace-notes");
-	});
-	await page.waitForTimeout(300);
+/** Visible row names on the settings page on screen. */
+function rowNames(page: Page): Promise<string[]> {
+	return page.evaluate((root) =>
+		Array.from(document.querySelectorAll(`${root} .setting-item-name`))
+			.filter(e => (e as HTMLElement).offsetParent !== null)
+			.map(e => e.textContent?.trim() ?? ""), SETTINGS_CONTENT);
 }
 
-test.describe("Settings tab navigation", () => {
-	test("tab bar renders, switches, and persists active tab", async ({ obsidianPage }) => {
-		await obsidianPage.waitForTimeout(5000);
-		await openCpnSettings(obsidianPage);
+/** Names of the profile pages listed under Publishing profiles. */
+function profileRowNames(page: Page): Promise<string[]> {
+	return page.evaluate((root) => {
+		const lists = Array.from(document.querySelectorAll(`${root} .setting-group.mod-list`));
+		const list = lists.find(l => l.querySelector(".setting-item-heading .setting-item-name")?.textContent?.trim() === "Publishing profiles");
+		return Array.from(list?.querySelectorAll(".setting-item.mod-navigable .setting-item-name") ?? [])
+			.map(e => e.textContent?.trim() ?? "");
+	}, SETTINGS_CONTENT);
+}
 
-		// Four tabs render.
-		const tabs = obsidianPage.locator(".cpn-settings-tabs .cpn-settings-tab");
-		await expect(tabs).toHaveCount(4);
-
-		// Default active tab is General.
-		await expect(obsidianPage.locator(".cpn-settings-tab.is-active")).toHaveText("General");
-
-		// Switch to Publishing profiles.
-		await obsidianPage.locator(".cpn-settings-tab", { hasText: "Publishing profiles" }).click();
-		await obsidianPage.waitForTimeout(200);
-		await expect(obsidianPage.locator(".cpn-settings-tab.is-active")).toHaveText("Publishing profiles");
-
-		// Only one tab's content is present at a time: the active-profile
-		// container exists under Profiles but not under General.
-		await expect(obsidianPage.locator(".cpn-active-profile-container")).toHaveCount(1);
-
-		// Active tab persisted to settings.
-		const activeTab = await obsidianPage.evaluate(() => {
-			const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
-			return plugin?.settings?.settingsUiState?.activeTab;
-		});
-		expect(activeTab).toBe("profiles");
+test.describe("Declarative settings tab", () => {
+	test.afterEach(async ({ obsidianPage }) => {
+		await closeSettings(obsidianPage);
 	});
 
-	test("subsections are collapsible and Danger Zone starts collapsed", async ({ obsidianPage }) => {
+	test("root shows General rows, top-level pages and the profile list", async ({ obsidianPage }) => {
 		await obsidianPage.waitForTimeout(5000);
 		await openCpnSettings(obsidianPage);
 
-		// Go to Publishing profiles where the collapsible subsections live.
-		await obsidianPage.locator(".cpn-settings-tab", { hasText: "Publishing profiles" }).click();
+		const names = await rowNames(obsidianPage);
+		for (const expected of ["UID length", "Debug mode", "URL stack window (seconds)", "Markdown parser", "Note routing", "Publishing profiles"]) {
+			expect(names).toContain(expected);
+		}
+		// The old custom tab bar is gone.
+		await expect(obsidianPage.locator(".cpn-settings-tabs")).toHaveCount(0);
+
+		const profiles = await profileRowNames(obsidianPage);
+		expect(profiles.length).toBeGreaterThan(0);
+	});
+
+	test("a profile opens as its own page", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await openCpnSettings(obsidianPage);
+		const [first] = await profileRowNames(obsidianPage);
+		await openSettingsPage(obsidianPage, first);
+
+		expect(await currentSettingsPageTitle(obsidianPage)).toBe(first);
+		const names = await rowNames(obsidianPage);
+		expect(names).toContain("Profile name");
+		expect(names).toContain("Publish mechanism");
+
+		// Markdown parser is a page too.
+		await openCpnSettings(obsidianPage, ["Markdown parser"]);
+		expect(await rowNames(obsidianPage)).toContain("CPN directory");
+	});
+
+	test("General controls write through to plugin settings", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		const original = await obsidianPage.evaluate(() =>
+			(window as any).app.plugins.plugins["commonplace-notes"].settings.urlStackWindowSeconds);
+		await openCpnSettings(obsidianPage);
+
+		const input = obsidianPage.locator(`${SETTINGS_CONTENT} .setting-item`, { hasText: "URL stack window (seconds)" }).locator("input");
+		await input.fill("42");
+		await input.press("Enter");
 		await obsidianPage.waitForTimeout(200);
+		const stored = await obsidianPage.evaluate(() =>
+			(window as any).app.plugins.plugins["commonplace-notes"].settings.urlStackWindowSeconds);
+		expect(stored).toBe(42);
 
-		const sections = obsidianPage.locator("details.cpn-settings-section");
-		expect(await sections.count()).toBeGreaterThan(0);
-
-		// Danger Zone defaults to collapsed (open === false).
-		const dangerOpen = await obsidianPage.evaluate(() => {
-			const summaries = Array.from(document.querySelectorAll(
-				"details.cpn-settings-section > summary.cpn-settings-section-summary"
-			));
-			const danger = summaries.find((s) => s.textContent?.trim() === "Danger Zone");
-			return (danger?.parentElement as HTMLDetailsElement | undefined)?.open ?? null;
-		});
-		expect(dangerOpen).toBe(false);
-
-		// Collapse the first section (Profile Identity) and confirm it persists.
-		await obsidianPage.evaluate(() => {
-			const summaries = Array.from(document.querySelectorAll(
-				"details.cpn-settings-section > summary.cpn-settings-section-summary"
-			));
-			const identity = summaries.find((s) => s.textContent?.trim() === "Profile Identity");
-			(identity as HTMLElement | undefined)?.click();
-		});
+		// Out-of-range input is rejected by the control, not stored.
+		await input.fill("500");
+		await input.press("Enter");
 		await obsidianPage.waitForTimeout(200);
+		const unchanged = await obsidianPage.evaluate(() =>
+			(window as any).app.plugins.plugins["commonplace-notes"].settings.urlStackWindowSeconds);
+		expect(unchanged).toBe(42);
 
-		const collapsed = await obsidianPage.evaluate(() => {
-			const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
-			return plugin?.settings?.settingsUiState?.collapsedSections?.["Profile Identity"];
-		});
-		expect(collapsed).toBe(true);
+		await obsidianPage.evaluate(async (value) => {
+			const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+			if (value === undefined) delete plugin.settings.urlStackWindowSeconds;
+			else plugin.settings.urlStackWindowSeconds = value;
+			await plugin.saveSettings();
+		}, original);
+	});
+
+	test("settings search finds CPN rows", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await openCpnSettings(obsidianPage);
+
+		const search = obsidianPage.locator(".modal.mod-settings input[type=search]").first();
+		await search.fill("URL stack window");
+		await obsidianPage.waitForTimeout(500);
+		const results = await obsidianPage.evaluate(() =>
+			Array.from(document.querySelectorAll(".modal.mod-settings .setting-search-result-item"))
+				.map(e => e.textContent?.trim() ?? ""));
+		expect(results).toContain("URL stack window (seconds)");
+		await search.fill("");
 	});
 });

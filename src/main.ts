@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, App, TFile, Modal, Setting, Notice, WorkspaceLeaf, normalizePath } from 'obsidian';
+import { Plugin, MarkdownView, App, TFile, Notice, WorkspaceLeaf, normalizePath } from 'obsidian';
 import { CommonplaceNotesSettingTab } from './settings';
 import {
 	CommonplaceNotesSettings,
@@ -28,6 +28,7 @@ import { AccessManager } from './utils/accessManager';
 import { buildGroupsJson } from './utils/access';
 import { sha256HexBytes } from './infrastructure/lambdaZip';
 import { NoticeManager } from './utils/notice';
+import { confirmDestructive } from './utils/confirm';
 import { busyMessage, withProfileLock } from './utils/publishLock';
 import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
@@ -765,38 +766,14 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	 * the Settings "Danger Zone" button so the S3-retention warning stays in one
 	 * place.
 	 */
-	confirmDestroyInfrastructure(profile: PublishingProfile): Promise<{ confirmed: boolean; deleteBuckets: boolean }> {
-		return new Promise(resolve => {
-			const confirmModal = new Modal(this.app);
-			let deleteBuckets = false;
-			let settled = false;
-			const finish = (confirmed: boolean) => {
-				if (settled) return;
-				settled = true;
-				resolve({ confirmed, deleteBuckets });
-				confirmModal.close();
-			};
-
-			confirmModal.onOpen = () => {
-				confirmModal.contentEl.createEl('h3', { text: 'Destroy Infrastructure' });
-				confirmModal.contentEl.createEl('p', {
-					text: `This will delete the CloudFormation stacks for profile "${profile.name}". By default the S3 buckets are retained (not deleted); enable the option below to also remove them. This action cannot be undone.`,
-				});
-
-				new Setting(confirmModal.contentEl)
-					.setName('Also delete S3 data (published content + comments)')
-					.setDesc('Empty and remove the retained S3 buckets. This permanently deletes your published site content and any stored comments. Leave off to keep the buckets and their data.')
-					.addToggle(toggle => toggle
-						.setValue(false)
-						.onChange(v => { deleteBuckets = v; }));
-
-				new Setting(confirmModal.contentEl)
-					.addButton(btn => btn.setButtonText('Cancel').onClick(() => finish(false)))
-					.addButton(btn => btn.setButtonText('Destroy').setWarning().onClick(() => finish(true)));
-			};
-			confirmModal.onClose = () => finish(false);
-			confirmModal.open();
+	async confirmDestroyInfrastructure(profile: PublishingProfile): Promise<{ confirmed: boolean; deleteBuckets: boolean }> {
+		const { confirmed, checked } = await confirmDestructive(this.app, {
+			title: 'Destroy Infrastructure',
+			body: `This will delete the CloudFormation stacks for profile "${profile.name}". By default the S3 buckets are retained (not deleted). Tick the option below to also empty and remove them, which permanently deletes your published site content and any stored comments. This action cannot be undone.`,
+			checkbox: 'Also delete S3 data (published content + comments)',
+			confirmText: 'Destroy',
 		});
+		return { confirmed, deleteBuckets: checked };
 	}
 
 	/**
@@ -1318,13 +1295,18 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		new Notice(fragment, 0);
 	}
 
-	/** Open this plugin's settings on a profile's Profiles tab. */
+	/**
+	 * Open this plugin's settings for a profile. Obsidian has no public way to
+	 * open a tab on a sub-page, so this opens the CPN tab and names the profile
+	 * to pick under Publishing profiles (spec §P0).
+	 */
 	openProfileSettings(profileId: string): void {
-		this.settingTab.showProfile(profileId);
 		// `app.setting` is internal (not in the public typings).
 		const setting = (this.app as App & { setting?: { open(): void; openTabById(id: string): void } }).setting;
 		setting?.open();
 		setting?.openTabById(this.manifest.id);
+		const profile = this.settings.publishingProfiles.find(p => p.id === profileId);
+		if (profile) new Notice(`Open "${profile.name}" under Publishing profiles.`);
 	}
 
 	// --- Append-mode URL stacking helpers ---------------------------------
@@ -1636,6 +1618,7 @@ cpn.rebuildContentIndex();
 
 	onunload() {
 		Logger.info('Unloading CommonplaceNotesPlugin');
+		this.settingTab?.flushPendingSave();
 		this.clearUrlStack();
 		this.attachmentChangeNotifier?.unload();
 		this.awsSdkManager.dispose();

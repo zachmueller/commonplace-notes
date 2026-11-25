@@ -21,7 +21,7 @@
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
-import { waitForSelector } from "../lib/test-helpers";
+import { closeSettings, openCpnSettings } from "../lib/test-helpers";
 
 // ---------------------------------------------------------------------------
 // Local constants
@@ -92,7 +92,6 @@ async function seedProfile(ctx: TestContext, variant: Variant): Promise<boolean>
 		if (variant === "public-gating") profile.publicSiteAccessGroups = true;
 		else delete profile.publicSiteAccessGroups;
 
-		plugin.settings.settingsUiState = { ...(plugin.settings.settingsUiState ?? {}), activeTab: "profiles" };
 		await plugin.saveSettings();
 		return true;
 	}, variant);
@@ -100,37 +99,26 @@ async function seedProfile(ctx: TestContext, variant: Variant): Promise<boolean>
 	return ok;
 }
 
-/** Open Settings → Commonplace Notes fresh, so the tab re-renders from settings. */
+/**
+ * Open Settings → Commonplace Notes fresh and walk into profile 0's page, so
+ * the page re-renders from the seeded settings.
+ */
 async function openPluginSettings(ctx: TestContext): Promise<boolean> {
 	const { page } = ctx;
-
-	// Close any settings modal left open by a previous scenario.
-	if (await page.$(".vertical-tab-header")) {
-		await page.keyboard.press("Escape");
-		await page.waitForTimeout(500);
-	}
-
-	await page.keyboard.press("Meta+,");
-	await page.waitForTimeout(1500);
-	if (!await waitForSelector(page, ".vertical-tab-header", 5000)) {
-		ctx.fail("Open plugin settings", "Settings modal did not appear after Cmd+,");
+	await closeSettings(page);
+	const name = await page.evaluate(() =>
+		(window as any).app?.plugins?.plugins?.["commonplace-notes"]?.settings?.publishingProfiles?.[0]?.name as string | undefined);
+	if (!name) {
+		ctx.fail("Open plugin settings", "Profile 0 has no name");
 		return false;
 	}
-
-	const found = await page.evaluate(() => {
-		for (const tab of document.querySelectorAll(".vertical-tab-nav-item")) {
-			if (tab.textContent?.includes("Commonplace Notes")) {
-				(tab as HTMLElement).click();
-				return true;
-			}
-		}
-		return false;
-	});
-	if (!found) {
-		ctx.fail("Open plugin settings", "Could not find 'Commonplace Notes' tab in settings sidebar");
+	try {
+		await openCpnSettings(page, [name]);
+	} catch (err) {
+		ctx.fail("Open plugin settings", `Could not open the "${name}" profile page: ${String(err)}`);
 		return false;
 	}
-	await page.waitForTimeout(800);
+	await page.waitForTimeout(500);
 	return true;
 }
 

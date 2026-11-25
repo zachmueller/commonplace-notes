@@ -80,7 +80,6 @@ function setupVault(vaultPath: string): void {
 	});
 	// Every profile starts on the old rules so the upgrade runs on load.
 	for (const p of data.publishingProfiles) delete p.excludedDirsRulesVersion;
-	data.settingsUiState = { ...(data.settingsUiState ?? {}), activeTab: "general" };
 	fs.writeFileSync(DATA_JSON, JSON.stringify(data, null, 2));
 
 	for (const note of Object.keys(NOTES)) {
@@ -226,18 +225,20 @@ async function testOpenSettings(ctx: TestContext): Promise<void> {
 		return;
 	}
 	await ctx.page.waitForTimeout(1_500);
+	// Obsidian has no public way to open a settings sub-page, so the link opens
+	// the CPN tab and a notice names the profile to pick (spec P0).
 	const state = await ctx.page.evaluate((name) => {
 		const modal = document.querySelector(".modal.mod-settings");
-		const activeTab = modal?.querySelector(".cpn-settings-tab.is-active")?.textContent ?? null;
-		const select = Array.from(modal?.querySelectorAll(".setting-item") ?? [])
-			.find((s) => s.querySelector(".setting-item-name")?.textContent === "Active profile")
-			?.querySelector("select") as HTMLSelectElement | undefined;
-		const selected = select ? select.options[select.selectedIndex]?.text : null;
-		return { open: !!modal, activeTab, selected, wanted: name };
+		const activeTab = modal?.querySelector(".vertical-tab-nav-item.is-active")?.textContent?.trim() ?? null;
+		const profileRow = Array.from(modal?.querySelectorAll(".setting-item.mod-navigable .setting-item-name") ?? [])
+			.some((n) => n.textContent?.trim() === name);
+		const named = Array.from(document.querySelectorAll(".notice"))
+			.some((n) => (n.textContent ?? "").includes(`Open "${name}" under Publishing profiles`));
+		return { open: !!modal, activeTab, profileRow, named, wanted: name };
 	}, PROFILE_NAME);
 	const shot = await ctx.screenshot("02-open-settings");
-	if (state.open && state.activeTab === "Publishing profiles" && state.selected === PROFILE_NAME) {
-		ctx.pass("Open settings link", `settings open on Publishing profiles → ${state.selected}`, shot);
+	if (state.open && state.activeTab === "Commonplace Notes" && state.profileRow && state.named) {
+		ctx.pass("Open settings link", `CPN settings open, "${PROFILE_NAME}" listed and named in a notice`, shot);
 	} else {
 		ctx.fail("Open settings link", JSON.stringify(state), shot);
 	}

@@ -1,4 +1,5 @@
-import { Modal, Notice, Setting } from 'obsidian';
+import { Notice, Setting } from 'obsidian';
+import { confirmDestructive } from '../../utils/confirm';
 import { PublishingProfile } from '../../types';
 import { Logger } from '../../utils/logging';
 import { ProfileContext } from '../context';
@@ -268,36 +269,12 @@ function displayOrphanedEdgeCleanup(ctx: ProfileContext, containerEl: HTMLElemen
  * Confirm dialog for force-clean, with an opt-in "also delete S3 data" toggle
  * (default OFF). Resolves { confirmed, deleteBuckets }.
  */
-function confirmForceClean(ctx: ProfileContext, profile: PublishingProfile): Promise<{ confirmed: boolean; deleteBuckets: boolean }> {
-	return new Promise(resolve => {
-		const modal = new Modal(ctx.app);
-		let deleteBuckets = false;
-		let settled = false;
-		const finish = (confirmed: boolean) => {
-			if (settled) return;
-			settled = true;
-			resolve({ confirmed, deleteBuckets });
-			modal.close();
-		};
-
-		modal.onOpen = () => {
-			modal.titleEl.setText('Force-clean leftover infrastructure');
-			modal.contentEl.createEl('p', {
-				text: `This force-deletes the remaining CloudFormation stacks for profile "${profile.name}", orphaning any resources AWS can't remove yet (e.g. replicating Lambda@Edge functions — AWS cleans those up later). This cannot be undone.`,
-			});
-
-			new Setting(modal.contentEl)
-				.setName('Also delete S3 data (published content + comments)')
-				.setDesc('Empty and remove the retained S3 buckets. This permanently deletes your published site content and any stored comments. Leave off to keep the buckets and their data.')
-				.addToggle(toggle => toggle
-					.setValue(false)
-					.onChange(v => { deleteBuckets = v; }));
-
-			new Setting(modal.contentEl)
-				.addButton(btn => btn.setButtonText('Cancel').onClick(() => finish(false)))
-				.addButton(btn => btn.setButtonText('Force-clean').setWarning().onClick(() => finish(true)));
-		};
-		modal.onClose = () => finish(false);
-		modal.open();
+async function confirmForceClean(ctx: ProfileContext, profile: PublishingProfile): Promise<{ confirmed: boolean; deleteBuckets: boolean }> {
+	const { confirmed, checked } = await confirmDestructive(ctx.app, {
+		title: 'Force-clean leftover infrastructure',
+		body: `This force-deletes the remaining CloudFormation stacks for profile "${profile.name}", orphaning any resources AWS can't remove yet (e.g. replicating Lambda@Edge functions — AWS cleans those up later). Tick the option below to also empty and remove the retained S3 buckets, which permanently deletes your published site content and any stored comments. This cannot be undone.`,
+		checkbox: 'Also delete S3 data (published content + comments)',
+		confirmText: 'Force-clean',
 	});
+	return { confirmed, deleteBuckets: checked };
 }

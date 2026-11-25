@@ -76,7 +76,11 @@ export async function waitForSelector(
 
 /** The slice of Obsidian's renderer globals these helpers read. */
 type ObsidianWindow = {
-	app?: { plugins?: { plugins?: Record<string, { settings?: Record<string, unknown> } | undefined> } };
+	app?: {
+		plugins?: { plugins?: Record<string, { settings?: Record<string, unknown> } | undefined> };
+		/** The settings modal (internal, untyped in Obsidian's API). */
+		setting?: { open(): void; close(): void; openTabById(id: string): void };
+	};
 };
 
 /**
@@ -114,6 +118,61 @@ export async function executeCommand(page: Page, commandName: string): Promise<v
 	// Press Enter to execute
 	await page.keyboard.press("Enter");
 	await page.waitForTimeout(1000);
+}
+
+// ---------------------------------------------------------------------------
+// Settings helpers (declarative settings tab, Obsidian 1.13+)
+// ---------------------------------------------------------------------------
+
+/** Root of the settings modal's content pane. */
+export const SETTINGS_CONTENT = ".modal.mod-settings .vertical-tab-content-container";
+
+/**
+ * Open the CPN settings tab at its root, then optionally walk into nested
+ * pages by name (e.g. `["My profile", "Danger Zone"]`). Requires the harness's
+ * `settingsPopoutWindow: false` (see ensureAppConfig) so Settings is a modal.
+ */
+export async function openCpnSettings(page: Page, pagePath: string[] = []): Promise<void> {
+	await page.evaluate((id) => {
+		const setting = (window as unknown as ObsidianWindow).app?.setting;
+		setting?.open();
+		setting?.openTabById(id);
+	}, PLUGIN_ID);
+	await page.waitForSelector(`${SETTINGS_CONTENT} .setting-item`, { timeout: 10_000 });
+	for (const name of pagePath) await openSettingsPage(page, name);
+}
+
+/** Exact-text matcher for locator filters. */
+function exactText(text: string): RegExp {
+	return new RegExp(`^\\s*${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
+}
+
+/**
+ * Click the navigable settings row named `name` and wait for its page. Uses
+ * locators only: tsx-compiled callbacks passed to page.evaluate /
+ * waitForFunction can reference a `__name` helper the page doesn't have.
+ */
+export async function openSettingsPage(page: Page, name: string): Promise<void> {
+	const row = page.locator(`${SETTINGS_CONTENT} .setting-item.mod-navigable`)
+		.filter({ has: page.locator(".setting-item-name", { hasText: exactText(name) }) })
+		.first();
+	if (await row.count() === 0) throw new Error(`No settings page row named "${name}"`);
+	await row.click();
+	await page.locator(`${SETTINGS_CONTENT} .setting-page-title`, { hasText: exactText(name) })
+		.waitFor({ timeout: 10_000 });
+	await page.waitForTimeout(200);
+}
+
+/** Title of the settings sub-page on screen, or null at a tab's root. */
+export async function currentSettingsPageTitle(page: Page): Promise<string | null> {
+	return page.evaluate((root) =>
+		document.querySelector(`${root} .setting-page-title`)?.textContent?.trim() ?? null, SETTINGS_CONTENT);
+}
+
+/** Close the settings modal if it's open. */
+export async function closeSettings(page: Page): Promise<void> {
+	await page.evaluate(() => (window as unknown as ObsidianWindow).app?.setting?.close());
+	await page.waitForTimeout(200);
 }
 
 // ---------------------------------------------------------------------------

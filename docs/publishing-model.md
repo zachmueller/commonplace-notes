@@ -252,8 +252,8 @@ The publish lock only prevents overlapping work on one machine.
 > **Upgrading.** Every publish re-uploads the current revision of each note it
 > includes, so notes pick up the new link rendering (file names instead of
 > folder paths, escaped unpublished links) on their next publish. **Publish all
-> notes** refreshes every note. Old permalinks keep their old HTML. The release
-> with attachments requires Obsidian 1.8.7 or later.
+> notes** refreshes every note. Old permalinks keep their old HTML. Current
+> releases require Obsidian 1.13.1 or later.
 
 ## Embeds (transclusions)
 

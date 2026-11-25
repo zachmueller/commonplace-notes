@@ -452,6 +452,14 @@ async function live(ctx: TestContext): Promise<void> {
 	const ui = await page.evaluate(async ({ pluginId, id }) => {
 		const plugin = (window as any).app.plugins.plugins[pluginId];
 		plugin.openProfileSettings(id);
+		// Settings opens on the CPN tab root; step into the profile's page.
+		const profileName = plugin.settings.publishingProfiles.find((p: any) => p.id === id)?.name;
+		for (let i = 0; i < 20; i++) {
+			const nav = Array.from(document.querySelectorAll('.modal.mod-settings .setting-item.mod-navigable'))
+				.find((r) => r.querySelector('.setting-item-name')?.textContent?.trim() === profileName) as HTMLElement | undefined;
+			if (nav) { nav.click(); break; }
+			await new Promise(r => setTimeout(r, 250));
+		}
 		// No named function expressions in page.evaluate: tsx wraps them in a
 		// `__name` helper the page doesn't have.
 		let row: Element | undefined;
@@ -519,6 +527,14 @@ async function live(ctx: TestContext): Promise<void> {
 	const wizard = await page.evaluate(async ({ pluginId, id }) => {
 		const plugin = (window as any).app.plugins.plugins[pluginId];
 		plugin.openProfileSettings(id);
+		// Settings opens on the CPN tab root; step into the profile's page.
+		const profileName = plugin.settings.publishingProfiles.find((p: any) => p.id === id)?.name;
+		for (let i = 0; i < 20; i++) {
+			const nav = Array.from(document.querySelectorAll('.modal.mod-settings .setting-item.mod-navigable'))
+				.find((r) => r.querySelector('.setting-item-name')?.textContent?.trim() === profileName) as HTMLElement | undefined;
+			if (nav) { nav.click(); break; }
+			await new Promise(r => setTimeout(r, 250));
+		}
 		let btn: HTMLButtonElement | undefined;
 		for (let i = 0; i < 40 && !btn; i++) {
 			for (const d of Array.from(document.querySelectorAll('.modal.mod-settings details.cpn-settings-section'))) (d as HTMLDetailsElement).open = true;

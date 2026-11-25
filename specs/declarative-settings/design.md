@@ -238,32 +238,36 @@ tab root.
 
 ### P1: Version floor, deprecations, shell
 
-1. [ ] `manifest.json` `minAppVersion` → `1.13.1`; update the three doc
+1. [x] `manifest.json` `minAppVersion` → `1.13.1`; update the three doc
        references (§1). (The `versions.json` row is added by `/release`.)
-2. [ ] Replace all six `setWarning()` calls per §7.
-3. [ ] `src/settings/keys.ts` (§3) + `e2e/scripts/test-settings-keys.ts`
+2. [x] Replace all six `setWarning()` calls per §7.
+3. [x] `src/settings/keys.ts` (§3) + `e2e/scripts/test-settings-keys.ts`
        (parse, get, set, unknown profile id, nested create) +
        `npm run test:settings-keys`.
-4. [ ] *(Optional)* The three confirmation dialogs → `ConfirmationModal`.
-5. [ ] `getSettingDefinitions()` returns the §4 structure. Each page's body is
+4. [x] *(Optional)* The three confirmation dialogs → `ConfirmationModal`.
+5. [x] `getSettingDefinitions()` returns the §4 structure. Each page's body is
        a `LegacyPage extends SettingPage` whose `display()` calls the existing
        renderer (`renderGeneralTab`, `renderParserTab`, `renderRoutingTab`,
        `displayProfileSettings`) with a context whose `rerenderAll` /
        `rerenderProfile` re-run that page's `display()`. Delete the tab bar,
-       profile dropdown and `display()`.
-6. [ ] `getControlValue` / `setControlValue` overrides wired to `keys.ts`
+       profile dropdown and `display()`. *(General went straight to `control`
+       rows, P2's first box; `rerenderAll` also rebuilds the definitions, and
+       the tab's `refresh()` redraws the adapter on screen, since `update()`
+       doesn't redraw custom pages.)*
+6. [x] `getControlValue` / `setControlValue` overrides wired to `keys.ts`
        (unused until P2, but tested).
-7. [ ] `DeploymentWizardModal.refreshSettingsTab()` → `plugin.settingTab.update()`
-       (§5); today's internal `activeTab.display()` call no longer redraws.
-8. [ ] `npm run lint`: `prefer-setting-definitions` and `no-deprecated` are gone.
+7. [x] `DeploymentWizardModal.refreshSettingsTab()` → `plugin.settingTab.refresh()`
+       (`update()` plus a redraw of any adapter page on screen) (§5); today's
+       internal `activeTab.display()` call no longer redraws.
+8. [x] `npm run lint`: `prefer-setting-definitions` and `no-deprecated` are gone.
 
 Shippable: search finds the top-level entries and profile pages, not yet the
 rows inside adapter pages.
 
 ### P2: General, Markdown parser, Note routing
 
-- [ ] General tab rows (UID length, Debug mode, URL stack window) → `control`
-      rows (`general.*` keys); `validate` for the numeric ranges.
+- [x] General tab rows (UID length, Debug mode, URL stack window) → `control`
+      rows (`general.*` keys); `validate` for the numeric ranges. *(Done in P1.)*
 - [ ] Parser page: CPN directory → `control`; extension listing and errors →
       `render`; reset/export → `action`.
 - [ ] Routing page: same pattern.

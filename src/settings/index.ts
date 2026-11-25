@@ -1,9 +1,13 @@
-import { App, DropdownComponent, PluginSettingTab, Setting } from 'obsidian';
+import { App, Debouncer, Notice, PluginSettingTab, SettingDefinitionItem, SettingDefinitionPage, debounce } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
-import { PublishingProfile, SettingsTab, SettingsUiState } from '../types';
+import { PublishingProfile, SettingsUiState } from '../types';
 import { Logger, errorMessage } from '../utils/logging';
-import { SettingsContext, ProfileContext } from './context';
-import { renderGeneralTab } from './tabs/generalTab';
+import { DefinitionContext, SettingsContext, ProfileContext } from './context';
+import { DELETE, GENERAL_CODECS, KeyCodec, findCodec } from './codecs';
+import { RefRegistry, buildGeneralKey, buildProfileKey, deleteAtPath, getAtPath, parseKey, setAtPath } from './keys';
+import { PageNameSnapshot } from './pageNames';
+import { LegacyPage } from './legacyPage';
+import { generalDefinitions } from './tabs/generalTab';
 import { renderParserTab } from './tabs/parserTab';
 import { renderRoutingTab } from './tabs/routingTab';
 import { renderIdentitySection } from './profile/identity';
@@ -13,168 +17,232 @@ import { renderDangerZone } from './profile/dangerZone';
 import { renderAccessGroupsSection } from './profile/accessGroups';
 import { EXCLUDED_DIRS_RULES_VERSION } from '../utils/excludedDirectories';
 
+/** Delay before a control edit is persisted; text controls write per keystroke. */
+const SAVE_DEBOUNCE_MS = 400;
+
+/** Page-name snapshot scope for the profile list. */
+const PROFILES_SCOPE = 'profiles';
+
+/**
+ * CPN's settings tab, built on Obsidian's declarative settings API
+ * (`getSettingDefinitions()`), so every setting is reachable from settings
+ * search. See specs/declarative-settings/design.md.
+ *
+ * Controls bind to path keys (keys.ts) resolved by getControlValue /
+ * setControlValue against plugin.settings or a profile's session ref; codecs
+ * (codecs.ts) hold any non-assignment behavior.
+ */
 export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	plugin: CommonplaceNotesPlugin;
-	private activeProfileIndex: number = 0;
-	private profileDropdown: DropdownComponent | null = null;
-	private profileContainerEl: HTMLElement | null = null;
-	/** Content container below the tab bar; only the active tab renders into it. */
-	private tabContentEl: HTMLElement | null = null;
-
-	private static readonly TABS: { id: SettingsTab; label: string }[] = [
-		{ id: 'general', label: 'General' },
-		{ id: 'parser', label: 'Markdown parser' },
-		{ id: 'routing', label: 'Note routing' },
-		{ id: 'profiles', label: 'Publishing profiles' },
-	];
+	private readonly refs = new RefRegistry('r');
+	private readonly names = new PageNameSnapshot();
+	private readonly codecs: KeyCodec[] = [...GENERAL_CODECS];
+	private readonly debouncedSave: Debouncer<[], void>;
+	/** The legacy adapter page currently on screen, if any (redrawn by refresh()). */
+	private shownLegacyPage: LegacyPage | null = null;
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+		this.debouncedSave = debounce(() => {
+			this.plugin.saveSettings().catch(err => Logger.error('Could not save settings:', err));
+		}, SAVE_DEBOUNCE_MS, true);
 	}
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
+	// --- Definitions --------------------------------------------------------
 
-		const activeTab = this.ensureUiState().activeTab ?? 'general';
-
-		// Tab bar
-		const tabBar = containerEl.createDiv({ cls: 'cpn-settings-tabs' });
-		for (const tab of CommonplaceNotesSettingTab.TABS) {
-			const btn = tabBar.createEl('button', {
-				cls: 'cpn-settings-tab',
-				text: tab.label,
-			});
-			if (tab.id === activeTab) btn.addClass('is-active');
-			btn.addEventListener('click', () => {
-				void (async () => {
-					this.ensureUiState().activeTab = tab.id;
-					await this.plugin.saveSettings();
-					this.display();
-				})();
-			});
-		}
-
-		// Active-tab content
-		this.tabContentEl = containerEl.createDiv({ cls: 'cpn-settings-tab-content' });
-		this.renderActiveTab();
-	}
-
-	private renderActiveTab(): void {
-		if (!this.tabContentEl) return;
-		this.tabContentEl.empty();
-
-		const ctx = this.buildContext();
-		const activeTab = this.ensureUiState().activeTab ?? 'general';
-
-		switch (activeTab) {
-			case 'parser':
-				renderParserTab(ctx, this.tabContentEl);
-				break;
-			case 'routing':
-				renderRoutingTab(ctx, this.tabContentEl);
-				break;
-			case 'profiles':
-				this.renderProfilesTab(ctx, this.tabContentEl);
-				break;
-			case 'general':
-			default:
-				renderGeneralTab(ctx, this.tabContentEl);
-				break;
-		}
-	}
-
-	/** Base context shared by every renderer. */
-	private buildContext(): SettingsContext {
-		return {
-			app: this.app,
-			plugin: this.plugin,
-			rerenderAll: () => this.display(),
-			rerenderProfile: () => this.renderActiveProfile(),
-			createSection: (parent, title, opts) => this.createSection(parent, title, opts),
-			updateProfileDropdownLabel: (index, name) => {
-				if (this.profileDropdown) {
-					const option = this.profileDropdown.selectEl.options[index];
-					if (option) option.text = name;
-				}
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		const ctx = this.definitionContext();
+		return [
+			...generalDefinitions(ctx),
+			{
+				type: 'group',
+				items: [
+					{
+						type: 'page',
+						name: 'Markdown parser',
+						desc: 'CPN directory and the built-in parser stages you can override from the vault.',
+						page: () => this.legacyPage(el => renderParserTab(this.legacyContext(), el)),
+					},
+					{
+						type: 'page',
+						name: 'Note routing',
+						desc: 'New-note title prompt and the built-in routing actions and options.',
+						page: () => this.legacyPage(el => renderRoutingTab(this.legacyContext(), el)),
+					},
+				],
 			},
+			this.profilesList(),
+		];
+	}
+
+	private profilesList(): SettingDefinitionItem {
+		const profiles = this.plugin.settings.publishingProfiles;
+		const named = this.names.resolve(PROFILES_SCOPE, profiles.map(p => ({ ref: this.refs.refFor(p), name: p.name })));
+		const pages: SettingDefinitionPage[] = named.map(({ ref, name }) => {
+			const profile = this.refs.resolve<PublishingProfile>(ref)!;
+			return {
+				type: 'page',
+				name,
+				desc: profile.publishMechanism === 'Local' ? 'Local' : 'AWS',
+				page: () => this.legacyPage(el => this.renderProfilePage(el, profile)),
+			};
+		});
+		const tombstones: SettingDefinitionPage[] = this.names.removed(PROFILES_SCOPE).map(({ name }) => ({
+			type: 'page',
+			name,
+			visible: false,
+			items: [{ name: 'Profile removed', desc: 'This profile was deleted. Go back to the profile list.' }],
+		}));
+		return {
+			type: 'list',
+			heading: 'Publishing profiles',
+			emptyState: 'No profiles configured. Add one with the + button.',
+			addItem: { name: 'Add profile', action: () => { void this.addNewProfile(); } },
+			items: [...pages, ...tombstones],
 		};
 	}
 
-	private renderProfilesTab(ctx: SettingsContext, containerEl: HTMLElement): void {
-		// Profile selector dropdown
-		new Setting(containerEl)
-			.setName('Active profile')
-			.addDropdown(dropdown => {
-				this.profileDropdown = dropdown;
-				const profiles = this.plugin.settings.publishingProfiles;
-				profiles.forEach((profile, index) => {
-					dropdown.addOption(String(index), profile.name);
-				});
-				this.activeProfileIndex = this.clampProfileIndex(this.activeProfileIndex);
-				dropdown.setValue(String(this.activeProfileIndex));
-				dropdown.onChange(value => {
-					this.activeProfileIndex = parseInt(value, 10);
-					this.renderActiveProfile();
-				});
-			});
-
-		// Add new profile button
-		new Setting(containerEl)
-			.setName('Add new profile')
-			.addButton(button => button
-				.setButtonText('Add profile')
-				.onClick(async () => {
-					await this.addNewProfile();
-				}));
-
-		// Profile settings container (single profile at a time)
-		this.profileContainerEl = containerEl.createDiv({ cls: 'cpn-active-profile-container' });
-		this.renderActiveProfile();
+	private definitionContext(): DefinitionContext {
+		return {
+			app: this.app,
+			plugin: this.plugin,
+			generalKey: path => buildGeneralKey(path),
+			profileKey: (profile, path) => buildProfileKey(this.refs.refFor(profile), path),
+			refs: this.refs,
+			names: this.names,
+			refresh: () => this.refresh(),
+			refreshDomState: () => this.refreshDomState(),
+			save: () => this.saveNow(),
+		};
 	}
 
-	private renderActiveProfile(): void {
-		if (!this.profileContainerEl) return;
-		this.profileContainerEl.empty();
+	// --- Control storage ----------------------------------------------------
 
-		const profiles = this.plugin.settings.publishingProfiles;
-		if (profiles.length === 0) {
-			this.profileContainerEl.createEl('p', {
-				text: 'No profiles configured. Click "Add profile" to create one.',
-				cls: 'cpn-no-profiles-message'
+	private resolveKey(key: string): { target: Record<string, unknown>; path: string[]; codec?: KeyCodec } | null {
+		const parsed = parseKey(key);
+		if (!parsed) {
+			Logger.warn(`Settings: malformed control key "${key}"`);
+			return null;
+		}
+		const target = parsed.scope === 'general'
+			? this.plugin.settings as unknown as Record<string, unknown>
+			: this.refs.resolve<Record<string, unknown>>(parsed.ref);
+		if (!target) {
+			Logger.warn(`Settings: control key "${key}" refers to an unknown profile`);
+			return null;
+		}
+		return { target, path: parsed.path, codec: findCodec(this.codecs, parsed.scope, parsed.path) };
+	}
+
+	getControlValue(key: string): unknown {
+		const resolved = this.resolveKey(key);
+		if (!resolved) return undefined;
+		const { target, path, codec } = resolved;
+		const stored = getAtPath(target, path);
+		return codec?.read ? codec.read(stored, this.codecContext(target, path)) : stored;
+	}
+
+	setControlValue(key: string, value: unknown): void {
+		const resolved = this.resolveKey(key);
+		if (!resolved) return;
+		const { target, path, codec } = resolved;
+		const cctx = this.codecContext(target, path);
+		codec?.before?.(cctx);
+		const stored = codec?.write ? codec.write(value, cctx) : value;
+		if (stored === DELETE) deleteAtPath(target, path);
+		else setAtPath(target, path, stored);
+		this.debouncedSave();
+		codec?.after?.(value, cctx);
+	}
+
+	private codecContext(target: Record<string, unknown>, path: readonly string[]) {
+		return { plugin: this.plugin, target, path, refresh: () => this.refresh() };
+	}
+
+	/** Persist now, cancelling any pending debounced save. */
+	async saveNow(): Promise<void> {
+		this.debouncedSave.cancel();
+		await this.plugin.saveSettings();
+	}
+
+	/** Run a pending debounced save immediately (tab hidden, plugin unloading). */
+	flushPendingSave(): void {
+		this.debouncedSave.run();
+	}
+
+	// --- Refresh / lifecycle --------------------------------------------------
+
+	/**
+	 * Rebuild the definitions (structure, page names, displayValue/status) and
+	 * re-render the current page, including a legacy adapter page, which
+	 * `update()` alone does not redraw.
+	 */
+	refresh(): void {
+		this.update();
+		this.shownLegacyPage?.display();
+	}
+
+	hide(): void {
+		this.flushPendingSave();
+		super.hide();
+		// Renames and removals show up in page names from the next render on
+		// (spec §4). Rebuild after Obsidian has finished switching away.
+		this.names.clear();
+		window.setTimeout(() => this.update(), 0);
+	}
+
+	// --- Legacy adapters (removed as areas are converted) ---------------------
+
+	private legacyPage(render: (el: HTMLElement) => void): LegacyPage {
+		return new LegacyPage(
+			el => render(el),
+			(page, shown) => {
+				if (shown) this.shownLegacyPage = page;
+				else if (this.shownLegacyPage === page) this.shownLegacyPage = null;
+			},
+		);
+	}
+
+	/** Context for the legacy renderers; re-renders target the adapter on screen. */
+	private legacyContext(): SettingsContext {
+		return {
+			app: this.app,
+			plugin: this.plugin,
+			rerenderAll: () => this.refresh(),
+			rerenderProfile: () => this.shownLegacyPage?.display(),
+			createSection: (parent, title, opts) => this.createSection(parent, title, opts),
+			updateProfileDropdownLabel: () => { /* no dropdown; names refresh on hide (spec §4) */ },
+		};
+	}
+
+	private renderProfilePage(containerEl: HTMLElement, profile: PublishingProfile): void {
+		const index = this.plugin.settings.publishingProfiles.indexOf(profile);
+		if (index === -1) {
+			containerEl.createEl('p', {
+				text: 'This profile was deleted. Go back to the profile list.',
+				cls: 'cpn-no-profiles-message',
 			});
 			return;
 		}
-
-		this.activeProfileIndex = this.clampProfileIndex(this.activeProfileIndex);
-		const profile = profiles[this.activeProfileIndex];
-		const index = this.activeProfileIndex;
-
 		try {
-			this.displayProfileSettings(this.profileContainerEl, profile, index);
+			this.displayProfileSettings(containerEl, profile, index);
 		} catch (error) {
 			Logger.error(`Error displaying profile ${profile.name}:`, error);
 			// Say so on the page: otherwise the sections after the failure just
 			// vanish with no hint why.
-			this.profileContainerEl.createDiv({
+			containerEl.createDiv({
 				cls: 'setting-item-description mod-warning cpn-profile-render-error',
 				text: `Some settings for this profile failed to render: ${errorMessage(error)}. See the developer console for details.`,
 			});
 		}
 	}
 
-	private clampProfileIndex(index: number): number {
-		const length = this.plugin.settings.publishingProfiles.length;
-		if (length === 0) return 0;
-		return Math.max(0, Math.min(index, length - 1));
-	}
-
 	/**
 	 * Build a collapsible subsection as a native <details>. Open state is keyed
-	 * by title and persisted, so it survives the full-`display()`/profile
-	 * rebuilds that many handlers trigger. Content goes directly into the
-	 * returned <details> (after the <summary>), matching the old div contract.
+	 * by title and persisted, so it survives the re-renders many handlers
+	 * trigger. Content goes directly into the returned <details> (after the
+	 * <summary>).
 	 */
 	private createSection(parent: HTMLElement, title: string, opts?: { defaultCollapsed?: boolean }): HTMLElement {
 		const collapsed = this.ensureUiState().collapsedSections?.[title]
@@ -183,23 +251,11 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		details.open = !collapsed;
 		details.createEl('summary', { cls: 'cpn-settings-section-summary', text: title });
 		details.addEventListener('toggle', () => {
-			void (async () => {
-				const ui = this.ensureUiState();
-				(ui.collapsedSections ??= {})[title] = !details.open;
-				await this.plugin.saveSettings();
-			})();
+			const ui = this.ensureUiState();
+			(ui.collapsedSections ??= {})[title] = !details.open;
+			this.debouncedSave();
 		});
 		return details;
-	}
-
-	/**
-	 * Make the next render show `profileId` on the Profiles tab. Call before
-	 * opening this tab (CommonplaceNotesPlugin.openProfileSettings).
-	 */
-	showProfile(profileId: string): void {
-		this.ensureUiState().activeTab = 'profiles';
-		const index = this.plugin.settings.publishingProfiles.findIndex(p => p.id === profileId);
-		if (index !== -1) this.activeProfileIndex = index;
 	}
 
 	/** Lazily create and return the persisted Settings-tab UI state. */
@@ -213,7 +269,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	private displayProfileSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
 		const profileContainer = containerEl.createDiv({ cls: 'cpn-profile-container' });
 
-		const ctx: ProfileContext = { ...this.buildContext(), profile, index };
+		const ctx: ProfileContext = { ...this.legacyContext(), profile, index };
 
 		const lastUpdated = profile.lastFullPublishTimestamp ? new Date(profile.lastFullPublishTimestamp).toLocaleString() : 'n/a';
 		profileContainer.createDiv({
@@ -241,6 +297,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const dangerSection = this.createSection(profileContainer, 'Danger Zone', { defaultCollapsed: true });
 		renderDangerZone(ctx, dangerSection, profileContainer);
 	}
+
+	// --- Profiles -------------------------------------------------------------
 
 	private async addNewProfile() {
 		const newProfile: PublishingProfile = {
@@ -273,8 +331,9 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		};
 
 		this.plugin.settings.publishingProfiles.push(newProfile);
-		await this.plugin.saveSettings();
-		this.activeProfileIndex = this.plugin.settings.publishingProfiles.length - 1;
-		this.display();
+		await this.saveNow();
+		this.refresh();
+		const name = this.names.nameOf(PROFILES_SCOPE, this.refs.refFor(newProfile)) ?? newProfile.name;
+		new Notice(`Added "${name}" under Publishing profiles.`);
 	}
 }

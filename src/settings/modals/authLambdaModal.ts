@@ -72,7 +72,7 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 							});
 							new Setting(statusEl).addButton(b => b
 								.setButtonText('Detach anyway (gated notes become public)')
-								.setWarning()
+								.setDestructive()
 								.onClick(() => {
 									detachConfirmed = true;
 									btn.buttonEl.click();

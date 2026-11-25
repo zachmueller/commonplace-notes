@@ -1,4 +1,5 @@
-import { Modal, Notice, Setting } from 'obsidian';
+import { Notice, Setting } from 'obsidian';
+import { confirmDestructive } from '../../utils/confirm';
 import type { ProfileContext } from '../context';
 import type { AccessGroup } from '../../types';
 import {
@@ -145,7 +146,7 @@ function renderGroup(ctx: ProfileContext, containerEl: HTMLElement, name: string
 		})
 		.addButton(button => button
 			.setButtonText('Remove')
-			.setWarning()
+			.setDestructive()
 			.onClick(async () => {
 				const confirmed = await confirmRemove(ctx, currentName);
 				if (!confirmed) return;
@@ -217,26 +218,11 @@ function ensureGroups(ctx: ProfileContext): Record<string, AccessGroup> {
 	return ctx.profile.accessGroups;
 }
 
-function confirmRemove(ctx: ProfileContext, name: string): Promise<boolean> {
-	return new Promise(resolve => {
-		const modal = new Modal(ctx.app);
-		let settled = false;
-		const finish = (v: boolean) => {
-			if (settled) return;
-			settled = true;
-			resolve(v);
-			modal.close();
-		};
-		modal.onOpen = () => {
-			modal.titleEl.setText(`Remove access group "${name}"?`);
-			modal.contentEl.createEl('p', {
-				text: 'This deletes the group\'s published copies from the site. Notes that still list this group stop publishing until you edit them. This cannot be undone.',
-			});
-			new Setting(modal.contentEl)
-				.addButton(b => b.setButtonText('Cancel').onClick(() => finish(false)))
-				.addButton(b => b.setButtonText('Remove').setWarning().onClick(() => finish(true)));
-		};
-		modal.onClose = () => finish(false);
-		modal.open();
+async function confirmRemove(ctx: ProfileContext, name: string): Promise<boolean> {
+	const { confirmed } = await confirmDestructive(ctx.app, {
+		title: `Remove access group "${name}"?`,
+		body: 'This deletes the group\'s published copies from the site. Notes that still list this group stop publishing until you edit them. This cannot be undone.',
+		confirmText: 'Remove',
 	});
+	return confirmed;
 }

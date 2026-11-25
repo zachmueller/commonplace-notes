@@ -32,7 +32,7 @@
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
-import { waitForSelector } from "../lib/test-helpers";
+import { closeSettings, openCpnSettings, waitForSelector } from "../lib/test-helpers";
 
 // ---------------------------------------------------------------------------
 // Mock data
@@ -82,44 +82,26 @@ async function safeShot(ctx: TestContext, name: string): Promise<string | undefi
 	}
 }
 
+/**
+ * Open Settings → Commonplace Notes on profile 0's page, where the
+ * "Deploy Infrastructure" button lives. On failure, close settings so the
+ * wizard can be opened through its command instead.
+ */
 async function openPluginSettings(ctx: TestContext, opts: { fatal?: boolean } = {}): Promise<boolean> {
 	const { page } = ctx;
 	const fatal = opts.fatal !== false;
-
-	await page.keyboard.press("Meta+,");
-	await page.waitForTimeout(1500);
-
-	const settingsModal = await waitForSelector(page, ".vertical-tab-header", 5000);
-	if (!settingsModal) {
-		if (fatal) ctx.fail("Open plugin settings", "Settings modal did not appear after Cmd+,");
-		// Newer Obsidian opens settings in its own window, and new modals mount in
-		// the active window's document; close it so the wizard opens here.
-		await page.evaluate(() => {
-			(window as any).app?.setting?.close?.();
-			window.focus();
-		});
-		await page.waitForTimeout(800);
+	const name = await page.evaluate(() =>
+		(window as any).app?.plugins?.plugins?.["commonplace-notes"]?.settings?.publishingProfiles?.[0]?.name as string | undefined);
+	try {
+		if (!name) throw new Error("profile 0 has no name");
+		await openCpnSettings(page, [name]);
+		return true;
+	} catch (err) {
+		if (fatal) ctx.fail("Open plugin settings", `Could not open the profile settings page: ${String(err)}`);
+		await closeSettings(page);
+		await page.evaluate(() => window.focus());
 		return false;
 	}
-
-	const found = await page.evaluate(() => {
-		const allTabs = document.querySelectorAll(".vertical-tab-nav-item");
-		for (const tab of allTabs) {
-			if (tab.textContent?.includes("Commonplace Notes")) {
-				(tab as HTMLElement).click();
-				return true;
-			}
-		}
-		return false;
-	});
-
-	if (!found) {
-		ctx.fail("Open plugin settings", "Could not find 'Commonplace Notes' tab in settings sidebar");
-		return false;
-	}
-
-	await page.waitForTimeout(800);
-	return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,9 +301,8 @@ async function resetAndSeedProfile(ctx: TestContext, shape: VariantShape): Promi
 
 		await plugin.saveSettings();
 
-		// Re-render the settings tab so the Deploy button reflects status==='none'.
-		const setting = (window as any).app?.setting;
-		if (setting?.activeTab?.display) setting.activeTab.display();
+		// Re-render the settings page so the Deploy button reflects status==='none'.
+		plugin.settingTab?.refresh?.();
 	}, {
 		...shape,
 		region: MOCK_REGION,
