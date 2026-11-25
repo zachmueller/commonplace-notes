@@ -22,6 +22,7 @@ export default defineConfig([
 		'**/node_modules',
 		'main.js',
 		'esbuild.config.mjs',
+		'esbuild.options.mjs',
 		'version-bump.mjs',
 		'eslint.config.mjs',
 		'private',

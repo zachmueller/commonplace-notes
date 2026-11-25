@@ -36,6 +36,7 @@ import { Publisher } from './publish/publisher';
 import { AttachmentManager } from './publish/attachmentManager';
 import { AttachmentChangeNotifier } from './publish/attachmentChangeNotifier';
 import { Logger, errorMessage, errorCode } from './utils/logging';
+import { StartupTimer, StartupTimings } from './utils/startupTiming';
 import { formatNoteUrl, formatNoteStackUrl } from './utils/urlScheme';
 import { CloudFormationManager } from './infrastructure/cloudFormationManager';
 import { DeployHookManager } from './infrastructure/hooks/deployHookManager';
@@ -117,6 +118,13 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	deployHookManager: DeployHookManager;
 	private registeredProfileCommandIds: string[] = [];
 
+	// Startup timing marks (src/utils/startupTiming.ts), read by the e2e timing
+	// harness via `startupTimings` and logged in one line when debugMode is on.
+	private readonly startupTimer = new StartupTimer();
+	get startupTimings(): StartupTimings {
+		return this.startupTimer.timings();
+	}
+
 	// Session-only per-note comment thread cache, shared by both comments-panel
 	// modes (Recent + Active note) and keyed by `${profileId}::${noteUid}`. Lives
 	// on the plugin so a note fetched in one mode is instantly reusable in the
@@ -137,9 +145,13 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	} | null = null;
 
 	async onload() {
+		// Bundle evaluation plus plugin construction.
+		this.startupTimer.mark('evaluate');
+
 		// Initialize settings
 		await this.loadSettings();
 		Logger.setDebugMode(!!this.settings.debugMode);
+		this.startupTimer.mark('loadSettings');
 
 		// Initialize classes
 		this.profileManager = new ProfileManager(this);
@@ -159,6 +171,7 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.awsSdkManager = new AwsSdkManager(this);
 		this.cloudFormationManager = new CloudFormationManager(this);
 		this.deployHookManager = new DeployHookManager(this);
+		this.startupTimer.mark('managers');
 
 		// Initialize indicator updates
 		// Targeted indicator refresh upon file open events
@@ -213,11 +226,16 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		// 	})
 		// );
 
+		this.startupTimer.mark('events');
+
 		await this.profileManager.initialize();
+		this.startupTimer.mark('profileInit');
 
 		this.settingTab = new CommonplaceNotesSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
+		this.startupTimer.mark('settingTab');
 		this.registerCommands();
+		this.startupTimer.mark('commands');
 
 		// Custom URI: obsidian://commonplace-notes?action=open-uid&uid=<cpn-uid>.
 		// Namespaced action so future features slot in under the same handler.
@@ -228,28 +246,39 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		// Recent Comments side panel (author-facing Phase 2).
 		this.registerView(RECENT_COMMENTS_VIEW, (leaf) => new RecentCommentsView(leaf, this));
 		this.addRibbonIcon('message-square', 'Comments', () => this.activateRecentCommentsView());
+		this.startupTimer.mark('registration');
 
 		// Refresh indicators upon fully loading
 		this.app.workspace.onLayoutReady(async () => {
-			// Before anything reads exclusions (indicators, publishing). Needs the
-			// vault's file list, so it runs here rather than in loadSettings.
-			await this.upgradeExcludedDirectoriesOnce();
+			// Time between onload returning and layout ready (not CPN's work).
+			this.startupTimer.mark('layoutWait');
+			try {
+				// Before anything reads exclusions (indicators, publishing). Needs the
+				// vault's file list, so it runs here rather than in loadSettings.
+				await this.upgradeExcludedDirectoriesOnce();
+				this.startupTimer.mark('layout.upgradeExcludedDirs');
 
-			Logger.debug('Layout ready, initializing indicators');
-			await this.indicatorManager.updateAllVisibleIndicators();
+				Logger.debug('Layout ready, initializing indicators');
+				await this.indicatorManager.updateAllVisibleIndicators();
+				this.startupTimer.mark('layout.indicators');
 
-			// If the panel was restored open in this workspace, refresh it once when
-			// its data is >=8h stale. The view itself no-ops when the feed is fresh.
-			for (const leaf of this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW)) {
-				const view = leaf.view;
-				if (view instanceof RecentCommentsView) await view.refreshIfStale();
+				// If the panel was restored open in this workspace, refresh it once when
+				// its data is >=8h stale. The view itself no-ops when the feed is fresh.
+				for (const leaf of this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW)) {
+					const view = leaf.view;
+					if (view instanceof RecentCommentsView) await view.refreshIfStale();
+				}
+				this.startupTimer.mark('layout.comments');
+
+				// Opportunistically retry deferred cleanup of orphaned Lambda@Edge
+				// resources from a prior force-clean — hours have likely passed since the
+				// last session, so CloudFront may finally have removed the replicas.
+				// Fire-and-forget so a slow/failed AWS call never blocks startup.
+				this.sweepPendingEdgeCleanup();
+				this.startupTimer.mark('layout.edgeSweep');
+			} finally {
+				Logger.debug(`Startup timing: ${this.startupTimer.summary()}`);
 			}
-
-			// Opportunistically retry deferred cleanup of orphaned Lambda@Edge
-			// resources from a prior force-clean — hours have likely passed since the
-			// last session, so CloudFront may finally have removed the replicas.
-			// Fire-and-forget so a slow/failed AWS call never blocks startup.
-			this.sweepPendingEdgeCleanup();
 		});
 	}
 
