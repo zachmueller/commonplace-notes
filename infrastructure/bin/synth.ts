@@ -47,7 +47,15 @@ new ChatStack(app, 'CpnChatStack');
 
 const assembly = app.synth();
 
-function stripCdkMetadata(template: Record<string, any>): Record<string, any> {
+/** The parts of a synthesized CloudFormation template this script rewrites. */
+interface CfnTemplate {
+	Resources?: Record<string, { Metadata?: Record<string, unknown> }>;
+	Parameters?: Record<string, unknown>;
+	Rules?: Record<string, unknown>;
+	Conditions?: Record<string, unknown>;
+}
+
+function stripCdkMetadata(template: CfnTemplate): CfnTemplate {
 	// Remove CDKMetadata resource
 	if (template.Resources) {
 		delete template.Resources.CDKMetadata;
@@ -71,7 +79,7 @@ function stripCdkMetadata(template: Record<string, any>): Record<string, any> {
 
 	// Remove CDK path metadata from all resources
 	if (template.Resources) {
-		for (const resource of Object.values(template.Resources) as any[]) {
+		for (const resource of Object.values(template.Resources)) {
 			if (resource.Metadata) {
 				delete resource.Metadata['aws:cdk:path'];
 				if (Object.keys(resource.Metadata).length === 0) {
@@ -100,7 +108,7 @@ function stripCdkMetadata(template: Record<string, any>): Record<string, any> {
 function getTemplate(stackName: string): string {
 	const stackArtifact = assembly.getStackByName(stackName);
 	const templatePath = path.join(assembly.directory, stackArtifact.templateFile);
-	const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
+	const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8')) as CfnTemplate;
 	const cleaned = stripCdkMetadata(template);
 	return JSON.stringify(cleaned);
 }
@@ -170,17 +178,17 @@ export const CHAT_HANDLER_BODY = ${JSON.stringify(chatHandlerBody)};
 `;
 
 fs.writeFileSync(outputPath, output, 'utf-8');
-console.log(`Templates written to ${outputPath}`);
-console.log(`  Bootstrap template: ${(bootstrapTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Certificate template: ${(certTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Cognito auth template: ${(cognitoTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Cognito edge template: ${(cognitoEdgeTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Auth edge body: ${(authEdgeBody.length / 1024).toFixed(1)} KB`);
-console.log(`  Pre-token groups body: ${(preTokenGroupsBody.length / 1024).toFixed(1)} KB`);
-console.log(`  Password auth template: ${(passwordTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Password edge body: ${(passwordEdgeBody.length / 1024).toFixed(1)} KB`);
-console.log(`  Full stack (OAC): ${(oacTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Full stack (OAI): ${(oaiTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Comment stack: ${(commentTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Chat stack: ${(chatTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Chat handler body: ${(chatHandlerBody.length / 1024).toFixed(1)} KB`);
+process.stdout.write(`Templates written to ${outputPath}` + '\n');
+process.stdout.write(`  Bootstrap template: ${(bootstrapTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Certificate template: ${(certTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Cognito auth template: ${(cognitoTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Cognito edge template: ${(cognitoEdgeTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Auth edge body: ${(authEdgeBody.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Pre-token groups body: ${(preTokenGroupsBody.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Password auth template: ${(passwordTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Password edge body: ${(passwordEdgeBody.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Full stack (OAC): ${(oacTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Full stack (OAI): ${(oaiTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Comment stack: ${(commentTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Chat stack: ${(chatTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Chat handler body: ${(chatHandlerBody.length / 1024).toFixed(1)} KB` + '\n');

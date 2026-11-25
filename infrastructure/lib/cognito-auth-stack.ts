@@ -30,7 +30,7 @@ export class CognitoAuthStack extends cdk.Stack {
 		super(scope, id, props);
 
 		// ---- Parameters -------------------------------------------------------
-		const variantName = new cdk.CfnParameter(this, 'VariantName', {
+		new cdk.CfnParameter(this, 'VariantName', {
 			type: 'String',
 			default: '',
 			description: 'Optional variant name for multi-instance deployments',
@@ -231,7 +231,7 @@ export class CognitoAuthStack extends cdk.Stack {
 			hasAccessGroups.logicalId,
 			{ PreTokenGeneration: triggerFn.attrArn },
 			cdk.Aws.NO_VALUE,
-		) as unknown as cdk.aws_cognito.CfnUserPool.LambdaConfigProperty;
+		);
 
 		// ---- Callback API (regional API Gateway v2 HTTP API + Lambda) --------
 		const callbackRole = new cdk.aws_iam.CfnRole(this, 'CallbackFnRole', {

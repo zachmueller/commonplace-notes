@@ -59,7 +59,7 @@ export class FullStackOai extends cdk.Stack {
 			description: 'Route53 Hosted Zone ID (required if UseRoute53=true)',
 		});
 
-		const hostedZoneName = new cdk.CfnParameter(this, 'HostedZoneName', {
+		new cdk.CfnParameter(this, 'HostedZoneName', {
 			type: 'String',
 			default: '',
 			description: 'Route53 Hosted Zone Name (required if UseRoute53=true)',
@@ -86,15 +86,15 @@ export class FullStackOai extends cdk.Stack {
 		});
 
 		// Conditions
-		const hasVariantName = new cdk.CfnCondition(this, 'HasVariantName', {
+		new cdk.CfnCondition(this, 'HasVariantName', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(variantName.valueAsString, '')),
 		});
 
-		const hasS3Prefix = new cdk.CfnCondition(this, 'HasS3Prefix', {
+		new cdk.CfnCondition(this, 'HasS3Prefix', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(s3Prefix.valueAsString, '')),
 		});
 
-		const hasCustomDomain = new cdk.CfnCondition(this, 'HasCustomDomain', {
+		new cdk.CfnCondition(this, 'HasCustomDomain', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(customDomain.valueAsString, '')),
 		});
 
@@ -102,18 +102,18 @@ export class FullStackOai extends cdk.Stack {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(additionalAliases.valueAsString, '')),
 		});
 
-		const hasCertificate = new cdk.CfnCondition(this, 'HasCertificate', {
+		new cdk.CfnCondition(this, 'HasCertificate', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(certificateArn.valueAsString, '')),
 		});
 
-		const shouldUseRoute53 = new cdk.CfnCondition(this, 'ShouldUseRoute53', {
+		new cdk.CfnCondition(this, 'ShouldUseRoute53', {
 			expression: cdk.Fn.conditionAnd(
 				cdk.Fn.conditionEquals(useRoute53.valueAsString, 'true'),
 				cdk.Fn.conditionNot(cdk.Fn.conditionEquals(hostedZoneId.valueAsString, '')),
 			),
 		});
 
-		const hasAuthLambda = new cdk.CfnCondition(this, 'HasAuthLambda', {
+		new cdk.CfnCondition(this, 'HasAuthLambda', {
 			expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(authLambdaEdgeArn.valueAsString, '')),
 		});
 
@@ -201,15 +201,17 @@ export class FullStackOai extends cdk.Stack {
 				httpVersion: 'http2',
 				priceClass: 'PriceClass_100',
 				ipv6Enabled: true,
-				aliases: cdk.Fn.conditionIf(
-					'HasCustomDomain',
+				aliases: cdk.Token.asList(
 					cdk.Fn.conditionIf(
-						'HasAdditionalAliases',
-						cdk.Fn.split(',', cdk.Fn.join(',', [customDomain.valueAsString, additionalAliases.valueAsString])),
-						[customDomain.valueAsString],
+						'HasCustomDomain',
+						cdk.Fn.conditionIf(
+							'HasAdditionalAliases',
+							cdk.Fn.split(',', cdk.Fn.join(',', [customDomain.valueAsString, additionalAliases.valueAsString])),
+							[customDomain.valueAsString],
+						),
+						cdk.Aws.NO_VALUE,
 					),
-					cdk.Aws.NO_VALUE,
-				) as any,
+				),
 				viewerCertificate: cdk.Fn.conditionIf(
 					'HasCertificate',
 					{
@@ -218,7 +220,7 @@ export class FullStackOai extends cdk.Stack {
 						MinimumProtocolVersion: minimumProtocolVersion.valueAsString,
 					},
 					{ CloudFrontDefaultCertificate: true },
-				) as any,
+				),
 				defaultCacheBehavior: {
 					targetOriginId: 'S3Origin',
 					viewerProtocolPolicy: 'redirect-to-https',
@@ -231,9 +233,9 @@ export class FullStackOai extends cdk.Stack {
 						'HasAuthLambda',
 						[{ EventType: 'viewer-request', LambdaFunctionARN: authLambdaEdgeArn.valueAsString }],
 						cdk.Aws.NO_VALUE,
-					) as any,
+					),
 				},
-				cacheBehaviors: wiring.extraCacheBehaviors as any,
+				cacheBehaviors: wiring.extraCacheBehaviors,
 				origins: [
 					{
 						id: 'S3Origin',

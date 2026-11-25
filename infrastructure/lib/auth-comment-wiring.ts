@@ -40,9 +40,9 @@ const ALL_METHODS = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE']
 
 export interface AuthCommentWiring {
 	/** Conditional origin entries to append to distributionConfig.origins. */
-	extraOrigins: any[];
+	extraOrigins: cdk.IResolvable[];
 	/** Conditional cache-behavior entries forming distributionConfig.cacheBehaviors. */
-	extraCacheBehaviors: any[];
+	extraCacheBehaviors: cdk.IResolvable[];
 }
 
 /**

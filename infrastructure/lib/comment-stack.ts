@@ -64,7 +64,7 @@ export class CommentStack extends cdk.Stack {
 			description: 'Site CloudFront OAI id (OAI grant principal)',
 		});
 
-		const isOac = new cdk.CfnCondition(this, 'IsOac', {
+		new cdk.CfnCondition(this, 'IsOac', {
 			expression: cdk.Fn.conditionEquals(originAccessMethod.valueAsString, 'oac'),
 		});
 

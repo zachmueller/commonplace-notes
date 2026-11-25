@@ -5,7 +5,7 @@ const INPUT_PATH = path.resolve(__dirname, '../assets/index/index.html');
 const OUTPUT_PATH = path.resolve(__dirname, '../../src/publish/siteAssets.ts');
 
 if (!fs.existsSync(INPUT_PATH)) {
-	console.error(`Source file not found: ${INPUT_PATH}`);
+	process.stderr.write(`Source file not found: ${INPUT_PATH}` + '\n');
 	process.exit(1);
 }
 
@@ -14,7 +14,7 @@ const html = fs.readFileSync(INPUT_PATH, 'utf-8');
 // Extract CSS: everything between <style> and </style>
 const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
 if (!styleMatch) {
-	console.error('Could not find <style> block in source HTML');
+	process.stderr.write('Could not find <style> block in source HTML' + '\n');
 	process.exit(1);
 }
 const css = styleMatch[1].trim();
@@ -27,7 +27,7 @@ const cssWithSlot = `${css}\n\n/* cpn extra-css slot */\n{{EXTRA_CSS}}\n`;
 // Extract FlexSearch: the first <script> block containing "FlexSearch"
 const flexSearchMatch = html.match(/<script>\s*(\/\*\*!\s*\n\s*\*\s*FlexSearch[\s\S]*?)\s*<\/script>/);
 if (!flexSearchMatch) {
-	console.error('Could not find FlexSearch <script> block in source HTML');
+	process.stderr.write('Could not find FlexSearch <script> block in source HTML' + '\n');
 	process.exit(1);
 }
 const flexSearchJs = flexSearchMatch[1].trim();
@@ -39,7 +39,7 @@ const flexSearchJs = flexSearchMatch[1].trim();
 // truncate app.js.
 const vendorMatch = html.match(/<script>\s*(\/\*! CPN diff vendor[\s\S]*?)\s*<\/script>/);
 if (!vendorMatch) {
-	console.error('Could not find vendored diff-library <script> block in source HTML');
+	process.stderr.write('Could not find vendored diff-library <script> block in source HTML' + '\n');
 	process.exit(1);
 }
 const vendorJs = vendorMatch[1].trim();
@@ -52,7 +52,7 @@ const vendorJs = vendorMatch[1].trim();
 // convention used for the vendored-libs block.
 const chatMatch = html.match(/<!-- CPN chat begin[\s\S]*?-->([\s\S]*?)<!-- CPN chat end -->/);
 if (!chatMatch) {
-	console.error('Could not find `<!-- CPN chat begin/end -->` region in source HTML');
+	process.stderr.write('Could not find `<!-- CPN chat begin/end -->` region in source HTML' + '\n');
 	process.exit(1);
 }
 const chatHtml = chatMatch[1].trim();
@@ -71,7 +71,7 @@ const vendorEnd = html.indexOf('</script>', html.indexOf(vendorMatch[0])) + '</s
 const remainingHtml = html.slice(Math.max(flexSearchEnd, vendorEnd));
 const appScriptBlocks = [...remainingHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1].trim());
 if (appScriptBlocks.length === 0) {
-	console.error('Could not find application <script> block in source HTML');
+	process.stderr.write('Could not find application <script> block in source HTML' + '\n');
 	process.exit(1);
 }
 const appJs = appScriptBlocks.join('\n\n');
@@ -244,10 +244,10 @@ export const VENDOR_JS = ${JSON.stringify(vendorJs)};
 `;
 
 fs.writeFileSync(OUTPUT_PATH, output, 'utf-8');
-console.log(`Site assets written to ${OUTPUT_PATH}`);
-console.log(`  Index template: ${(indexTemplate.length / 1024).toFixed(1)} KB`);
-console.log(`  Styles CSS: ${(css.length / 1024).toFixed(1)} KB`);
-console.log(`  App JS: ${(appJs.length / 1024).toFixed(1)} KB`);
-console.log(`  Chat HTML: ${(chatHtml.length / 1024).toFixed(1)} KB`);
-console.log(`  FlexSearch JS: ${(flexSearchJs.length / 1024).toFixed(1)} KB`);
-console.log(`  Vendor JS (jsdiff + diff2html): ${(vendorJs.length / 1024).toFixed(1)} KB`);
+process.stdout.write(`Site assets written to ${OUTPUT_PATH}` + '\n');
+process.stdout.write(`  Index template: ${(indexTemplate.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Styles CSS: ${(css.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  App JS: ${(appJs.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Chat HTML: ${(chatHtml.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  FlexSearch JS: ${(flexSearchJs.length / 1024).toFixed(1)} KB` + '\n');
+process.stdout.write(`  Vendor JS (jsdiff + diff2html): ${(vendorJs.length / 1024).toFixed(1)} KB` + '\n');
