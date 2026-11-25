@@ -50,4 +50,11 @@ export interface DefinitionContext {
 	refreshDomState: () => void;
 	/** Persist plugin settings now (bypassing the control debounce). */
 	save: () => Promise<void>;
+	/**
+	 * Write a control key from a `render` row's own inputs, exactly as a
+	 * `control` row would (codecs, debounced save).
+	 */
+	write: (key: string, value: unknown) => void;
+	/** Read a control key through its codec, as a `control` row would. */
+	read: (key: string) => unknown;
 }

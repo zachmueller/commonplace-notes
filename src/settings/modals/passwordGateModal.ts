@@ -3,7 +3,7 @@ import { PublishingProfile } from '../../types';
 import { Logger, errorMessage } from '../../utils/logging';
 import { sha256Hex } from '../../infrastructure/deploymentWizardModal';
 import type { DeploymentConfig } from '../../infrastructure/types';
-import { ProfileContext } from '../context';
+import { DefinitionContext } from '../context';
 
 /**
  * Rebuild the password read-gate on the current (S3-asset) edge packaging.
@@ -15,7 +15,7 @@ import { ProfileContext } from '../context';
  * The password is re-entered here: it's needed to bake the sha256 hash into
  * the uploaded zip, and imported sites don't have the hash persisted.
  */
-export function openUpgradePasswordGateModal(ctx: ProfileContext, profile: PublishingProfile): void {
+export function openUpgradePasswordGateModal(ctx: DefinitionContext, profile: PublishingProfile): void {
 	const { app, plugin } = ctx;
 	const state = profile.infrastructureState;
 	if (!state || !profile.awsSettings) return;
@@ -134,7 +134,7 @@ export function openUpgradePasswordGateModal(ctx: ProfileContext, profile: Publi
 							new Notice('Post-deploy hooks could not run (see console); the upgrade succeeded.');
 						}
 						modal.close();
-						ctx.rerenderProfile();
+						ctx.refresh();
 						new Notice('Password gate upgraded successfully.');
 					} catch (err: unknown) {
 						Logger.error('Error upgrading password gate:', err);

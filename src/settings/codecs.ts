@@ -3,6 +3,8 @@ import type CommonplaceNotesPlugin from '../main';
 import { Logger } from '../utils/logging';
 import { formatExtensionList, parseExtensionList, resolveAttachmentSettings, type AttachmentMode, type AttachmentSettings } from '../utils/attachments';
 import { KeyScope, matchPath, toPath } from './keys';
+import { THEME_DEFAULTS, ensureSiteCustomization, type ThemeMode } from './profile/siteCustomization';
+import type { PublishingProfile, ThemeColors } from '../types';
 
 /** Returned from {@link KeyCodec.write} to delete the field instead of storing a value. */
 export const DELETE = Symbol('delete');
@@ -66,8 +68,40 @@ function attachmentsOf(target: Record<string, unknown>): AttachmentSettings {
 	return resolveAttachmentSettings(target.attachments as Partial<AttachmentSettings> | undefined);
 }
 
+/** Fill in the profile's siteCustomization defaults before any write under it. */
+function ensureCustom(ctx: CodecContext): void {
+	ensureSiteCustomization(ctx.target as unknown as PublishingProfile);
+}
+
+/** A theme color equal to the theme default is dropped, as the old Reset did. */
+function themeColorCodec(pattern: string): KeyCodec {
+	return codec('profile', pattern, {
+		before: ensureCustom,
+		write: (value, ctx) => {
+			const [mode, field] = ctx.path.slice(-2) as [ThemeMode, keyof ThemeColors];
+			return value === THEME_DEFAULTS[mode]?.[field] ? DELETE : value;
+		},
+	});
+}
+
 /** Codecs for per-profile keys; the target is the profile object. */
 export const PROFILE_CODECS: KeyCodec[] = [
+	// Site customization: specific paths first (first match wins).
+	themeColorCodec('siteCustomization.themeOverrides.*.*'),
+	themeColorCodec('siteCustomization.namedStyles.*.*.*'),
+	codec('profile', 'siteCustomization.namedStyles.*.fontFamily', {
+		before: ensureCustom,
+		write: value => String(value ?? '').trim() || DELETE,
+	}),
+	codec('profile', 'siteCustomization.namedStyles.*.css', {
+		// Stored raw to keep the author's formatting; whitespace-only clears it.
+		before: ensureCustom,
+		write: value => String(value ?? '').trim() ? value : DELETE,
+	}),
+	codec('profile', 'siteCustomization.**', { before: ensureCustom }),
+	codec('profile', 'accessGroups.*.description', {
+		write: value => String(value ?? '').trim() || DELETE,
+	}),
 	codec('profile', 'name', { after: (_v, ctx) => reRegisterProfileCommands(ctx.plugin) }),
 	codec('profile', 'id', { after: (_v, ctx) => reRegisterProfileCommands(ctx.plugin) }),
 	codec('profile', 'excludedDirectories', {

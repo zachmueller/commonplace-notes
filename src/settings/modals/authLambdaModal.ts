@@ -1,7 +1,7 @@
 import { Modal, Notice, Setting } from 'obsidian';
 import { PublishingProfile } from '../../types';
 import { Logger, errorMessage } from '../../utils/logging';
-import { ProfileContext } from '../context';
+import { DefinitionContext } from '../context';
 import { edgeEnforcesGroups } from '../../utils/access';
 import { hasRestrictedObjects } from '../../publish/awsUpload';
 
@@ -11,7 +11,7 @@ import { hasRestrictedObjects } from '../../publish/awsUpload';
  * via UsePreviousValue) so it can't prune the comment/auth routes off a working
  * site. On success it persists the ARN and re-renders the profile pane.
  */
-export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProfile): void {
+export function openAuthLambdaModal(ctx: DefinitionContext, profile: PublishingProfile): void {
 	const { app, plugin } = ctx;
 	const state = profile.infrastructureState;
 	if (!state || !profile.awsSettings) return;
@@ -128,7 +128,7 @@ export function openAuthLambdaModal(ctx: ProfileContext, profile: PublishingProf
 								new Notice('Post-deploy hooks could not run (see console); the update succeeded.');
 							}
 							modal.close();
-							ctx.rerenderProfile();
+							ctx.refresh();
 							new Notice('Infrastructure updated successfully.');
 						} else {
 							new Notice(`Stack update ended with status: ${finalStatus}`);

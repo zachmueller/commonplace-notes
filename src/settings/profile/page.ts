@@ -1,24 +1,20 @@
 import type { SettingDefinitionItem, SettingDefinitionPage } from 'obsidian';
 import { PublishingProfile } from '../../types';
 import { errorMessage, Logger } from '../../utils/logging';
-import { DefinitionContext, ProfileContext } from '../context';
+import { DefinitionContext } from '../context';
 import { identityGroup } from './identity';
 import { contentGroup } from './content';
 import { attachmentsGroup } from './attachments';
 import { destinationGroup } from './destination';
 import { authGroup } from './auth';
-import { renderInfrastructureSection } from './infrastructure';
-import { renderSiteCustomizationSection } from './siteCustomization';
-import { renderDeployHooksSection } from './deployHooks';
-import { renderAccessGroupsSection } from './accessGroups';
-import { renderDangerZone } from './dangerZone';
+import { infrastructureGroup } from './infrastructure';
+import { siteCustomizationItems } from './siteCustomization';
+import { deployHooksPage } from './deployHooks';
+import { accessGroupsPage } from './accessGroups';
+import { dangerZonePage } from './dangerZone';
 
-/** Factory for a legacy (imperative) per-profile sub-page; removed in P4. */
-export type LegacyProfilePage = (
-	name: string,
-	desc: string,
-	render: (ctx: ProfileContext, containerEl: HTMLElement) => void,
-) => SettingDefinitionPage;
+/** Names of the sub-pages under a profile page (kept by its tombstone, spec §4). */
+export const PROFILE_SUBPAGES = ['Theme color overrides', 'Named styles', 'Deploy hooks', 'Access groups', 'Danger Zone'];
 
 /** The site domain from the base URL, else the mechanism, for the profile list. */
 export function profileDisplayValue(profile: PublishingProfile): string {
@@ -40,8 +36,7 @@ export function profileStatus(profile: PublishingProfile): 'warning' | null {
 	return null;
 }
 
-function profileItems(ctx: DefinitionContext, profile: PublishingProfile, legacy: LegacyProfilePage): SettingDefinitionItem[] {
-	const isAws = () => profile.publishMechanism === 'AWS';
+function profileItems(ctx: DefinitionContext, profile: PublishingProfile): SettingDefinitionItem[] {
 	return [
 		{
 			name: 'Last full publish',
@@ -56,19 +51,35 @@ function profileItems(ctx: DefinitionContext, profile: PublishingProfile, legacy
 		contentGroup(ctx, profile),
 		attachmentsGroup(ctx, profile),
 		destinationGroup(ctx, profile),
+		infrastructureGroup(ctx, profile),
 		authGroup(ctx, profile),
+		...siteCustomizationItems(ctx, profile),
 		{
 			type: 'group',
 			items: [
-				{ ...legacy('Infrastructure', 'Deployed stacks, sign-in and domain tools.', renderInfrastructureSection), visible: isAws },
-				{ ...legacy('Site Customization', 'Site title, fonts, header links, theme colors and named styles.', renderSiteCustomizationSection), visible: isAws },
-				{ ...legacy('Deploy hooks', 'Scripts that run before and after a deploy.', renderDeployHooksSection), visible: isAws },
-				legacy('Access groups', 'Who can read gated notes.', renderAccessGroupsSection),
-				legacy('Danger Zone', 'Destroy infrastructure, force-clean leftovers, delete this profile.',
-					(pctx, el) => renderDangerZone(pctx, el, el)),
+				deployHooksPage(ctx, profile),
+				accessGroupsPage(ctx, profile),
+				dangerZonePage(ctx, profile),
 			],
 		},
 	];
+}
+
+/**
+ * Placeholder for a deleted profile's page and its sub-pages, so pages still
+ * open on it re-resolve until Settings closes (spec §4).
+ */
+export function profileTombstone(name: string): SettingDefinitionPage {
+	const removed = { name: 'Profile removed', desc: 'This profile was deleted. Go back to the profile list.' };
+	return {
+		type: 'page',
+		name,
+		visible: false,
+		items: [
+			removed,
+			...PROFILE_SUBPAGES.map((sub): SettingDefinitionPage => ({ type: 'page', name: sub, visible: false, items: [removed] })),
+		],
+	};
 }
 
 /**
@@ -80,11 +91,10 @@ export function profilePage(
 	ctx: DefinitionContext,
 	profile: PublishingProfile,
 	name: string,
-	legacy: LegacyProfilePage,
 ): SettingDefinitionPage {
 	let items: SettingDefinitionItem[];
 	try {
-		items = profileItems(ctx, profile, legacy);
+		items = profileItems(ctx, profile);
 	} catch (error) {
 		Logger.error(`Error displaying profile ${profile.name}:`, error);
 		items = [{

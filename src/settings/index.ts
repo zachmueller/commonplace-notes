@@ -1,17 +1,17 @@
 import { App, Debouncer, Notice, PluginSettingTab, SettingDefinitionItem, SettingDefinitionPage, debounce } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, SettingsUiState } from '../types';
-import { Logger, errorMessage } from '../utils/logging';
-import { DefinitionContext, SettingsContext, ProfileContext } from './context';
+import { Logger } from '../utils/logging';
+import { DefinitionContext, SettingsContext } from './context';
 import { DELETE, GENERAL_CODECS, KeyCodec, PROFILE_CODECS, findCodec } from './codecs';
 import { RefRegistry, buildGeneralKey, buildProfileKey, deleteAtPath, getAtPath, parseKey, setAtPath } from './keys';
 import { PageNameSnapshot } from './pageNames';
+import { guardRenders } from './guard';
 import { LegacyPage } from './legacyPage';
 import { generalDefinitions } from './tabs/generalTab';
 import { parserDefinitions } from './tabs/parserTab';
 import { routingDefinitions } from './tabs/routingTab';
-import { LegacyProfilePage, profilePage } from './profile/page';
-import { initAWSSettings } from './profile/shared';
+import { profilePage, profileTombstone } from './profile/page';
 import { EXCLUDED_DIRS_RULES_VERSION } from '../utils/excludedDirectories';
 
 /** Delay before a control edit is persisted; text controls write per keystroke. */
@@ -50,7 +50,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		const ctx = this.definitionContext();
-		return [
+		return guardRenders([
 			...generalDefinitions(ctx),
 			{
 				type: 'group',
@@ -70,7 +70,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 				],
 			},
 			this.profilesList(),
-		];
+		]);
 	}
 
 	private profilesList(): SettingDefinitionItem {
@@ -79,14 +79,9 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const ctx = this.definitionContext();
 		const pages: SettingDefinitionPage[] = named.map(({ ref, name }) => {
 			const profile = this.refs.resolve<PublishingProfile>(ref)!;
-			return profilePage(ctx, profile, name, this.legacyProfilePage(profile));
+			return profilePage(ctx, profile, name);
 		});
-		const tombstones: SettingDefinitionPage[] = this.names.removed(PROFILES_SCOPE).map(({ name }) => ({
-			type: 'page',
-			name,
-			visible: false,
-			items: [{ name: 'Profile removed', desc: 'This profile was deleted. Go back to the profile list.' }],
-		}));
+		const tombstones = this.names.removed(PROFILES_SCOPE).map(({ name }) => profileTombstone(name));
 		return {
 			type: 'list',
 			heading: 'Publishing profiles',
@@ -107,6 +102,8 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			refresh: () => this.refresh(),
 			refreshDomState: () => this.refreshDomState(),
 			save: () => this.saveNow(),
+			write: (key, value) => this.setControlValue(key, value),
+			read: key => this.getControlValue(key),
 		};
 	}
 
@@ -207,38 +204,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			createSection: (parent, title, opts) => this.createSection(parent, title, opts),
 			updateProfileDropdownLabel: () => { /* no dropdown; names refresh on hide (spec §4) */ },
 		};
-	}
-
-	/** Legacy sub-pages of one profile's page (P4 areas until converted). */
-	private legacyProfilePage(profile: PublishingProfile): LegacyProfilePage {
-		return (name, desc, render) => ({
-			type: 'page',
-			name,
-			desc,
-			page: () => this.legacyPage(el => {
-				const index = this.plugin.settings.publishingProfiles.indexOf(profile);
-				if (index === -1) {
-					el.createEl('p', {
-						text: 'This profile was deleted. Go back to the profile list.',
-						cls: 'cpn-no-profiles-message',
-					});
-					return;
-				}
-				const ctx: ProfileContext = { ...this.legacyContext(), profile, index };
-				try {
-					// The AWS renderers read awsSettings unguarded, as when the
-					// Destination section initialized it before them.
-					if (profile.publishMechanism === 'AWS') initAWSSettings(profile);
-					render(ctx, el);
-				} catch (error) {
-					Logger.error(`Error displaying ${name} for profile ${profile.name}:`, error);
-					el.createDiv({
-						cls: 'setting-item-description mod-warning cpn-profile-render-error',
-						text: `Some settings for this profile failed to render: ${errorMessage(error)}. See the developer console for details.`,
-					});
-				}
-			}),
-		});
 	}
 
 	/**

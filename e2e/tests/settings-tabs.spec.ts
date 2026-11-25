@@ -268,6 +268,115 @@ test.describe("Declarative settings tab", () => {
 		}
 	});
 
+	test("Infrastructure is a group; Danger Zone and other heavy areas are sub-pages", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Layout");
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Layout"]);
+			const layout = await obsidianPage.evaluate((root) => ({
+				headings: Array.from(document.querySelectorAll(`${root} .setting-item-heading .setting-item-name`)).map(e => e.textContent?.trim()),
+				pages: Array.from(document.querySelectorAll(`${root} .setting-item.mod-navigable .setting-item-name`)).map(e => e.textContent?.trim()),
+			}), SETTINGS_CONTENT);
+			for (const heading of ["Profile Identity", "Content", "Destination", "Infrastructure", "Authentication & Delivery", "Site Customization"]) {
+				expect(layout.headings).toContain(heading);
+			}
+			for (const sub of ["Danger Zone", "Access groups", "Deploy hooks", "Theme color overrides", "Named styles"]) {
+				expect(layout.pages).toContain(sub);
+				expect(layout.headings).not.toContain(sub);
+			}
+			// Not deployed: the Deploy button shows inline under Infrastructure.
+			await expect(settingRow(obsidianPage, "Deploy infrastructure").locator("button")).toHaveText("Deploy Infrastructure");
+
+			await openSettingsPage(obsidianPage, "Danger Zone");
+			await expect(settingRow(obsidianPage, "Delete profile")).toBeVisible();
+			await expect(settingRow(obsidianPage, "Destroy infrastructure")).toBeHidden();
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("deleting a profile from its Danger Zone leaves a placeholder page", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Delete");
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Delete", "Danger Zone"]);
+			const button = settingRow(obsidianPage, "Delete profile").locator("button");
+			await button.click();
+			await expect(button).toHaveText("Click again to confirm deletion");
+			await button.click();
+			await expect(settingRow(obsidianPage, "Profile removed")).toBeVisible();
+			const remaining = await obsidianPage.evaluate((id) =>
+				(window as any).app.plugins.plugins["commonplace-notes"].settings.publishingProfiles.some((p: any) => p.id === id), TEMP_ID);
+			expect(remaining).toBe(false);
+			// The list no longer offers it.
+			await openCpnSettings(obsidianPage);
+			expect(await profileRowNames(obsidianPage)).not.toContain("E2E Delete");
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("a theme color override saves, and Restore default drops it", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Theme");
+		const linkColor = () => obsidianPage.evaluate((id) =>
+			(window as any).app.plugins.plugins["commonplace-notes"].settings.publishingProfiles
+				.find((p: any) => p.id === id)?.siteCustomization?.themeOverrides?.light?.linkColor ?? null, TEMP_ID);
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Theme", "Theme color overrides"]);
+			const row = settingRow(obsidianPage, "Link color");
+			await row.locator("input[type=color]").fill("#123456");
+			await expect.poll(linkColor).toBe("#123456");
+			await row.locator('[aria-label="Restore default"]').click();
+			await expect.poll(linkColor).toBe(null);
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("access groups: add a group, rename it on its page", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Groups");
+		const groups = () => obsidianPage.evaluate((id) =>
+			Object.keys((window as any).app.plugins.plugins["commonplace-notes"].settings.publishingProfiles
+				.find((p: any) => p.id === id)?.accessGroups ?? {}), TEMP_ID);
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Groups", "Access groups"]);
+			await obsidianPage.locator(`${SETTINGS_CONTENT} [aria-label="Add group"]`).click();
+			await expect.poll(groups).toEqual(["group"]);
+			await openSettingsPage(obsidianPage, "group");
+			const name = settingRow(obsidianPage, "Group name").locator("input");
+			await name.fill("family");
+			await name.press("Enter");
+			await expect.poll(groups).toEqual(["family"]);
+			// Still on the group's page (its name updates when Settings reopens).
+			expect(await currentSettingsPageTitle(obsidianPage)).toBe("group");
+			await expect(settingRow(obsidianPage, "Members")).toBeVisible();
+			await settingRow(obsidianPage, "Members").locator("textarea").fill("Alice@Example.com\nnot-an-email");
+			await expect(settingRow(obsidianPage, "Members")).toContainText("Not an email address: not-an-email");
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("header links: add a link and edit it", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Links");
+		const links = () => obsidianPage.evaluate((id) =>
+			(window as any).app.plugins.plugins["commonplace-notes"].settings.publishingProfiles
+				.find((p: any) => p.id === id)?.siteCustomization?.headerLinks ?? [], TEMP_ID);
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Links"]);
+			await obsidianPage.locator(`${SETTINGS_CONTENT} [aria-label="Add link"]`).click();
+			await expect.poll(async () => (await links()).length).toBe(1);
+			const input = obsidianPage.locator(`${SETTINGS_CONTENT} input[placeholder="Label"]`).first();
+			await input.fill("About");
+			await expect.poll(links).toEqual([{ label: "About", url: "" }]);
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
 	test("settings search finds CPN rows", async ({ obsidianPage }) => {
 		await obsidianPage.waitForTimeout(5000);
 		await openCpnSettings(obsidianPage);

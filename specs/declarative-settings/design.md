@@ -298,15 +298,27 @@ rows inside adapter pages.
 
 ### P4: Profile advanced
 
-- [ ] Infrastructure group (§6) incl. Cognito/session-length/bucket-cleanup
+- [x] Infrastructure group (§6) incl. Cognito/session-length/bucket-cleanup
       event-log rows.
-- [ ] Site Customization: plain fields → `control`; Header links → `list`;
+- [x] Site Customization: plain fields → `control`; Header links → `list`;
       Theme color overrides and Named styles → sub-pages (§6).
-- [ ] Access groups → sub-page with a `list` of groups.
-- [ ] Deploy hooks → sub-page.
-- [ ] Danger Zone → sub-page; delete-profile, destroy and force-clean keep
+- [x] Access groups → sub-page with a `list` of groups.
+- [x] Deploy hooks → sub-page.
+- [x] Danger Zone → sub-page; delete-profile, destroy and force-clean keep
       their confirmations.
-- [ ] Remove the profile adapter and `displayProfileSettings`.
+- [x] Remove the profile adapter and `displayProfileSettings`.
+
+Notes: long-running rows (Cognito gate, session length, bucket cleanup,
+destroy, force-clean) keep their running state and log lines in a `liveOps`
+store keyed by profile ref and action, so a row rebuilt by `update()`
+mid-operation re-attaches to its log. `render` callbacks also run while their
+row is hidden, so they read state defensively, and every `render` is wrapped
+(`guard.ts`) to show its error on the row instead of blanking the page. Theme
+colors use the `color` control's built-in "Restore default"; the theme codec
+drops a value equal to the default, as the old Reset button did. Header links
+are a reorderable `list` with `onDelete`; profiles, access groups and named
+styles are lists of pages without `onDelete` (removal is on each item's page).
+The unused `HomeNoteSuggestModal` is deleted.
 
 ### P5: Cleanup
 

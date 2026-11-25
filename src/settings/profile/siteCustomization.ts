@@ -1,347 +1,39 @@
-import { Setting } from 'obsidian';
-import { SiteCustomization, NamedStyle, ThemeColors } from '../../types';
+import { Notice, SettingDefinition, SettingDefinitionGroup, SettingDefinitionItem, SettingDefinitionPage } from 'obsidian';
+import { NamedStyle, PublishingProfile, SiteCustomization, ThemeColors } from '../../types';
 import { pushSiteAssetsToS3, createCloudFrontInvalidation } from '../../publish/awsUpload';
-import { ProfileContext } from '../context';
+import { DefinitionContext } from '../context';
+import { hintRow } from '../tabs/shared';
 
-/**
- * "Site Customization" section (AWS profiles): push assets, site title, font,
- * panel width, header links, theme color overrides (in a <details>), and
- * per-note named styles.
- */
-export function renderSiteCustomizationSection(ctx: ProfileContext, containerEl: HTMLElement): void {
-	const { plugin, profile } = ctx;
-	const custom = profile.siteCustomization ?? {
-		siteTitle: '',
-		headerLinks: [],
-		panelWidth: 600,
-		fontFamily: '',
-		themeOverrides: {},
-	};
+export type ThemeMode = 'light' | 'dark';
 
-	new Setting(containerEl)
-		.setName('Push site assets')
-		.setDesc('Upload index.html, styles, scripts, and config to S3 without re-publishing notes')
-		.addButton(button => button
-			.setButtonText('Push site assets')
-			.onClick(async () => {
-				button.setDisabled(true);
-				button.setButtonText('Pushing...');
-				const success = await pushSiteAssetsToS3(plugin, profile.id);
-				if (success) {
-					await createCloudFrontInvalidation(plugin, profile.id);
-				}
-				button.setDisabled(false);
-				button.setButtonText('Push site assets');
-			}));
+/** The site theme's built-in colors; an override equal to these is dropped. */
+export const THEME_DEFAULTS: Record<ThemeMode, Required<ThemeColors>> = {
+	light: {
+		bgPrimary: '#ffffff',
+		bgSecondary: '#f6f8fa',
+		textPrimary: '#24292e',
+		linkColor: '#0366d6',
+		borderColor: '#dddddd',
+	},
+	dark: {
+		bgPrimary: '#0d1117',
+		bgSecondary: '#161b22',
+		textPrimary: '#e6edf3',
+		linkColor: '#58a6ff',
+		borderColor: '#30363d',
+	},
+};
 
-	new Setting(containerEl)
-		.setName('Site title')
-		.setDesc('Displayed in the browser tab')
-		.addText(text => text
-			.setPlaceholder('Notes')
-			.setValue(custom.siteTitle)
-			.onChange(async (value) => {
-				ensureSiteCustomization(ctx).siteTitle = value;
-				await plugin.saveSettings();
-			}));
+const THEME_FIELDS: { name: string; key: keyof ThemeColors }[] = [
+	{ name: 'Background (primary)', key: 'bgPrimary' },
+	{ name: 'Background (secondary)', key: 'bgSecondary' },
+	{ name: 'Text color', key: 'textPrimary' },
+	{ name: 'Link color', key: 'linkColor' },
+	{ name: 'Border color', key: 'borderColor' },
+];
 
-	new Setting(containerEl)
-		.setName('Font family')
-		.setDesc('CSS font-family value for the site body')
-		.addText(text => text
-			.setPlaceholder('"Helvetica Neue", Arial, sans-serif')
-			.setValue(custom.fontFamily)
-			.onChange(async (value) => {
-				ensureSiteCustomization(ctx).fontFamily = value;
-				await plugin.saveSettings();
-			}));
-
-	new Setting(containerEl)
-		.setName('Panel width')
-		.setDesc('Width of note panels in pixels')
-		.addText(text => text
-			.setPlaceholder('600')
-			.setValue(custom.panelWidth ? String(custom.panelWidth) : '')
-			.onChange(async (value) => {
-				const num = parseInt(value, 10);
-				if (!isNaN(num) && num > 0) {
-					ensureSiteCustomization(ctx).panelWidth = num;
-					await plugin.saveSettings();
-				}
-			}));
-
-	// Header links
-	const linksContainer = containerEl.createDiv({ cls: 'cpn-header-links-container' });
-	new Setting(linksContainer)
-		.setName('Header links')
-		.setDesc('Additional navigation links in the site header');
-
-	for (let i = 0; i < custom.headerLinks.length; i++) {
-		const link = custom.headerLinks[i];
-		new Setting(linksContainer)
-			.addText(text => text
-				.setPlaceholder('Label')
-				.setValue(link.label)
-				.onChange(async (value) => {
-					ensureSiteCustomization(ctx).headerLinks[i].label = value;
-					await plugin.saveSettings();
-				}))
-			.addText(text => text
-				.setPlaceholder('URL')
-				.setValue(link.url)
-				.onChange(async (value) => {
-					ensureSiteCustomization(ctx).headerLinks[i].url = value;
-					await plugin.saveSettings();
-				}))
-			.addButton(button => button
-				.setButtonText('Remove')
-				.onClick(async () => {
-					ensureSiteCustomization(ctx).headerLinks.splice(i, 1);
-					await plugin.saveSettings();
-					ctx.rerenderProfile();
-				}));
-	}
-
-	new Setting(linksContainer)
-		.addButton(button => button
-			.setButtonText('Add link')
-			.onClick(async () => {
-				ensureSiteCustomization(ctx).headerLinks.push({ label: '', url: '' });
-				await plugin.saveSettings();
-				ctx.rerenderProfile();
-			}));
-
-	// Theme overrides
-	const themeContainer = containerEl.createDiv({ cls: 'cpn-theme-overrides-container' });
-	const themeDetails = themeContainer.createEl('details');
-	themeDetails.createEl('summary', { text: 'Theme color overrides' });
-
-	const lightSection = themeDetails.createDiv();
-	new Setting(lightSection).setName('Light mode').setHeading();
-	displayThemeColorInputs(ctx, lightSection, 'light', custom.themeOverrides.light ?? {},
-		() => ensureSiteCustomization(ctx).themeOverrides);
-
-	const darkSection = themeDetails.createDiv();
-	new Setting(darkSection).setName('Dark mode').setHeading();
-	displayThemeColorInputs(ctx, darkSection, 'dark', custom.themeOverrides.dark ?? {},
-		() => ensureSiteCustomization(ctx).themeOverrides);
-
-	// Named styles (per-note; referenced by the `cpn-style` frontmatter value)
-	displayNamedStylesSettings(ctx, containerEl, custom);
-}
-
-/**
- * Per-profile "Named styles" editor. Each entry maps a style name (the value
- * a note puts in `cpn-style`) to scoped light/dark color overrides + an
- * optional font. Overrides layer on top of the global theme on the published
- * site; a note naming an undefined style falls back to default styling.
- */
-function displayNamedStylesSettings(ctx: ProfileContext, containerEl: HTMLElement, custom: SiteCustomization): void {
-	const { plugin } = ctx;
-	const stylesContainer = containerEl.createDiv({ cls: 'cpn-named-styles-container' });
-	const stylesDetails = stylesContainer.createEl('details');
-	stylesDetails.createEl('summary', { text: 'Named styles (per-note)' });
-	stylesDetails.createEl('p', {
-		text: 'Define styles a note can select via the "cpn-style" frontmatter property. Overrides layer on top of the site theme; unknown names fall back to default styling.',
-		cls: 'setting-item-description',
-	});
-
-	const namedStyles = custom.namedStyles ?? {};
-	const names = Object.keys(namedStyles);
-
-	for (const name of names) {
-		const style = namedStyles[name];
-		const styleSection = stylesDetails.createDiv({ cls: 'cpn-named-style' });
-
-		// Style name (rekeys the record on change). `currentName` tracks the
-		// live key so color/font/remove handlers keep targeting this entry
-		// even after a rename, without a full re-render on every keystroke.
-		let currentName = name;
-		new Setting(styleSection)
-			.setName('Style name')
-			.setDesc('Used as the cpn-style value')
-			.addText(text => text
-				.setPlaceholder('e.g. ai')
-				.setValue(currentName)
-				.onChange(async (value) => {
-					const next = value.trim();
-					const styles = ensureNamedStyles(ctx);
-					// Ignore empty or colliding names (can't be referenced / would clobber).
-					if (!next || (next !== currentName && styles[next] !== undefined)) {
-						return;
-					}
-					const existing = styles[currentName] ?? {};
-					delete styles[currentName];
-					styles[next] = existing;
-					currentName = next;
-					await plugin.saveSettings();
-				}))
-			.addButton(button => button
-				.setButtonText('Remove')
-				.setDestructive()
-				.onClick(async () => {
-					delete ensureNamedStyles(ctx)[currentName];
-					await plugin.saveSettings();
-					ctx.rerenderProfile();
-				}));
-
-		new Setting(styleSection)
-			.setName('Font family')
-			.setDesc('Optional CSS font-family for notes using this style')
-			.addText(text => text
-				.setPlaceholder('inherit')
-				.setValue(style.fontFamily ?? '')
-				.onChange(async (value) => {
-					const target = ensureNamedStyle(ctx, currentName);
-					const trimmed = value.trim();
-					if (trimmed) {
-						target.fontFamily = trimmed;
-					} else {
-						delete target.fontFamily;
-					}
-					await plugin.saveSettings();
-				}));
-
-		const lightSection = styleSection.createDiv();
-		new Setting(lightSection).setName('Light mode').setHeading();
-		displayThemeColorInputs(ctx, lightSection, 'light', style.light ?? {},
-			() => ensureNamedStyle(ctx, currentName));
-
-		const darkSection = styleSection.createDiv();
-		new Setting(darkSection).setName('Dark mode').setHeading();
-		displayThemeColorInputs(ctx, darkSection, 'dark', style.dark ?? {},
-			() => ensureNamedStyle(ctx, currentName));
-
-		// Arbitrary custom CSS, auto-scoped to this style group on the site
-		// (wrapped in `.cpn-style-<name> { … }` via native CSS nesting). Stored
-		// raw to preserve author formatting; whitespace-only clears it (matching
-		// the font-family delete-on-empty pattern, so an otherwise-empty style
-		// still drops from config.json).
-		new Setting(styleSection)
-			.setName('Custom CSS')
-			.setDesc('Applies only to notes with this cpn-style. Reference theme tokens (e.g. var(--text-primary)) so colors follow light/dark. Put top-level @keyframes/@font-face in the global extra-css slot instead.')
-			.addTextArea(text => text
-				.setPlaceholder('.my-class { color: var(--link-color); }')
-				.setValue(style.css ?? '')
-				.onChange(async (value) => {
-					const target = ensureNamedStyle(ctx, currentName);
-					if (value.trim()) {
-						target.css = value;
-					} else {
-						delete target.css;
-					}
-					await plugin.saveSettings();
-				}));
-	}
-
-	new Setting(stylesDetails)
-		.addButton(button => button
-			.setButtonText('Add style')
-			.onClick(async () => {
-				const styles = ensureNamedStyles(ctx);
-				// Mint a unique placeholder key so the new row is editable immediately.
-				let n = 1;
-				let name = 'style';
-				while (styles[name] !== undefined) {
-					name = `style-${++n}`;
-				}
-				styles[name] = {};
-				await plugin.saveSettings();
-				ctx.rerenderProfile();
-			}));
-}
-
-function ensureNamedStyles(ctx: ProfileContext): Record<string, NamedStyle> {
-	const custom = ensureSiteCustomization(ctx);
-	if (!custom.namedStyles) {
-		custom.namedStyles = {};
-	}
-	return custom.namedStyles;
-}
-
-function ensureNamedStyle(ctx: ProfileContext, name: string): NamedStyle {
-	const styles = ensureNamedStyles(ctx);
-	if (!styles[name]) {
-		styles[name] = {};
-	}
-	return styles[name];
-}
-
-/**
- * Render the five light/dark color inputs for a theme-colors target. Shared
- * by the global site theme (`themeOverrides`) and per-note named styles — both
- * expose a `{ light?; dark? }` container, supplied lazily via `ensureTarget`
- * so each onChange mutates the current object (which may be created on demand).
- */
-function displayThemeColorInputs(
-	ctx: ProfileContext,
-	containerEl: HTMLElement,
-	mode: 'light' | 'dark',
-	colors: ThemeColors,
-	ensureTarget: () => { light?: ThemeColors; dark?: ThemeColors }
-): void {
-	const { plugin } = ctx;
-	const defaults: Record<'light' | 'dark', Record<string, string>> = {
-		light: {
-			bgPrimary: '#ffffff',
-			bgSecondary: '#f6f8fa',
-			textPrimary: '#24292e',
-			linkColor: '#0366d6',
-			borderColor: '#dddddd',
-		},
-		dark: {
-			bgPrimary: '#0d1117',
-			bgSecondary: '#161b22',
-			textPrimary: '#e6edf3',
-			linkColor: '#58a6ff',
-			borderColor: '#30363d',
-		},
-	};
-
-	const fields: { name: string; key: keyof ThemeColors }[] = [
-		{ name: 'Background (primary)', key: 'bgPrimary' },
-		{ name: 'Background (secondary)', key: 'bgSecondary' },
-		{ name: 'Text color', key: 'textPrimary' },
-		{ name: 'Link color', key: 'linkColor' },
-		{ name: 'Border color', key: 'borderColor' },
-	];
-
-	for (const field of fields) {
-		const defaultColor = defaults[mode][field.key];
-		new Setting(containerEl)
-			.setName(field.name)
-			.addText(text => {
-				text.inputEl.type = 'color';
-				text.inputEl.addClass('cpn-color-input');
-				text.setValue(colors[field.key] || defaultColor)
-					.onChange(async (value) => {
-						const target = ensureTarget();
-						if (!target[mode]) {
-							target[mode] = {};
-						}
-						target[mode][field.key] = value;
-						await plugin.saveSettings();
-					});
-				return text;
-			})
-			.addButton(button => button
-				.setButtonText('Reset')
-				.onClick(async () => {
-					const target = ensureTarget();
-					if (target[mode]) {
-						delete target[mode][field.key];
-					}
-					await plugin.saveSettings();
-					const colorInput = button.buttonEl.parentElement?.querySelector('input[type="color"]') as HTMLInputElement | null;
-					if (colorInput) {
-						colorInput.value = defaultColor;
-					}
-				}));
-	}
-}
-
-function ensureSiteCustomization(ctx: ProfileContext): SiteCustomization {
-	const profile = ctx.plugin.settings.publishingProfiles[ctx.index];
+/** Give a profile its `siteCustomization` object (with defaults) if it lacks one. */
+export function ensureSiteCustomization(profile: PublishingProfile): SiteCustomization {
 	if (!profile.siteCustomization) {
 		profile.siteCustomization = {
 			siteTitle: '',
@@ -352,4 +44,263 @@ function ensureSiteCustomization(ctx: ProfileContext): SiteCustomization {
 		};
 	}
 	return profile.siteCustomization;
+}
+
+function ensureNamedStyles(profile: PublishingProfile): Record<string, NamedStyle> {
+	const custom = ensureSiteCustomization(profile);
+	if (!custom.namedStyles) custom.namedStyles = {};
+	return custom.namedStyles;
+}
+
+/**
+ * Light and Dark groups of color controls under `basePath` (a `{ light?; dark? }`
+ * object). Each control's default is the theme color, so Obsidian's built-in
+ * "Restore default" resets it, and the theme codec drops a value equal to the
+ * default (as the old Reset button deleted it).
+ */
+function themeColorGroups(ctx: DefinitionContext, profile: PublishingProfile, basePath: string[], aliases: string[]): SettingDefinitionGroup[] {
+	return (['light', 'dark'] as const).map(mode => ({
+		type: 'group',
+		heading: mode === 'light' ? 'Light mode' : 'Dark mode',
+		items: THEME_FIELDS.map(field => ({
+			name: field.name,
+			aliases: [...aliases, mode, 'colour', 'theme'],
+			control: {
+				type: 'color',
+				key: ctx.profileKey(profile, [...basePath, mode, field.key]),
+				defaultValue: THEME_DEFAULTS[mode][field.key],
+			},
+		})),
+	}));
+}
+
+/** Header links: a reorderable list of label + URL rows. */
+function headerLinksList(ctx: DefinitionContext, profile: PublishingProfile): SettingDefinitionItem {
+	const links = () => ensureSiteCustomization(profile).headerLinks;
+	const persist = async () => {
+		await ctx.save();
+		ctx.refresh();
+	};
+	return {
+		type: 'list',
+		heading: 'Header links',
+		emptyState: 'No header links. Additional navigation links appear in the site header.',
+		visible: () => profile.publishMechanism === 'AWS',
+		addItem: {
+			name: 'Add link',
+			action: () => {
+				links().push({ label: '', url: '' });
+				void persist();
+			},
+		},
+		onDelete: index => {
+			links().splice(index, 1);
+			void persist();
+		},
+		onReorder: (from, to) => {
+			const list = links();
+			const [moved] = list.splice(from, 1);
+			if (moved) list.splice(to, 0, moved);
+			void persist();
+		},
+		items: (profile.siteCustomization?.headerLinks ?? []).map((link, i): SettingDefinition => ({
+			name: link.label || 'Untitled link',
+			desc: link.url,
+			aliases: ['header link', 'navigation', 'menu'],
+			render: setting => {
+				setting.setName('').setDesc('');
+				setting.addText(text => text
+					.setPlaceholder('Label')
+					.setValue(link.label)
+					.onChange(value => ctx.write(ctx.profileKey(profile, ['siteCustomization', 'headerLinks', String(i), 'label']), value)));
+				setting.addText(text => text
+					.setPlaceholder('URL')
+					.setValue(link.url)
+					.onChange(value => ctx.write(ctx.profileKey(profile, ['siteCustomization', 'headerLinks', String(i), 'url']), value)));
+			},
+		})),
+	};
+}
+
+/** One named style's page: name, font, custom CSS, colors, remove. */
+function namedStylePage(ctx: DefinitionContext, profile: PublishingProfile, styleName: string, pageName: string): SettingDefinitionPage {
+	const base = ['siteCustomization', 'namedStyles', styleName];
+	return {
+		type: 'page',
+		name: pageName,
+		desc: 'Used as the cpn-style value',
+		items: [
+			{
+				type: 'group',
+				items: [
+					{
+						name: 'Style name',
+						desc: 'The cpn-style value notes use to select this style. Applied when you leave the field.',
+						aliases: ['cpn-style', 'rename'],
+						render: setting => {
+							setting.addText(text => {
+								text.setPlaceholder('e.g. ai').setValue(styleName);
+								// Commit on change (blur / Enter), not per keystroke: the
+								// name is the record key.
+								text.inputEl.addEventListener('change', () => {
+									const next = text.getValue().trim();
+									const styles = ensureNamedStyles(profile);
+									if (next === styleName) return;
+									if (!next || styles[next] !== undefined) {
+										new Notice(!next ? 'A style needs a name.' : `A style named "${next}" already exists.`);
+										text.setValue(styleName);
+										return;
+									}
+									styles[next] = styles[styleName] ?? {};
+									delete styles[styleName];
+									void ctx.save().then(() => ctx.refresh());
+								});
+							});
+						},
+					},
+					{
+						name: 'Font family',
+						desc: 'Optional CSS font-family for notes using this style',
+						aliases: ['font', 'typeface'],
+						control: { type: 'text', key: ctx.profileKey(profile, [...base, 'fontFamily']), placeholder: 'inherit' },
+					},
+					// Arbitrary custom CSS, auto-scoped to this style group on the
+					// site (wrapped in `.cpn-style-<name> { … }` via native CSS
+					// nesting). Stored raw; whitespace-only clears it.
+					{
+						name: 'Custom CSS',
+						desc: 'Applies only to notes with this cpn-style. Reference theme tokens (e.g. var(--text-primary)) so colors follow light/dark. Put top-level @keyframes/@font-face in the global extra-css slot instead.',
+						aliases: ['css', 'stylesheet'],
+						control: { type: 'textarea', key: ctx.profileKey(profile, [...base, 'css']), placeholder: '.my-class { color: var(--link-color); }' },
+					},
+				],
+			},
+			...themeColorGroups(ctx, profile, base, ['named style']),
+			{
+				type: 'group',
+				items: [{
+					name: 'Remove style',
+					desc: 'Notes that still name this style fall back to default styling.',
+					aliases: ['delete style'],
+					render: setting => {
+						setting.addButton(btn => btn
+							.setButtonText('Remove')
+							.setDestructive()
+							.onClick(async () => {
+								delete ensureNamedStyles(profile)[styleName];
+								await ctx.save();
+								ctx.refresh();
+							}));
+					},
+				}],
+			},
+		],
+	};
+}
+
+/**
+ * Named styles sub-page: per-note styles (selected by the `cpn-style`
+ * frontmatter value), each its own page. Overrides layer on top of the site
+ * theme; a note naming an undefined style falls back to default styling.
+ */
+function namedStylesPage(ctx: DefinitionContext, profile: PublishingProfile): SettingDefinitionPage {
+	const scope = `styles:${ctx.refs.refFor(profile)}`;
+	const styles = profile.siteCustomization?.namedStyles ?? {};
+	const named = ctx.names.resolve(scope, Object.entries(styles).map(([name, style]) => ({ ref: ctx.refs.refFor(style), name })));
+	const keyOf = new Map(Object.entries(styles).map(([name, style]) => [ctx.refs.refFor(style), name]));
+	const pages = named.map(({ ref, name }) => namedStylePage(ctx, profile, keyOf.get(ref)!, name));
+	const tombstones: SettingDefinitionPage[] = ctx.names.removed(scope).map(({ name }) => ({
+		type: 'page', name, visible: false,
+		items: [{ name: 'Style removed', desc: 'This style was removed. Go back to Named styles.' }],
+	}));
+	return {
+		type: 'page',
+		name: 'Named styles',
+		desc: 'Per-note styles a note selects with the cpn-style frontmatter property.',
+		visible: () => profile.publishMechanism === 'AWS',
+		items: [
+			hintRow('Define styles a note can select via the "cpn-style" frontmatter property. Overrides layer on top of the site theme; unknown names fall back to default styling.'),
+			{
+				type: 'list',
+				heading: 'Styles',
+				emptyState: 'No named styles yet.',
+				addItem: {
+					name: 'Add style',
+					action: () => {
+						const all = ensureNamedStyles(profile);
+						// Mint a unique placeholder key so the new entry is editable immediately.
+						let n = 1;
+						let name = 'style';
+						while (all[name] !== undefined) name = `style-${++n}`;
+						all[name] = {};
+						void ctx.save().then(() => ctx.refresh());
+					},
+				},
+				items: [...pages, ...tombstones],
+			},
+		],
+	};
+}
+
+/**
+ * "Site Customization" (AWS profiles): push assets, site title, font, panel
+ * width and header links on the profile page; theme color overrides and
+ * named styles as sub-pages.
+ */
+export function siteCustomizationItems(ctx: DefinitionContext, profile: PublishingProfile): SettingDefinitionItem[] {
+	const { plugin } = ctx;
+	const key = (path: string) => ctx.profileKey(profile, `siteCustomization.${path}`);
+	const isAws = () => profile.publishMechanism === 'AWS';
+	return [
+		{
+			type: 'group',
+			heading: 'Site Customization',
+			visible: isAws,
+			items: [
+				{
+					name: 'Push site assets',
+					desc: 'Upload index.html, styles, scripts, and config to S3 without re-publishing notes',
+					aliases: ['upload', 'deploy site', 'config.json'],
+					render: setting => {
+						setting.addButton(button => button
+							.setButtonText('Push site assets')
+							.onClick(async () => {
+								button.setDisabled(true);
+								button.setButtonText('Pushing...');
+								const success = await pushSiteAssetsToS3(plugin, profile.id);
+								if (success) await createCloudFrontInvalidation(plugin, profile.id);
+								button.setDisabled(false);
+								button.setButtonText('Push site assets');
+							}));
+					},
+				},
+				{
+					name: 'Site title',
+					desc: 'Displayed in the browser tab',
+					aliases: ['title', 'name'],
+					control: { type: 'text', key: key('siteTitle'), placeholder: 'Notes' },
+				},
+				{
+					name: 'Font family',
+					desc: 'CSS font-family value for the site body',
+					aliases: ['font', 'typeface'],
+					control: { type: 'text', key: key('fontFamily'), placeholder: '"Helvetica Neue", Arial, sans-serif' },
+				},
+				{
+					name: 'Panel width',
+					desc: 'Width of note panels in pixels',
+					aliases: ['width', 'layout'],
+					control: { type: 'number', key: key('panelWidth'), defaultValue: 600, min: 1, step: 1, placeholder: '600' },
+				},
+				{
+					type: 'page',
+					name: 'Theme color overrides',
+					desc: 'Site colors for light and dark mode.',
+					items: themeColorGroups(ctx, profile, ['siteCustomization', 'themeOverrides'], ['theme override']),
+				},
+				namedStylesPage(ctx, profile),
+			],
+		},
+		headerLinksList(ctx, profile),
+	];
 }
