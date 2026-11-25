@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import { createRequire } from "module";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 
 const require = createRequire(import.meta.url);
 
@@ -13,6 +13,9 @@ if you want to view the source, please visit the github repository of this plugi
 `;
 
 const prod = (process.argv[2] === "production");
+
+// Node built-ins (bare and `node:`-prefixed) stay external; Obsidian provides them at runtime.
+const builtins = [...builtinModules, ...builtinModules.map((m) => `node:${m}`)];
 
 /**
  * Use rehype-mathjax's BROWSER MathJax adaptor instead of its default Node one.
@@ -66,7 +69,7 @@ const context = await esbuild.context({
 		"@lezer/lr",
 		...builtins],
 	format: "cjs",
-	target: "es2018",
+	target: "es2020",
 	logLevel: "info",
 	platform: "node",
 	sourcemap: prod ? false : "inline",

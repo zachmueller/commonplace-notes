@@ -85,7 +85,6 @@
 		"@types/fuse": "^2.5.2",
 		"@types/hast": "^2.3.10",
 		"@types/highlight.js": "^9.12.4",
-		"@types/js-yaml": "^4.0.9",
 		"@types/marked": "^5.0.2",
 		"@types/mdast": "^4.0.4",
 		"@types/node": "^26.6.3",
@@ -97,7 +96,6 @@
 		"@types/yargs": "^17.0.24",
 		"@typescript-eslint/eslint-plugin": "^8.38.0",
 		"@typescript-eslint/parser": "^8.38.0",
-		"builtin-modules": "3.3.0",
 		"diff": "^5.2.0",
 		"diff2html": "^3.4.56",
 		"esbuild": "0.19.2",
@@ -121,10 +119,11 @@
 		"@aws-sdk/client-lambda": "^3.1079.0",
 		"@aws-sdk/client-route-53": "^3.1045.0",
 		"@aws-sdk/client-s3": "^3.x.x",
-		"@aws-sdk/client-sso-oidc": "3.744.0",
+		"@aws-sdk/client-sso-oidc": "^3.1177.0",
 		"@aws-sdk/client-sts": "^3.1045.0",
 		"@aws-sdk/credential-providers": "^3.1045.0",
 		"@aws-sdk/lib-dynamodb": "^3.1079.0",
+		"@smithy/shared-ini-file-loader": "^4.7.2",
 		"d3": "^7.9.0",
 		"date-fns": "^4.1.0",
 		"decode-named-character-reference": "^1.0.2",
@@ -139,7 +138,6 @@
 		"hastscript": "^9.0.0",
 		"highlight.js": "^11.10.0",
 		"is-absolute-url": "^4.0.1",
-		"js-yaml": "^4.1.0",
 		"marked": "^14.1.2",
 		"mdast-util-to-hast": "^13.2.0",
 		"mdast-util-to-string": "^3.2.0",
@@ -168,5 +166,8 @@
 		"uuid": "^11.0.5",
 		"vfile": "^6.0.3",
 		"vfile-reporter": "^8.1.1"
+	},
+	"overrides": {
+		"katex": "^0.19.1"
 	}
 }
