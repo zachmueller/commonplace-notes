@@ -1,137 +1,108 @@
-import { Notice, Setting } from 'obsidian';
-import { SettingsContext } from '../context';
+import { Notice, SettingDefinition, SettingDefinitionItem } from 'obsidian';
+import { DefinitionContext } from '../context';
+import { hintRow, loadErrorsRow, overrideButtons } from './shared';
 
 /**
- * "Note routing" tab: the global title-prompt default plus a per-item row for
- * each built-in routing action and option, with open/materialize and reset
+ * Note routing page: the global title-prompt default plus a row for each
+ * built-in routing action and option, with open/materialize and reset
  * controls. Definitions load on the next route.
  */
-export function renderRoutingTab(ctx: SettingsContext, containerEl: HTMLElement): void {
-	const { app, plugin } = ctx;
-
-	new Setting(containerEl)
-		.setName('Title prompt')
-		.setDesc('When routing prompts to (re)name the note. Options can override this. Actions & options live in <cpn-dir>/routes/.')
-		.addDropdown(dropdown => dropdown
-			.addOption('always', 'Always prompt')
-			.addOption('only-if-Untitled', 'Only if named "Untitled…"')
-			.addOption('off', 'Never prompt')
-			.setValue(plugin.settings.routingTitlePrompt ?? 'only-if-Untitled')
-			.onChange(async (value) => {
-				plugin.settings.routingTitlePrompt = value as 'always' | 'only-if-Untitled' | 'off';
-				await plugin.saveSettings();
-			}));
-
+export function routingDefinitions(ctx: DefinitionContext): SettingDefinitionItem[] {
+	const { plugin } = ctx;
 	const manager = plugin.routingManager;
 
-	const loadErrors = manager.getLoadErrors();
-	if (loadErrors.length > 0) {
-		new Setting(containerEl)
-			.setName('Routing errors')
-			.setDesc(`${loadErrors.length} routing file(s) failed to load on the last run. See the developer console for details.`)
-			.setClass('cpn-routing-errors');
-	}
-
-	// --- Built-in actions ---
-	const actionSection = ctx.createSection(containerEl, 'Built-in actions');
-	actionSection.createEl('p', {
-		text: 'Reusable building blocks composed by options. Materialize to your vault to edit; deleting the file restores the default.',
-		cls: 'cpn-settings-hint'
-	});
+	const actionRows: SettingDefinition[] = [];
 	for (const name of manager.getBuiltinActionNames()) {
 		const scaffold = manager.getBuiltinActionScaffold(name);
 		if (!scaffold) continue;
-		const exists = manager.builtinActionFileExists(name);
-
-		const setting = new Setting(actionSection)
-			.setName(name)
-			.setDesc(`${scaffold.kind}${exists ? ' · overridden' : ''} — ${scaffold.description}`);
-
-		setting.addExtraButton(btn => btn
-			.setIcon('square-arrow-out-up-right')
-			.setTooltip(exists ? 'Open action definition' : 'Create & open action definition')
-			.onClick(async () => {
-				try {
-					const path = await manager.ensureBuiltinActionVaultFile(name);
-					await app.workspace.openLinkText(path, '', true);
-					if (!exists) ctx.rerenderAll();
-				} catch (e) {
-					new Notice(`Failed to create action file: ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}));
-
-		if (exists) {
-			setting.addExtraButton(btn => btn
-				.setIcon('rotate-ccw')
-				.setTooltip('Reset to built-in default (deletes the vault file)')
-				.onClick(async () => {
-					try {
-						await manager.resetBuiltinActionToDefault(name);
-						new Notice(`Reset "${name}" to built-in default.`);
-						ctx.rerenderAll();
-					} catch (e) {
-						new Notice(`Failed to reset action: ${e instanceof Error ? e.message : String(e)}`);
-					}
-				}));
-		}
+		actionRows.push({
+			name,
+			desc: `${scaffold.kind} — ${scaffold.description}`,
+			aliases: ['routing action', 'override', scaffold.kind],
+			render: setting => {
+				const exists = manager.builtinActionFileExists(name);
+				setting.setDesc(`${scaffold.kind}${exists ? ' · overridden' : ''} — ${scaffold.description}`);
+				overrideButtons(ctx, setting, {
+					noun: 'action',
+					label: name,
+					exists: () => exists,
+					ensure: () => manager.ensureBuiltinActionVaultFile(name),
+					reset: () => manager.resetBuiltinActionToDefault(name),
+				});
+			},
+		});
 	}
 
-	// --- Options ---
-	const optionSection = ctx.createSection(containerEl, 'Routing options');
-	optionSection.createEl('p', {
-		text: 'The choices shown in the routing suggester. CPN ships none by default — author your own under <cpn-dir>/routes/options/, composing the built-in actions above.',
-		cls: 'cpn-settings-hint'
-	});
+	const optionRows: SettingDefinition[] = [];
 	for (const name of manager.getBuiltinOptionNames()) {
 		const scaffold = manager.getBuiltinOptionScaffold(name);
 		if (!scaffold) continue;
-		const exists = manager.builtinOptionFileExists(name);
-
-		const setting = new Setting(optionSection)
-			.setName(name)
-			.setDesc(`${exists ? 'overridden — ' : ''}${scaffold.description}`);
-
-		setting.addExtraButton(btn => btn
-			.setIcon('square-arrow-out-up-right')
-			.setTooltip(exists ? 'Open option definition' : 'Create & open option definition')
-			.onClick(async () => {
-				try {
-					const path = await manager.ensureBuiltinOptionVaultFile(name);
-					await app.workspace.openLinkText(path, '', true);
-					if (!exists) ctx.rerenderAll();
-				} catch (e) {
-					new Notice(`Failed to create option file: ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}));
-
-		if (exists) {
-			setting.addExtraButton(btn => btn
-				.setIcon('rotate-ccw')
-				.setTooltip('Reset to built-in default (deletes the vault file)')
-				.onClick(async () => {
-					try {
-						await manager.resetBuiltinOptionToDefault(name);
-						new Notice(`Reset "${name}" to built-in default.`);
-						ctx.rerenderAll();
-					} catch (e) {
-						new Notice(`Failed to reset option: ${e instanceof Error ? e.message : String(e)}`);
-					}
-				}));
-		}
+		optionRows.push({
+			name,
+			desc: scaffold.description,
+			aliases: ['routing option', 'override'],
+			render: setting => {
+				const exists = manager.builtinOptionFileExists(name);
+				setting.setDesc(`${exists ? 'overridden — ' : ''}${scaffold.description}`);
+				overrideButtons(ctx, setting, {
+					noun: 'option',
+					label: name,
+					exists: () => exists,
+					ensure: () => manager.ensureBuiltinOptionVaultFile(name),
+					reset: () => manager.resetBuiltinOptionToDefault(name),
+				});
+			},
+		});
 	}
 
-	new Setting(optionSection)
-		.setName('Export all routing files')
-		.setDesc('Materialize every built-in action to the vault at once.')
-		.addButton(button => button
-			.setButtonText('Export all')
-			.onClick(async () => {
-				try {
-					const paths = await manager.exportAllScaffolds();
-					new Notice(`Exported ${paths.length} routing file(s) to ${plugin.settings.cpnDirectory ?? 'cpn'}/routes/`);
-					ctx.rerenderAll();
-				} catch (e) {
-					new Notice(`Failed to export routing files: ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}));
+	return [
+		{
+			name: 'Title prompt',
+			desc: 'When routing prompts to (re)name the note. Options can override this. Actions & options live in <cpn-dir>/routes/.',
+			aliases: ['rename', 'untitled', 'routing'],
+			control: {
+				type: 'dropdown',
+				key: ctx.generalKey('routingTitlePrompt'),
+				defaultValue: 'only-if-Untitled',
+				options: {
+					'always': 'Always prompt',
+					'only-if-Untitled': 'Only if named "Untitled…"',
+					'off': 'Never prompt',
+				},
+			},
+		},
+		loadErrorsRow('Routing errors', 'cpn-routing-errors', () => manager.getLoadErrors().length, 'routing file(s)'),
+		{
+			type: 'group',
+			heading: 'Built-in actions',
+			items: [
+				hintRow('Reusable building blocks composed by options. Materialize to your vault to edit; deleting the file restores the default.'),
+				...actionRows,
+			],
+		},
+		{
+			type: 'group',
+			heading: 'Routing options',
+			items: [
+				hintRow('The choices shown in the routing suggester. CPN ships none by default — author your own under <cpn-dir>/routes/options/, composing the built-in actions above.'),
+				...optionRows,
+				{
+					name: 'Export all routing files',
+					desc: 'Materialize every built-in action to the vault at once.',
+					aliases: ['export', 'scaffold'],
+					action: () => {
+						void (async () => {
+							try {
+								const paths = await manager.exportAllScaffolds();
+								new Notice(`Exported ${paths.length} routing file(s) to ${plugin.settings.cpnDirectory ?? 'cpn'}/routes/`);
+								ctx.refresh();
+							} catch (e) {
+								new Notice(`Failed to export routing files: ${e instanceof Error ? e.message : String(e)}`);
+							}
+						})();
+					},
+				},
+			],
+		},
+	];
 }

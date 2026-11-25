@@ -99,6 +99,38 @@ test.describe("Declarative settings tab", () => {
 		}, original);
 	});
 
+	test("parser stage override and reset update the row in place", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		// Start from the built-in for the first stage.
+		const stage = await obsidianPage.evaluate(async () => {
+			const manager = (window as any).app.plugins.plugins["commonplace-notes"].parserExtensionManager;
+			const name: string = manager.getBuiltinParserNames()[0];
+			if (manager.builtinVaultFileExists(name)) await manager.resetBuiltinParserToDefault(name);
+			return name;
+		});
+		await openCpnSettings(obsidianPage, ["Markdown parser"]);
+		const row = obsidianPage.locator(`${SETTINGS_CONTENT} .setting-item`)
+			.filter({ has: obsidianPage.locator(".setting-item-name", { hasText: new RegExp(`^${stage}$`) }) });
+		await expect(row.locator(".setting-item-description")).not.toContainText("overridden");
+		await expect(row.locator('[aria-label^="Reset to built-in default"]')).toHaveCount(0);
+
+		// Opening the created file closes Settings (Obsidian behavior); the row
+		// reads the file's state when the page renders again.
+		await row.locator('[aria-label="Create & open stage definition"]').click();
+		await obsidianPage.locator(".modal.mod-settings").waitFor({ state: "detached" });
+		// Close the opened file: trashing an open file also closes Settings.
+		await obsidianPage.evaluate(() => {
+			for (const leaf of (window as any).app.workspace.getLeavesOfType("markdown")) leaf.detach();
+		});
+		await openCpnSettings(obsidianPage, ["Markdown parser"]);
+		await expect(row.locator(".setting-item-description")).toContainText("overridden");
+		// Reset refreshes the page in place.
+		await row.locator('[aria-label^="Reset to built-in default"]').click();
+		await expect(row.locator(".setting-item-description")).not.toContainText("overridden");
+		// Still on the parser page after both refreshes.
+		expect(await currentSettingsPageTitle(obsidianPage)).toBe("Markdown parser");
+	});
+
 	test("settings search finds CPN rows", async ({ obsidianPage }) => {
 		await obsidianPage.waitForTimeout(5000);
 		await openCpnSettings(obsidianPage);

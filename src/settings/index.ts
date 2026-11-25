@@ -8,8 +8,8 @@ import { RefRegistry, buildGeneralKey, buildProfileKey, deleteAtPath, getAtPath,
 import { PageNameSnapshot } from './pageNames';
 import { LegacyPage } from './legacyPage';
 import { generalDefinitions } from './tabs/generalTab';
-import { renderParserTab } from './tabs/parserTab';
-import { renderRoutingTab } from './tabs/routingTab';
+import { parserDefinitions } from './tabs/parserTab';
+import { routingDefinitions } from './tabs/routingTab';
 import { renderIdentitySection } from './profile/identity';
 import { renderContentSection } from './profile/content';
 import { renderDestinationSection } from './profile/destination';
@@ -62,13 +62,13 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 						type: 'page',
 						name: 'Markdown parser',
 						desc: 'CPN directory and the built-in parser stages you can override from the vault.',
-						page: () => this.legacyPage(el => renderParserTab(this.legacyContext(), el)),
+						items: parserDefinitions(ctx),
 					},
 					{
 						type: 'page',
 						name: 'Note routing',
 						desc: 'New-note title prompt and the built-in routing actions and options.',
-						page: () => this.legacyPage(el => renderRoutingTab(this.legacyContext(), el)),
+						items: routingDefinitions(ctx),
 					},
 				],
 			},

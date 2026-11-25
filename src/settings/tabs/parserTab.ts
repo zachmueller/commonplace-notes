@@ -1,97 +1,72 @@
-import { Notice, Setting } from 'obsidian';
-import { SettingsContext } from '../context';
+import { Notice, SettingDefinition, SettingDefinitionItem } from 'obsidian';
+import { DefinitionContext } from '../context';
+import { hintRow, loadErrorsRow, overrideButtons } from './shared';
 
 /**
- * "Markdown parser" tab: the CPN directory field plus a per-stage row for each
- * built-in stage with open/materialize and reset controls (mirrors Notor's
- * per-tool settings wiring). Stage edits take effect on next publish.
+ * Markdown parser page: the CPN directory field plus a row per built-in stage
+ * with open/materialize and reset controls (mirrors Notor's per-tool settings
+ * wiring). Stage edits take effect on next publish.
  */
-export function renderParserTab(ctx: SettingsContext, containerEl: HTMLElement): void {
-	const { app, plugin } = ctx;
-
-	new Setting(containerEl)
-		.setName('CPN directory')
-		.setDesc('Vault folder for CPN extension files. Parser stages live in <dir>/parsers/. Default: cpn')
-		.addText(text => text
-			.setPlaceholder('cpn')
-			.setValue(plugin.settings.cpnDirectory ?? 'cpn')
-			.onChange(async (value) => {
-				plugin.settings.cpnDirectory = value.trim() || 'cpn';
-				await plugin.saveSettings();
-			}));
-
+export function parserDefinitions(ctx: DefinitionContext): SettingDefinitionItem[] {
+	const { plugin } = ctx;
 	const manager = plugin.parserExtensionManager;
 
-	// Surface load errors from the most recent publish, if any.
-	const loadErrors = manager.getLoadErrors();
-	if (loadErrors.length > 0) {
-		new Setting(containerEl)
-			.setName('Parser extension errors')
-			.setDesc(`${loadErrors.length} stage(s) failed to load on the last publish. See the developer console for details.`)
-			.setClass('cpn-parser-errors');
-	}
-
-	const section = ctx.createSection(containerEl, 'Built-in stages');
-	section.createEl('p', {
-		text: 'Each stage can be materialized to your vault and edited. The built-in runs until you override it; deleting the file restores the default. Changes apply on the next publish.',
-		cls: 'cpn-settings-hint'
-	});
-
+	const stageRows: SettingDefinition[] = [];
 	for (const name of manager.getBuiltinParserNames()) {
 		const scaffold = manager.getBuiltinScaffold(name);
 		if (!scaffold) continue;
-		const exists = manager.builtinVaultFileExists(name);
-
-		const setting = new Setting(section)
-			.setName(name)
-			.setDesc(`${scaffold.stage} · order ${scaffold.order}${exists ? ' · overridden' : ''} — ${scaffold.description}`);
-
-		// Open (materialize on demand, then open) — mirrors Notor tools.ts.
-		setting.addExtraButton(btn => btn
-			.setIcon('square-arrow-out-up-right')
-			.setTooltip(exists ? 'Open stage definition' : 'Create & open stage definition')
-			.onClick(async () => {
-				try {
-					const path = await manager.ensureBuiltinParserVaultFile(name);
-					await app.workspace.openLinkText(path, '', true);
-					if (!exists) {
-						new Notice(`Created ${path} — re-publish to apply.`);
-						ctx.rerenderAll();
-					}
-				} catch (e) {
-					new Notice(`Failed to create stage file: ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}));
-
-		// Reset (delete the vault file → fall back to built-in) — only if present.
-		if (exists) {
-			setting.addExtraButton(btn => btn
-				.setIcon('rotate-ccw')
-				.setTooltip('Reset to built-in default (deletes the vault file)')
-				.onClick(async () => {
-					try {
-						await manager.resetBuiltinParserToDefault(name);
-						new Notice(`Reset "${name}" to built-in default.`);
-						ctx.rerenderAll();
-					} catch (e) {
-						new Notice(`Failed to reset stage: ${e instanceof Error ? e.message : String(e)}`);
-					}
-				}));
-		}
+		const base = `${scaffold.stage} · order ${scaffold.order}`;
+		stageRows.push({
+			name,
+			desc: `${base} — ${scaffold.description}`,
+			aliases: ['parser stage', 'override', scaffold.stage],
+			render: setting => {
+				const exists = manager.builtinVaultFileExists(name);
+				setting.setDesc(`${base}${exists ? ' · overridden' : ''} — ${scaffold.description}`);
+				overrideButtons(ctx, setting, {
+					noun: 'stage',
+					label: name,
+					exists: () => exists,
+					ensure: () => manager.ensureBuiltinParserVaultFile(name),
+					reset: () => manager.resetBuiltinParserToDefault(name),
+					createdNotice: path => `Created ${path} — re-publish to apply.`,
+				});
+			},
+		});
 	}
 
-	new Setting(section)
-		.setName('Export all built-in stages')
-		.setDesc('Materialize every built-in stage to the vault at once for tinkering.')
-		.addButton(button => button
-			.setButtonText('Export all')
-			.onClick(async () => {
-				try {
-					const paths = await manager.exportAllScaffolds();
-					new Notice(`Exported ${paths.length} parser stage(s) to ${plugin.settings.cpnDirectory ?? 'cpn'}/parsers/`);
-					ctx.rerenderAll();
-				} catch (e) {
-					new Notice(`Failed to export stages: ${e instanceof Error ? e.message : String(e)}`);
-				}
-			}));
+	return [
+		{
+			name: 'CPN directory',
+			desc: 'Vault folder for CPN extension files. Parser stages live in <dir>/parsers/. Default: cpn',
+			aliases: ['folder', 'extensions', 'cpn'],
+			control: { type: 'text', key: ctx.generalKey('cpnDirectory'), placeholder: 'cpn' },
+		},
+		// Surface load errors from the most recent publish, if any.
+		loadErrorsRow('Parser extension errors', 'cpn-parser-errors', () => manager.getLoadErrors().length, 'stage(s)'),
+		{
+			type: 'group',
+			heading: 'Built-in stages',
+			items: [
+				hintRow('Each stage can be materialized to your vault and edited. The built-in runs until you override it; deleting the file restores the default. Changes apply on the next publish.'),
+				...stageRows,
+				{
+					name: 'Export all built-in stages',
+					desc: 'Materialize every built-in stage to the vault at once for tinkering.',
+					aliases: ['export', 'scaffold'],
+					action: () => {
+						void (async () => {
+							try {
+								const paths = await manager.exportAllScaffolds();
+								new Notice(`Exported ${paths.length} parser stage(s) to ${plugin.settings.cpnDirectory ?? 'cpn'}/parsers/`);
+								ctx.refresh();
+							} catch (e) {
+								new Notice(`Failed to export stages: ${e instanceof Error ? e.message : String(e)}`);
+							}
+						})();
+					},
+				},
+			],
+		},
+	];
 }

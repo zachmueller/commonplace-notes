@@ -268,10 +268,13 @@ rows inside adapter pages.
 
 - [x] General tab rows (UID length, Debug mode, URL stack window) → `control`
       rows (`general.*` keys); `validate` for the numeric ranges. *(Done in P1.)*
-- [ ] Parser page: CPN directory → `control`; extension listing and errors →
+- [x] Parser page: CPN directory → `control`; extension listing and errors →
       `render`; reset/export → `action`.
-- [ ] Routing page: same pattern.
-- [ ] Remove `renderGeneralTab` / `renderParserTab` / `renderRoutingTab`
+- [x] Routing page: same pattern. *(Per-file "overridden" state and load
+      errors are read inside `render` / `visible`, which run on every page
+      render; `getSettingDefinitions()` only runs on `update()`, so build-time
+      values would go stale while Settings is closed.)*
+- [x] Remove `renderGeneralTab` / `renderParserTab` / `renderRoutingTab`
       adapters.
 
 ### P3: Profile basics
