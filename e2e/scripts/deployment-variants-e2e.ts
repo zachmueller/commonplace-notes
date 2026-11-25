@@ -32,7 +32,7 @@
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
-import { closeSettings, openCpnSettings, waitForSelector } from "../lib/test-helpers";
+import { closeSettings, openCpnSettings, openSettingsPageIfPresent, waitForSelector } from "../lib/test-helpers";
 
 // ---------------------------------------------------------------------------
 // Mock data
@@ -95,6 +95,8 @@ async function openPluginSettings(ctx: TestContext, opts: { fatal?: boolean } = 
 	try {
 		if (!name) throw new Error("profile 0 has no name");
 		await openCpnSettings(page, [name]);
+		// The Deploy button lives in Infrastructure (a sub-page until P4).
+		await openSettingsPageIfPresent(page, "Infrastructure");
 		return true;
 	} catch (err) {
 		if (fatal) ctx.fail("Open plugin settings", `Could not open the profile settings page: ${String(err)}`);

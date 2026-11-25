@@ -163,6 +163,15 @@ export async function openSettingsPage(page: Page, name: string): Promise<void> 
 	await page.waitForTimeout(200);
 }
 
+/** Open the sub-page named `name` if the page on screen links to it; returns whether it did. */
+export async function openSettingsPageIfPresent(page: Page, name: string): Promise<boolean> {
+	const row = page.locator(`${SETTINGS_CONTENT} .setting-item.mod-navigable`)
+		.filter({ has: page.locator(".setting-item-name", { hasText: exactText(name) }) });
+	if (await row.count() === 0) return false;
+	await openSettingsPage(page, name);
+	return true;
+}
+
 /** Title of the settings sub-page on screen, or null at a tab's root. */
 export async function currentSettingsPageTitle(page: Page): Promise<string | null> {
 	return page.evaluate((root) =>

@@ -33,6 +33,45 @@ function profileRowNames(page: Page): Promise<string[]> {
 	}, SETTINGS_CONTENT);
 }
 
+
+const TEMP_ID = "e2e-settings-temp";
+
+/** Add a throwaway AWS profile (no bucket yet) and rebuild the tab. */
+async function addTempProfile(page: Page, name: string): Promise<void> {
+	await page.evaluate(async ({ id, name }) => {
+		const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+		plugin.settings.publishingProfiles = plugin.settings.publishingProfiles.filter((p: any) => p.id !== id);
+		plugin.settings.publishingProfiles.push({
+			name, id, lastFullPublishTimestamp: 0, excludedDirectories: [], excludedDirsRulesVersion: 2,
+			baseUrl: "https://e2e.example.test/", homeNotePath: "", isPublic: false, publishContentIndex: false,
+			obscureRawWikilinks: true, obscureRawAttachments: true, publishMechanism: "AWS",
+			indicator: { style: "color", color: "#3366cc" },
+			awsSettings: {
+				awsAccountId: "", awsProfile: "", region: "", bucketName: "",
+				cloudFrontInvalidationScheme: "individual", credentialMode: "sdk", credentialRefreshCommands: "", awsCliPath: "",
+			},
+		});
+		await plugin.saveSettings();
+		plugin.settingTab.refresh();
+	}, { id: TEMP_ID, name });
+}
+
+async function removeTempProfile(page: Page): Promise<void> {
+	await page.evaluate(async (id) => {
+		const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+		plugin.settings.publishingProfiles = plugin.settings.publishingProfiles.filter((p: any) => p.id !== id);
+		await plugin.saveSettings();
+		plugin.settingTab.refresh();
+	}, TEMP_ID);
+}
+
+/** The settings row named `name` on the page on screen. */
+function settingRow(page: Page, name: string) {
+	return page.locator(`${SETTINGS_CONTENT} .setting-item`)
+		.filter({ has: page.locator(".setting-item-name", { hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }) })
+		.first();
+}
+
 test.describe("Declarative settings tab", () => {
 	test.afterEach(async ({ obsidianPage }) => {
 		await closeSettings(obsidianPage);
@@ -129,6 +168,104 @@ test.describe("Declarative settings tab", () => {
 		await expect(row.locator(".setting-item-description")).not.toContainText("overridden");
 		// Still on the parser page after both refreshes.
 		expect(await currentSettingsPageTitle(obsidianPage)).toBe("Markdown parser");
+	});
+
+	test("profile list shows the site domain and a setup warning", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Status");
+		try {
+			await openCpnSettings(obsidianPage);
+			const row = settingRow(obsidianPage, "E2E Status");
+			await expect(row.locator(".setting-item-value")).toHaveText("e2e.example.test");
+			// No bucket or region yet: flagged.
+			await expect(row.locator(".setting-item-status.mod-warning")).toHaveCount(1);
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("switching a profile to Local hides the AWS-only settings", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Mechanism");
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Mechanism"]);
+			const awsOnly = ["S3 bucket name", "AWS region", "Credential mode", "Infrastructure", "Site Customization", "Deploy hooks"];
+			for (const name of awsOnly) await expect(settingRow(obsidianPage, name)).toBeVisible();
+
+			await settingRow(obsidianPage, "Publish mechanism").locator("select:not(.is-measuring)").selectOption("Local");
+			for (const name of awsOnly) await expect(settingRow(obsidianPage, name)).toBeHidden();
+			// Attachments stay listed but are disabled on Local profiles.
+			await expect(settingRow(obsidianPage, "Publish attachments").locator("select:not(.is-measuring)")).toBeDisabled();
+			expect(await obsidianPage.evaluate((id) =>
+				(window as any).app.plugins.plugins["commonplace-notes"].settings.publishingProfiles
+					.find((p: any) => p.id === id).publishMechanism, TEMP_ID)).toBe("Local");
+
+			await settingRow(obsidianPage, "Publish mechanism").locator("select:not(.is-measuring)").selectOption("AWS");
+			for (const name of awsOnly) await expect(settingRow(obsidianPage, name)).toBeVisible();
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("profile controls write through, with the S3 prefix codec", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Controls");
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Controls"]);
+			await settingRow(obsidianPage, "S3 prefix").locator("input").fill("site");
+			await settingRow(obsidianPage, "Excluded directories").locator("textarea").fill("private/\n\n**/drafts/");
+			await settingRow(obsidianPage, "Credential mode").locator("select:not(.is-measuring)").selectOption("custom-command");
+			await expect(settingRow(obsidianPage, "Credential refresh commands")).toBeVisible();
+			await expect(settingRow(obsidianPage, "AWS CLI path (optional)")).toBeHidden();
+			await obsidianPage.waitForTimeout(600); // debounced save
+			const saved = await obsidianPage.evaluate(async (id) => {
+				const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+				const onDisk = await plugin.loadData();
+				const p = onDisk.publishingProfiles.find((x: any) => x.id === id);
+				return { prefix: p.awsSettings.s3Prefix, excluded: p.excludedDirectories, mode: p.awsSettings.credentialMode };
+			}, TEMP_ID);
+			expect(saved).toEqual({ prefix: "site/", excluded: ["private/", "**/drafts/"], mode: "custom-command" });
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("renaming a profile keeps its page open; the list updates on reopen", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Rename");
+		try {
+			await openCpnSettings(obsidianPage, ["E2E Rename"]);
+			await settingRow(obsidianPage, "Profile name").locator("input").fill("E2E Renamed");
+			// Force a rebuild while the page is open: it must not go blank.
+			await obsidianPage.evaluate(() => (window as any).app.plugins.plugins["commonplace-notes"].settingTab.refresh());
+			await obsidianPage.waitForTimeout(200);
+			expect(await rowNames(obsidianPage)).toContain("Profile name");
+			expect(await currentSettingsPageTitle(obsidianPage)).toBe("E2E Rename");
+
+			await closeSettings(obsidianPage);
+			await openCpnSettings(obsidianPage);
+			expect(await profileRowNames(obsidianPage)).toContain("E2E Renamed");
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
+	});
+
+	test("searching \"S3 bucket\" lists each profile's row and opens it", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		await addTempProfile(obsidianPage, "E2E Search");
+		try {
+			await openCpnSettings(obsidianPage);
+			const search = obsidianPage.locator(".modal.mod-settings input[type=search]").first();
+			await search.fill("S3 bucket");
+			const group = obsidianPage.locator(".modal.mod-settings .setting-search-result-group")
+				.filter({ has: obsidianPage.locator(".setting-search-result-tab-label", { hasText: /^E2E Search$/ }) });
+			await expect(group).toHaveCount(1);
+			await group.locator(".setting-search-result-item", { hasText: "S3 bucket name" }).click();
+			await expect(obsidianPage.locator(`${SETTINGS_CONTENT} .setting-page-title`)).toHaveText("E2E Search");
+			await expect(settingRow(obsidianPage, "S3 bucket name")).toHaveClass(/is-flashing/);
+		} finally {
+			await removeTempProfile(obsidianPage);
+		}
 	});
 
 	test("settings search finds CPN rows", async ({ obsidianPage }) => {

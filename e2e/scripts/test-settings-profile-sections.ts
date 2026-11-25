@@ -21,15 +21,21 @@
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
-import { closeSettings, openCpnSettings } from "../lib/test-helpers";
+import { SETTINGS_CONTENT, closeSettings, openCpnSettings, openSettingsPage } from "../lib/test-helpers";
 
 // ---------------------------------------------------------------------------
 // Local constants
 // ---------------------------------------------------------------------------
 
+/**
+ * What an AWS profile's page shows: its groups (headings) and the sub-pages it
+ * links to. A section counts if it appears as either, so the check holds while
+ * areas move between groups and sub-pages.
+ */
 const EXPECTED_SECTIONS = [
 	"Profile Identity",
 	"Content",
+	"Attachments (Beta)",
 	"Destination",
 	"Infrastructure",
 	"Authentication & Delivery",
@@ -122,21 +128,42 @@ async function openPluginSettings(ctx: TestContext): Promise<boolean> {
 	return true;
 }
 
-async function readProfilePage(ctx: TestContext) {
-	return ctx.page.evaluate(() => {
-		const container = document.querySelector(".cpn-profile-container")?.parentElement ?? document;
-		const sections = Array.from(container.querySelectorAll(".cpn-settings-section-summary"))
-			.map(s => s.textContent?.trim() ?? "");
+/** Group headings, sub-page rows, the Cognito gate button and any render error on the page on screen. */
+async function readSettingsPage(ctx: TestContext) {
+	return ctx.page.evaluate((root) => {
+		const container = document.querySelector(root) ?? document;
+		// No named function expressions in page.evaluate: tsx wraps them in a
+		// `__name` helper the page doesn't have.
+		const headings = Array.from(container.querySelectorAll(".setting-item-heading .setting-item-name"))
+			.filter(e => (e as HTMLElement).offsetParent !== null).map(s => s.textContent?.trim() ?? "");
+		const pages = Array.from(container.querySelectorAll(".setting-item.mod-navigable .setting-item-name"))
+			.filter(e => (e as HTMLElement).offsetParent !== null).map(s => s.textContent?.trim() ?? "");
 		const gate = Array.from(container.querySelectorAll(".setting-item"))
 			.find(el => el.querySelector(".setting-item-name")?.textContent?.trim() === "Cognito gate");
 		const btn = gate?.querySelector("button");
 		const renderError = container.querySelector(".cpn-profile-render-error")?.textContent ?? null;
 		return {
-			sections,
+			sections: [...headings, ...pages],
 			gateButton: btn ? { text: btn.textContent?.trim() ?? "", cta: btn.classList.contains("mod-cta") } : null,
 			renderError,
 		};
-	});
+	}, SETTINGS_CONTENT);
+}
+
+/** Read the profile page; the Cognito gate may sit on the Infrastructure sub-page. */
+async function readProfilePage(ctx: TestContext) {
+	const page = await readSettingsPage(ctx);
+	if (!page.gateButton && page.sections.includes("Infrastructure")) {
+		try {
+			await openSettingsPage(ctx.page, "Infrastructure");
+			const infra = await readSettingsPage(ctx);
+			page.gateButton = infra.gateButton;
+			page.renderError = page.renderError ?? infra.renderError;
+		} catch {
+			// Infrastructure is a group, not a page: nothing more to read.
+		}
+	}
+	return page;
 }
 
 // ---------------------------------------------------------------------------

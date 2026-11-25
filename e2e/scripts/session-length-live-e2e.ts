@@ -460,6 +460,10 @@ async function live(ctx: TestContext): Promise<void> {
 			if (nav) { nav.click(); break; }
 			await new Promise(r => setTimeout(r, 250));
 		}
+		// Infrastructure may be its own sub-page; step into it when listed.
+		await new Promise(r => setTimeout(r, 300));
+		(Array.from(document.querySelectorAll('.modal.mod-settings .setting-item.mod-navigable'))
+			.find((r) => r.querySelector('.setting-item-name')?.textContent?.trim() === 'Infrastructure') as HTMLElement | undefined)?.click();
 		// No named function expressions in page.evaluate: tsx wraps them in a
 		// `__name` helper the page doesn't have.
 		let row: Element | undefined;
@@ -535,6 +539,10 @@ async function live(ctx: TestContext): Promise<void> {
 			if (nav) { nav.click(); break; }
 			await new Promise(r => setTimeout(r, 250));
 		}
+		// Infrastructure may be its own sub-page; step into it when listed.
+		await new Promise(r => setTimeout(r, 300));
+		(Array.from(document.querySelectorAll('.modal.mod-settings .setting-item.mod-navigable'))
+			.find((r) => r.querySelector('.setting-item-name')?.textContent?.trim() === 'Infrastructure') as HTMLElement | undefined)?.click();
 		let btn: HTMLButtonElement | undefined;
 		for (let i = 0; i < 40 && !btn; i++) {
 			for (const d of Array.from(document.querySelectorAll('.modal.mod-settings details.cpn-settings-section'))) (d as HTMLDetailsElement).open = true;

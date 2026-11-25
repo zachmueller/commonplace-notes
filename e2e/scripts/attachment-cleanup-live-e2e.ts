@@ -803,6 +803,10 @@ async function applyInSettings(ctx: TestContext, days: number): Promise<any> {
 			if (nav) { nav.click(); break; }
 			await new Promise(r => setTimeout(r, 250));
 		}
+		// Infrastructure may be its own sub-page; step into it when listed.
+		await new Promise(r => setTimeout(r, 300));
+		(Array.from(document.querySelectorAll('.modal.mod-settings .setting-item.mod-navigable'))
+			.find((r) => r.querySelector('.setting-item-name')?.textContent?.trim() === 'Infrastructure') as HTMLElement | undefined)?.click();
 		let row: Element | undefined;
 		for (let i = 0; i < 40 && !row; i++) {
 			for (const d of Array.from(document.querySelectorAll('.modal.mod-settings details.cpn-settings-section'))) (d as HTMLDetailsElement).open = true;
@@ -900,6 +904,10 @@ async function scenarioApply(ctx: TestContext, d: Deployed, step: Step): Promise
 				if (nav) { nav.click(); break; }
 				await new Promise(r => setTimeout(r, 250));
 			}
+			// Infrastructure may be its own sub-page; step into it when listed.
+			await new Promise(r => setTimeout(r, 300));
+			(Array.from(document.querySelectorAll('.modal.mod-settings .setting-item.mod-navigable'))
+				.find((r) => r.querySelector('.setting-item-name')?.textContent?.trim() === 'Infrastructure') as HTMLElement | undefined)?.click();
 			let row: Element | undefined;
 			for (let i = 0; i < 40 && !row; i++) {
 				for (const d of Array.from(document.querySelectorAll('.modal.mod-settings details.cpn-settings-section'))) (d as HTMLDetailsElement).open = true;

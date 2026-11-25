@@ -279,13 +279,22 @@ rows inside adapter pages.
 
 ### P3: Profile basics
 
-- [ ] Profile Identity, Content (incl. Attachments (Beta) and Excluded
+- [x] Profile Identity, Content (incl. Attachments (Beta) and Excluded
       directories), Destination, Authentication & Delivery as groups of
       `control` rows with `profile.<ref>.*` keys and the §3 on-set hooks.
-- [ ] AWS-only `visible` predicates; credential-mode-dependent rows.
-- [ ] Home-note picker: `control: { type: 'file' }` if it filters to Markdown
+- [x] AWS-only `visible` predicates; credential-mode-dependent rows.
+- [x] Home-note picker: `control: { type: 'file' }` if it filters to Markdown
       acceptably, otherwise keep `HomeNoteSuggestModal` behind an `action` row.
-- [ ] `displayValue` / `status` on profile pages (§4).
+      *(`file` control: the sync filter offers Markdown files the profile
+      doesn't exclude; an async `validate` rejects notes whose
+      `cpn-publish-contexts` lack the profile, matching what Browse offered.)*
+- [x] `displayValue` / `status` on profile pages (§4). *(`displayValue`: the
+      base URL's host, else the mechanism. `status: 'warning'`: an AWS profile
+      with no bucket or region yet, or whose last deploy failed. Misconfigured
+      publish contexts are tracked vault-wide, not per profile, so they don't
+      feed `status`.)* The not-yet-converted areas (Infrastructure, Site
+      Customization, Deploy hooks, Access groups, Danger Zone) are `LegacyPage`
+      sub-pages until P4.
 
 ### P4: Profile advanced
 

@@ -3,18 +3,15 @@ import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile, SettingsUiState } from '../types';
 import { Logger, errorMessage } from '../utils/logging';
 import { DefinitionContext, SettingsContext, ProfileContext } from './context';
-import { DELETE, GENERAL_CODECS, KeyCodec, findCodec } from './codecs';
+import { DELETE, GENERAL_CODECS, KeyCodec, PROFILE_CODECS, findCodec } from './codecs';
 import { RefRegistry, buildGeneralKey, buildProfileKey, deleteAtPath, getAtPath, parseKey, setAtPath } from './keys';
 import { PageNameSnapshot } from './pageNames';
 import { LegacyPage } from './legacyPage';
 import { generalDefinitions } from './tabs/generalTab';
 import { parserDefinitions } from './tabs/parserTab';
 import { routingDefinitions } from './tabs/routingTab';
-import { renderIdentitySection } from './profile/identity';
-import { renderContentSection } from './profile/content';
-import { renderDestinationSection } from './profile/destination';
-import { renderDangerZone } from './profile/dangerZone';
-import { renderAccessGroupsSection } from './profile/accessGroups';
+import { LegacyProfilePage, profilePage } from './profile/page';
+import { initAWSSettings } from './profile/shared';
 import { EXCLUDED_DIRS_RULES_VERSION } from '../utils/excludedDirectories';
 
 /** Delay before a control edit is persisted; text controls write per keystroke. */
@@ -36,7 +33,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	plugin: CommonplaceNotesPlugin;
 	private readonly refs = new RefRegistry('r');
 	private readonly names = new PageNameSnapshot();
-	private readonly codecs: KeyCodec[] = [...GENERAL_CODECS];
+	private readonly codecs: KeyCodec[] = [...GENERAL_CODECS, ...PROFILE_CODECS];
 	private readonly debouncedSave: Debouncer<[], void>;
 	/** The legacy adapter page currently on screen, if any (redrawn by refresh()). */
 	private shownLegacyPage: LegacyPage | null = null;
@@ -79,14 +76,10 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	private profilesList(): SettingDefinitionItem {
 		const profiles = this.plugin.settings.publishingProfiles;
 		const named = this.names.resolve(PROFILES_SCOPE, profiles.map(p => ({ ref: this.refs.refFor(p), name: p.name })));
+		const ctx = this.definitionContext();
 		const pages: SettingDefinitionPage[] = named.map(({ ref, name }) => {
 			const profile = this.refs.resolve<PublishingProfile>(ref)!;
-			return {
-				type: 'page',
-				name,
-				desc: profile.publishMechanism === 'Local' ? 'Local' : 'AWS',
-				page: () => this.legacyPage(el => this.renderProfilePage(el, profile)),
-			};
+			return profilePage(ctx, profile, name, this.legacyProfilePage(profile));
 		});
 		const tombstones: SettingDefinitionPage[] = this.names.removed(PROFILES_SCOPE).map(({ name }) => ({
 			type: 'page',
@@ -216,26 +209,36 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		};
 	}
 
-	private renderProfilePage(containerEl: HTMLElement, profile: PublishingProfile): void {
-		const index = this.plugin.settings.publishingProfiles.indexOf(profile);
-		if (index === -1) {
-			containerEl.createEl('p', {
-				text: 'This profile was deleted. Go back to the profile list.',
-				cls: 'cpn-no-profiles-message',
-			});
-			return;
-		}
-		try {
-			this.displayProfileSettings(containerEl, profile, index);
-		} catch (error) {
-			Logger.error(`Error displaying profile ${profile.name}:`, error);
-			// Say so on the page: otherwise the sections after the failure just
-			// vanish with no hint why.
-			containerEl.createDiv({
-				cls: 'setting-item-description mod-warning cpn-profile-render-error',
-				text: `Some settings for this profile failed to render: ${errorMessage(error)}. See the developer console for details.`,
-			});
-		}
+	/** Legacy sub-pages of one profile's page (P4 areas until converted). */
+	private legacyProfilePage(profile: PublishingProfile): LegacyProfilePage {
+		return (name, desc, render) => ({
+			type: 'page',
+			name,
+			desc,
+			page: () => this.legacyPage(el => {
+				const index = this.plugin.settings.publishingProfiles.indexOf(profile);
+				if (index === -1) {
+					el.createEl('p', {
+						text: 'This profile was deleted. Go back to the profile list.',
+						cls: 'cpn-no-profiles-message',
+					});
+					return;
+				}
+				const ctx: ProfileContext = { ...this.legacyContext(), profile, index };
+				try {
+					// The AWS renderers read awsSettings unguarded, as when the
+					// Destination section initialized it before them.
+					if (profile.publishMechanism === 'AWS') initAWSSettings(profile);
+					render(ctx, el);
+				} catch (error) {
+					Logger.error(`Error displaying ${name} for profile ${profile.name}:`, error);
+					el.createDiv({
+						cls: 'setting-item-description mod-warning cpn-profile-render-error',
+						text: `Some settings for this profile failed to render: ${errorMessage(error)}. See the developer console for details.`,
+					});
+				}
+			}),
+		});
 	}
 
 	/**
@@ -264,38 +267,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 			this.plugin.settings.settingsUiState = {};
 		}
 		return this.plugin.settings.settingsUiState;
-	}
-
-	private displayProfileSettings(containerEl: HTMLElement, profile: PublishingProfile, index: number) {
-		const profileContainer = containerEl.createDiv({ cls: 'cpn-profile-container' });
-
-		const ctx: ProfileContext = { ...this.legacyContext(), profile, index };
-
-		const lastUpdated = profile.lastFullPublishTimestamp ? new Date(profile.lastFullPublishTimestamp).toLocaleString() : 'n/a';
-		profileContainer.createDiv({
-			cls: 'cpn-profile-last-publish',
-			text: `Last full publish: ${lastUpdated}`
-		});
-
-		// --- Profile Identity ---
-		const identitySection = this.createSection(profileContainer, 'Profile Identity');
-		renderIdentitySection(ctx, identitySection);
-
-		// --- Content ---
-		const contentSection = this.createSection(profileContainer, 'Content');
-		renderContentSection(ctx, contentSection);
-
-		// --- Destination (spawns AWS Infrastructure / Auth / Site sections) ---
-		const destSection = this.createSection(profileContainer, 'Destination');
-		renderDestinationSection(ctx, destSection, profileContainer);
-
-		// --- Access groups (per-note access gating) ---
-		const accessSection = this.createSection(profileContainer, 'Access groups', { defaultCollapsed: true });
-		renderAccessGroupsSection(ctx, accessSection);
-
-		// --- Danger Zone (starts collapsed so destructive actions are tucked away) ---
-		const dangerSection = this.createSection(profileContainer, 'Danger Zone', { defaultCollapsed: true });
-		renderDangerZone(ctx, dangerSection, profileContainer);
 	}
 
 	// --- Profiles -------------------------------------------------------------
