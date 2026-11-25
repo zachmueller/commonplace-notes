@@ -63,6 +63,12 @@ detail.
 - **Shell commands.** If you configure a custom credential refresh command, or
   use AWS SSO sign-in, CPN runs that command (or the `aws` CLI) on your
   machine.
+- **Vault-wide file listing.** CPN lists the files in your vault to find the
+  notes a publishing profile should include, resolve note UIDs and links, apply
+  excluded-directory rules, and find attachments that are no longer referenced.
+  Only notes you publish leave your machine.
+- **Clipboard.** Copy buttons (published-note URLs, DNS records, sign-in
+  settings) write to your clipboard. CPN never reads from it.
 
 ## Documentation
 
