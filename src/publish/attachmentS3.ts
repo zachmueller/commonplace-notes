@@ -23,7 +23,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { promises as fsp } from 'fs';
 import { createHash } from 'crypto';
-import { Logger } from '../utils/logging';
+import { Logger, toError } from '../utils/logging';
 import {
 	MULTIPART_PARTS_IN_FLIGHT,
 	MULTIPART_PART_BYTES,
@@ -102,7 +102,7 @@ export async function putMultipart(
 		for (;;) {
 			// Wait for a free slot before reading, so at most 4 parts are in memory.
 			while (inflight.size >= MULTIPART_PARTS_IN_FLIGHT) await Promise.race(inflight);
-			if (failure !== null) throw failure;
+			if (failure !== null) throw toError(failure);
 			const buffer = Buffer.alloc(partBytes);
 			const { bytesRead } = await handle.read(buffer, 0, partBytes, null);
 			if (bytesRead === 0) break;
@@ -121,7 +121,7 @@ export async function putMultipart(
 			inflight.add(job);
 		}
 		await Promise.all(inflight);
-		if (failure !== null) throw failure;
+		if (failure !== null) throw toError(failure);
 		if (hash.digest('hex') !== entry.sha256) throw new AttachmentChangedError(entry);
 		parts.sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0));
 		await s3.send(new CompleteMultipartUploadCommand({ Bucket, Key, UploadId, MultipartUpload: { Parts: parts } }));

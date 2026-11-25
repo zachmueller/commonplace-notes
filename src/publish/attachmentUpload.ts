@@ -1,7 +1,7 @@
 import { S3ServiceException } from '@aws-sdk/client-s3';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
-import { Logger } from '../utils/logging';
+import { Logger, toError } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { effectiveSessionHours } from '../infrastructure/cognitoParams';
 import {
@@ -95,7 +95,7 @@ export async function uploadStagedAttachments(plugin: CommonplaceNotesPlugin, pr
 	const s3 = plugin.awsSdkManager.getS3Client(profile);
 	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
-	const readGate = (profile.infrastructureState?.readGateMode ?? 'none') as SiteReadGate;
+	const readGate: SiteReadGate = profile.infrastructureState?.readGateMode ?? 'none';
 	const sessionHours = effectiveSessionHours(profile.infrastructureState?.cognitoAuth);
 	const largeSlot = createLimiter(LARGE_UPLOAD_SLOTS);
 	const todo = entries.filter(e => !isUploaded(state, e.area, e.key));
@@ -181,7 +181,7 @@ async function runPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-	if (firstError !== null) throw firstError;
+	if (firstError !== null) throw toError(firstError);
 }
 
 function isCredentialError(error: unknown): boolean {

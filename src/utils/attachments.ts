@@ -76,7 +76,7 @@ const MB = 1024 * 1024;
 export function resolveAttachmentSettings(raw: Partial<AttachmentSettings> | undefined): AttachmentSettings {
 	const mode: AttachmentMode = raw?.mode === 'embeds' || raw?.mode === 'embedsAndLinks' ? raw.mode : 'off';
 	const allowedExtensions = Array.isArray(raw?.allowedExtensions)
-		? normalizeExtensionList(raw!.allowedExtensions)
+		? normalizeExtensionList(raw.allowedExtensions)
 		: [...DEFAULT_ALLOWED_EXTENSIONS];
 	return { mode, allowedExtensions, maxFileSizeMB: clampFileSizeMB(raw?.maxFileSizeMB), inlinePdfs: raw?.inlinePdfs === true };
 }

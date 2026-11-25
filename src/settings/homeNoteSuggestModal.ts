@@ -17,7 +17,7 @@ export class HomeNoteSuggestModal extends SuggestModal<TFile> {
 	}
 
 	renderSuggestion(file: TFile, el: HTMLElement) {
-		el.createEl('div', { text: file.path });
+		el.createDiv({ text: file.path });
 	}
 
 	onChooseSuggestion(file: TFile) {

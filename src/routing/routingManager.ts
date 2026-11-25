@@ -673,7 +673,7 @@ export class RoutingManager {
 			throw new Error(`No built-in routing action "${name}"`);
 		}
 		const existing = this.plugin.app.vault.getAbstractFileByPath(this.builtinActionVaultPath(name));
-		if (existing) await this.plugin.app.vault.delete(existing);
+		if (existing) await this.plugin.app.fileManager.trashFile(existing);
 	}
 
 	async resetBuiltinOptionToDefault(name: string): Promise<void> {
@@ -681,7 +681,7 @@ export class RoutingManager {
 			throw new Error(`No built-in routing option "${name}"`);
 		}
 		const existing = this.plugin.app.vault.getAbstractFileByPath(this.builtinOptionVaultPath(name));
-		if (existing) await this.plugin.app.vault.delete(existing);
+		if (existing) await this.plugin.app.fileManager.trashFile(existing);
 	}
 
 	/** Materialize every built-in action + option to the vault. Returns the file paths. */

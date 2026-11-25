@@ -27,7 +27,7 @@ function isDeploySuccess(status: string): boolean {
 /** Lowercase hex sha256 via Web Crypto (available in Obsidian's Electron renderer). */
 export async function sha256Hex(input: string): Promise<string> {
 	const data = new TextEncoder().encode(input);
-	const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
+	const digest = await crypto.subtle.digest('SHA-256', data);
 	return Array.from(new Uint8Array(digest))
 		.map((b) => b.toString(16).padStart(2, '0'))
 		.join('');
@@ -578,9 +578,6 @@ export class DeploymentWizardModal extends Modal {
 				? zones.filter(z => domain === z.name || domain.endsWith('.' + z.name))
 				: [];
 
-			// Determine which zones to show in the dropdown
-			const dropdownZones = matchingZones.length > 0 ? matchingZones : zones;
-
 			// Auto-select: best match if available, otherwise first zone
 			if (!this.config.hostedZoneId) {
 				const autoSelect = matchingZones.length > 0
@@ -1035,7 +1032,7 @@ export class DeploymentWizardModal extends Modal {
 			for (const record of records) {
 				const row = container.createDiv({ cls: 'cpn-dns-record-row' });
 				row.createEl('strong', { text: 'CNAME Name:' });
-				const nameEl = row.createEl('code', { text: record.name });
+				row.createEl('code', { text: record.name });
 				const copyNameBtn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 				copyNameBtn.addEventListener('click', () => {
 					void navigator.clipboard.writeText(record.name);
@@ -1043,7 +1040,7 @@ export class DeploymentWizardModal extends Modal {
 				});
 
 				row.createEl('strong', { text: 'CNAME Value:' });
-				const valueEl = row.createEl('code', { text: record.value });
+				row.createEl('code', { text: record.value });
 				const copyValueBtn = row.createEl('button', { text: 'Copy', cls: 'cpn-copy-btn' });
 				copyValueBtn.addEventListener('click', () => {
 					void navigator.clipboard.writeText(record.value);
@@ -1357,7 +1354,7 @@ export class DeploymentWizardModal extends Modal {
 				// this.stackOutputs was set above inside this success block.
 				await this.plugin.deployHookManager.runDeployHooks('post', {
 					profile: this.activeProfile,
-					outputs: this.stackOutputs!,
+					outputs: this.stackOutputs,
 				});
 
 				this.step = 6;

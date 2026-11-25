@@ -48,9 +48,7 @@ export function buildRoutingLibs(plugin: CommonplaceNotesPlugin): RoutingLibs {
 	 * `readFrontmatter` toolkit method and `ensureUid`.
 	 */
 	async function readFrontmatterInternal(file: TFile): Promise<Record<string, unknown> | null> {
-		const cached = app.metadataCache.getFileCache(file)?.frontmatter as
-			| Record<string, unknown>
-			| undefined;
+		const cached = app.metadataCache.getFileCache(file)?.frontmatter;
 		if (cached) return cached;
 		try {
 			const content = await app.vault.read(file);

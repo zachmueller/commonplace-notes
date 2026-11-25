@@ -62,6 +62,17 @@ export default defineConfig([
 		},
 	},
 	{
+		// The community scanner doesn't report these (none of the 0.8.0 review's
+		// findings came from them). src/ deliberately uses `String(value)` /
+		// template interpolation on untyped frontmatter values, so leave them off
+		// to keep `npm run lint` aligned with what the review actually checks.
+		files: ['**/*.ts'],
+		rules: {
+			'@typescript-eslint/no-base-to-string': 'off',
+			'@typescript-eslint/restrict-template-expressions': 'off',
+		},
+	},
+	{
 		files: ['e2e/**/*.ts'],
 		languageOptions: {
 			parserOptions: { project: './e2e/tsconfig.json', tsconfigRootDir: __dirname },

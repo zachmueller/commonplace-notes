@@ -15,7 +15,7 @@ export async function convertMarkdownToPlaintext(markdown: string, plugin: Commo
 		// Convert to plaintext. Use a short-lived Component to own the lifecycle of
 		// any event handlers registered during the render, so they get cleaned up
 		// when we unload it (avoids the "not passing Component" memory-leak warning).
-		const element = document.createElement('div');
+		const element = createDiv();
 		const component = new Component();
 		component.load();
 		try {

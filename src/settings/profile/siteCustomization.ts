@@ -9,7 +9,7 @@ import { ProfileContext } from '../context';
  * per-note named styles.
  */
 export function renderSiteCustomizationSection(ctx: ProfileContext, containerEl: HTMLElement): void {
-	const { plugin, profile, index } = ctx;
+	const { plugin, profile } = ctx;
 	const custom = profile.siteCustomization ?? {
 		siteTitle: '',
 		headerLinks: [],
@@ -319,7 +319,7 @@ function displayThemeColorInputs(
 						if (!target[mode]) {
 							target[mode] = {};
 						}
-						target[mode]![field.key] = value;
+						target[mode][field.key] = value;
 						await plugin.saveSettings();
 					});
 				return text;
@@ -329,7 +329,7 @@ function displayThemeColorInputs(
 				.onClick(async () => {
 					const target = ensureTarget();
 					if (target[mode]) {
-						delete target[mode]![field.key];
+						delete target[mode][field.key];
 					}
 					await plugin.saveSettings();
 					const colorInput = button.buttonEl.parentElement?.querySelector('input[type="color"]') as HTMLInputElement | null;

@@ -1,5 +1,4 @@
 import { Notice, Setting } from 'obsidian';
-import { PublishingProfile } from '../../types';
 import { Logger, errorMessage } from '../../utils/logging';
 import { DeploymentWizardModal } from '../../infrastructure/deploymentWizardModal';
 import { DnsAssistantModal } from '../../infrastructure/dnsAssistantModal';

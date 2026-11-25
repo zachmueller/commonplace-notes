@@ -68,7 +68,7 @@ export type CompiledParserFn = (
 	context: ParserContext,
 	app: App,
 	utils: ParserUtils,
-) => Promise<Plugin | [Plugin, unknown] | unknown>;
+) => Promise<unknown>; // a Plugin, a [Plugin, options] tuple, or anything else (rejected at registration)
 
 /** Where a discovered stage came from. `'profile'` is reserved for v2. */
 export type ParserSource = 'built-in' | 'global' | 'profile';

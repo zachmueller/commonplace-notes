@@ -1,7 +1,6 @@
 import { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
-import { Link, Text, Parent, HTML, Paragraph } from 'mdast';
-import { TFile } from 'obsidian';
+import { Link, Text, Parent, Html, Paragraph } from 'mdast';
 import { slug as githubSlug } from 'github-slugger';
 import { FrontmatterManager } from '../utils/frontmatter';
 import { formatNoteUrl, UrlScheme } from '../utils/urlScheme';
@@ -45,7 +44,7 @@ interface TransclusionNode {
 	children: Link[];
 }
 
-type ReplacementNode = Text | Link | HTML | TransclusionNode | Paragraph | UnpublishedNode;
+type ReplacementNode = Text | Link | Html | TransclusionNode | Paragraph | UnpublishedNode;
 
 interface WikilinkMatch {
 	parsed: ParsedWikilink;
@@ -158,7 +157,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					// the two interpret `[[path#heading|alias]]` identically and never
 					// drift. Splits on the first '|' and first '#'.
 					const parsed = parseWikilinkInner(linkText);
-					const isEmbed = match.index! > 0 && node.value[match.index! - 1] === '!';
+					const isEmbed = match.index > 0 && node.value[match.index - 1] === '!';
 					// Same-note heading links (e.g. [[#Heading]]) have no note path to
 					// resolve against; they are handled as a clickable same-note anchor
 					// below rather than resolved here.
@@ -167,8 +166,8 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 						parsed,
 						resolved,
 						isEmbed,
-						start: match.index! - (isEmbed ? 1 : 0),
-						end: match.index! + fullMatch.length
+						start: match.index - (isEmbed ? 1 : 0),
+						end: match.index + fullMatch.length
 					});
 				}
 
@@ -276,7 +275,7 @@ const remarkObsidianLinks: Plugin<[ObsidianLinksOptions]> = (options) => {
 					children.push({ type: 'text', value: node.value.slice(lastIndex) });
 				}
 
-				replacements.push({ index: index!, parent, nodes: children });
+				replacements.push({ index: index, parent, nodes: children });
 			})());
 		});
 

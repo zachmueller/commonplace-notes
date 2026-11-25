@@ -7,12 +7,12 @@ export class Logger {
 
 	static debug(message: string, ...args: unknown[]) {
 		if (this.debugMode) {
-			console.log(`[CPN Debug] ${message}`, ...args);
+			console.debug(`[CPN Debug] ${message}`, ...args);
 		}
 	}
 
 	static info(message: string, ...args: unknown[]) {
-		console.log(`[CPN] ${message}`, ...args);
+		console.debug(`[CPN] ${message}`, ...args);
 	}
 
 	static warn(message: string, ...args: unknown[]) {
@@ -35,6 +35,13 @@ export function errorMessage(err: unknown): string {
 		if (message) return String(message);
 	}
 	return String(err);
+}
+
+/** Coerce an unknown caught/rejected value into an `Error` for rethrowing.
+ *  Error instances (including AWS SDK errors, with their `.name`/`.Code`) pass
+ *  through untouched; anything else is wrapped with its `errorMessage`. */
+export function toError(err: unknown): Error {
+	return err instanceof Error ? err : new Error(errorMessage(err));
 }
 
 /** Extract an error/status code from an unknown caught value. AWS SDK errors expose

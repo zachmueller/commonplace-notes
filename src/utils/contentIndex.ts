@@ -1,5 +1,3 @@
-import { TFile } from 'obsidian';
-import { PathUtils } from './path';
 import CommonplaceNotesPlugin from '../main';
 import { convertMarkdownToPlaintext } from './formatting';
 import { Logger } from './logging';
@@ -35,7 +33,7 @@ export class ContentIndexManager {
 			const index = JSON.parse(content) as ContentIndex;
 			this.loadedIndices.set(profileId, index);
 			return index;
-		} catch (e) {
+		} catch {
 			// Initialize empty index if file doesn't exist
 			const emptyIndex = {};
 			this.loadedIndices.set(profileId, emptyIndex);

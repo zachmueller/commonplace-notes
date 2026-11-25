@@ -34,7 +34,7 @@ export class RoutingOptionSuggestModal extends SuggestModal<RoutingOptionDefinit
 	}
 
 	renderSuggestion(option: RoutingOptionDefinition, el: HTMLElement) {
-		el.createEl('div', { text: option.name + (option.degraded ? ' ⚠️' : '') });
+		el.createDiv({ text: option.name + (option.degraded ? ' ⚠️' : '') });
 		if (option.description) {
 			el.createEl('small', { text: option.description, cls: 'cpn-routing-option-desc' });
 		}

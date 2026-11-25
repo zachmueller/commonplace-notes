@@ -1,7 +1,5 @@
-import path from 'path';
 import { PathUtils } from './path';
 import CommonplaceNotesPlugin from '../main';
-import { PublishingProfile } from '../types';
 import { Logger } from './logging';
 
 export class ProfileManager {

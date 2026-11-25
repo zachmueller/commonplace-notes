@@ -330,7 +330,7 @@ export class ParserExtensionManager {
 		}
 		const existing = this.plugin.app.vault.getAbstractFileByPath(this.builtinVaultPath(name));
 		if (existing) {
-			await this.plugin.app.vault.delete(existing);
+			await this.plugin.app.fileManager.trashFile(existing);
 			Logger.info(`Reset built-in parser stage to default`, { name });
 		}
 	}

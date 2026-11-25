@@ -4,7 +4,7 @@ import { resolveProfileCredentials } from '../utils/awsCredentialChain';
 import { ssoLogin, SsoLoginUnavailableError } from '../utils/ssoLogin';
 import type CommonplaceNotesPlugin from '../main';
 import type { AWSProfileSettings } from '../types';
-import { Logger } from '../utils/logging';
+import { Logger, toError } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 
 export async function refreshCredentials(plugin: CommonplaceNotesPlugin, profileId: string) {
@@ -64,7 +64,7 @@ async function runCustomCommands(awsSettings: AWSProfileSettings): Promise<void>
 	);
 
 	if (!success) {
-		throw error;
+		throw toError(error);
 	}
 }
 
@@ -118,7 +118,7 @@ async function refreshViaCli(awsSettings: AWSProfileSettings): Promise<void> {
 	);
 
 	if (!success) {
-		throw error;
+		throw toError(error);
 	}
 }
 

@@ -216,7 +216,7 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		const ctx: ProfileContext = { ...this.buildContext(), profile, index };
 
 		const lastUpdated = profile.lastFullPublishTimestamp ? new Date(profile.lastFullPublishTimestamp).toLocaleString() : 'n/a';
-		profileContainer.createEl('div', {
+		profileContainer.createDiv({
 			cls: 'cpn-profile-last-publish',
 			text: `Last full publish: ${lastUpdated}`
 		});

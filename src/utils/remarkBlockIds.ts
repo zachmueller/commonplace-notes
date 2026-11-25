@@ -1,7 +1,7 @@
 import { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 import { Node, Parent } from 'unist';
-import { Paragraph, Text } from 'mdast';
+import { Paragraph } from 'mdast';
 
 /**
  * Turn Obsidian block-id markers (`^id`) into `data-block-id` attributes so
@@ -62,7 +62,7 @@ const remarkBlockIds: Plugin = () => {
 			if (!parent || index === undefined || index === null) return;
 			const last = node.children[node.children.length - 1];
 			if (!last || last.type !== 'text') return;
-			const text = last as Text;
+			const text = last;
 
 			// Standalone marker: tag the preceding block and drop this paragraph.
 			if (node.children.length === 1) {

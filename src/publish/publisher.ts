@@ -47,7 +47,7 @@ class ProfileSuggestModal extends SuggestModal<PublishingProfile> {
 	}
 
 	renderSuggestion(profile: PublishingProfile, el: HTMLElement) {
-		el.createEl("div", { text: profile.name });
+		el.createDiv({ text: profile.name });
 	}
 
 	onChooseSuggestion(profile: PublishingProfile, evt: MouseEvent | KeyboardEvent) {
@@ -76,7 +76,7 @@ class NoteSuggestModal extends SuggestModal<PublishedUid> {
 	}
 
 	renderSuggestion(entry: PublishedUid, el: HTMLElement) {
-		el.createEl("div", { text: entry.label });
+		el.createDiv({ text: entry.label });
 		const detail = describePublishedUid(entry);
 		el.createEl("small", { text: detail ? `${entry.uid} · ${detail}` : entry.uid, cls: 'suggestion-note' });
 	}
@@ -112,7 +112,7 @@ class ConfirmSuggestModal extends SuggestModal<string> {
 	}
 
 	renderSuggestion(option: string, el: HTMLElement) {
-		el.createEl("div", { text: option });
+		el.createDiv({ text: option });
 	}
 
 	onChooseSuggestion(option: string, evt: MouseEvent | KeyboardEvent) {

@@ -271,7 +271,7 @@ export interface SiteAssetFile {
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
 async function shortHash(text: string): Promise<string> {
-	const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
 	return Array.from(new Uint8Array(digest).slice(0, 6)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 

@@ -84,9 +84,7 @@ async function parseOneFile<T extends object>(
 ): Promise<T | RoutingError> {
 	const content = await vault.cachedRead(file);
 
-	let frontmatter = metadataCache.getFileCache(file)?.frontmatter as
-		| Record<string, unknown>
-		| undefined;
+	let frontmatter = metadataCache.getFileCache(file)?.frontmatter;
 
 	if (!frontmatter) {
 		try {

@@ -1,6 +1,6 @@
 import { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
-import { Blockquote, Paragraph, Text, Parent } from 'mdast';
+import { Blockquote, Paragraph, Parent } from 'mdast';
 
 /**
  * Transform Obsidian-style callout blockquotes into the markup the published
@@ -101,11 +101,11 @@ const remarkCallouts: Plugin = () => {
 			const firstChild = node.children[0];
 			if (!firstChild || firstChild.type !== 'paragraph') return;
 
-			const paragraph = firstChild as Paragraph;
+			const paragraph = firstChild;
 			const firstInline = paragraph.children[0];
 			if (!firstInline || firstInline.type !== 'text') return;
 
-			const textNode = firstInline as Text;
+			const textNode = firstInline;
 			const match = CALLOUT_RE.exec(textNode.value);
 			if (!match) return;
 

@@ -1,4 +1,3 @@
-import path from 'path';
 import { PathUtils } from '../utils/path';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';

@@ -101,9 +101,8 @@ export async function ssoLogin(awsProfile: string): Promise<void> {
 			throw new Error('SSO OIDC StartDeviceAuthorization did not return a device code / verification URL.');
 		}
 
-		// Open the browser for the user to approve. `electron` is bundled as an
-		// external, so importing it here is safe in the Obsidian desktop app.
-		await openVerificationUrl(verificationUriComplete);
+		// Open the browser for the user to approve.
+		openVerificationUrl(verificationUriComplete);
 		const prompt = NoticeManager.showNotice(
 			`Complete AWS SSO sign-in in your browser` +
 				(userCode ? ` (code: ${userCode})` : '') +
@@ -181,14 +180,11 @@ async function writeTokenCache(ssoSessionName: string, token: SsoTokenCacheFile)
 	await fs.writeFile(filepath, JSON.stringify(token, null, 2));
 }
 
-async function openVerificationUrl(url: string): Promise<void> {
+function openVerificationUrl(url: string): void {
 	try {
-		// Obsidian desktop runs on Electron; `shell.openExternal` opens the
-		// system browser. Imported lazily so a missing module never breaks load.
-		const { shell } = require('electron') as {
-			shell: { openExternal(url: string): Promise<void> };
-		};
-		await shell.openExternal(url);
+		// In Obsidian's Electron renderer, window.open on an external URL is
+		// routed to the system browser.
+		window.open(url);
 	} catch (err) {
 		Logger.warn('Could not open browser automatically for SSO login:', err);
 		// The notice still shows the verification URL for manual navigation.

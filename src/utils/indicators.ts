@@ -1,4 +1,4 @@
-import { WorkspaceLeaf, TFile, MarkdownView } from 'obsidian';
+import { TFile, MarkdownView } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { PublishingProfile } from '../types';
 import { Logger } from './logging';
@@ -76,7 +76,7 @@ export class IndicatorManager {
 			return null;
 		}
 
-		const indicator = document.createElement('div');
+		const indicator = createDiv();
 		indicator.addClass('cpn-publish-indicator');
 		
 		if (profile.indicator.style === 'color') {
@@ -113,7 +113,7 @@ export class IndicatorManager {
 	}
 
 	private createIndicatorContainer(profiles: PublishingProfile[]): HTMLElement {
-		const container = document.createElement('div');
+		const container = createDiv();
 		container.addClass('cpn-publish-indicators');
 
 		profiles.forEach(profile => {
@@ -177,7 +177,7 @@ export class IndicatorManager {
 
 	private getTabHeader(file: TFile): HTMLElement | null {
 		// Find all tab headers
-		const tabHeaders = document.querySelectorAll('.workspace-tab-header-inner');
+		const tabHeaders = activeDocument.querySelectorAll('.workspace-tab-header-inner');
 		
 		// Look for the one matching our file
 		for (const header of Array.from(tabHeaders)) {

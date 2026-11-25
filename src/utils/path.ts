@@ -1,7 +1,6 @@
-import { TFile } from 'obsidian';
 import path from 'path';
 import CommonplaceNotesPlugin from '../main';
-import { Logger, errorCode } from './logging';
+import { Logger } from './logging';
 
 export class PathUtils {
 	static sluggify(s: string): string {

@@ -32,7 +32,7 @@ export function renderContentSection(ctx: ProfileContext, containerEl: HTMLEleme
 					void (async () => {
 						plugin.settings.publishingProfiles[index].homeNotePath = file.path;
 						await plugin.saveSettings();
-						const input = containerEl.querySelector(`[data-home-input="${profile.id}"]`) as HTMLInputElement | null;
+						const input = containerEl.querySelector<HTMLInputElement>(`[data-home-input="${profile.id}"]`);
 						if (input) input.value = file.path;
 					})();
 				}).open();

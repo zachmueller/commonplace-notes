@@ -2,7 +2,6 @@ import { Plugin, MarkdownView, App, TFile, Modal, Setting, Notice, WorkspaceLeaf
 import { CommonplaceNotesSettingTab } from './settings';
 import {
 	CommonplaceNotesSettings,
-	BulkPublishContextMapping,
 	BulkPublishContextConfig,
 	PublishContextChange,
 	PublishingProfile,
@@ -15,7 +14,6 @@ import {
 	DetachRolePolicyCommand,
 	DeleteRoleCommand,
 } from '@aws-sdk/client-iam';
-import { PathUtils } from './utils/path';
 import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
 import { IndicatorManager } from './utils/indicators';

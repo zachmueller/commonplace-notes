@@ -10,7 +10,7 @@ import { appendStackEventLine } from './shared';
  * element faded out on profile deletion.
  */
 export function renderDangerZone(ctx: ProfileContext, containerEl: HTMLElement, profileContainer: HTMLElement): void {
-	const { plugin, profile, index } = ctx;
+	const { plugin, index } = ctx;
 
 	displayDestroyInfrastructure(ctx, containerEl);
 	displayForceCleanLeftovers(ctx, containerEl);

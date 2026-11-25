@@ -76,7 +76,7 @@ export class NoteManager {
 			const history = JSON.parse(content) as Record<string, string[]>;
 			this.publishHistory.set(profileId, history);
 			return history;
-		} catch (e) {
+		} catch {
 			const emptyHistory = {};
 			this.publishHistory.set(profileId, emptyHistory);
 			return emptyHistory;

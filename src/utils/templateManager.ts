@@ -1,3 +1,4 @@
+import { requestUrl } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import { Logger } from './logging';
 import { PathUtils } from './path';
@@ -24,7 +25,7 @@ export class TemplateManager {
 		Logger.info('Local template not found, attempting to download default template from GitHub');
 
 		try {
-			const { success, error } = await NoticeManager.showProgress(
+			const { success } = await NoticeManager.showProgress(
 				'Downloading default template from GitHub',
 				this.downloadDefaultTemplate(templatePath),
 				'Successfully downloaded default template',
@@ -45,13 +46,13 @@ export class TemplateManager {
 		await PathUtils.ensureDirectory(this.plugin, templateDir);
 
 		// Download the template
-		const response = await fetch(this.DEFAULT_TEMPLATE_URL);
+		const response = await requestUrl({ url: this.DEFAULT_TEMPLATE_URL, throw: false });
 
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		if (response.status < 200 || response.status >= 300) {
+			throw new Error(`HTTP ${response.status} downloading default template`);
 		}
 
-		const templateContent = await response.text();
+		const templateContent = response.text;
 
 		// Validate that it looks like an HTML template
 		if (!templateContent.includes('{{NOTES_JSON}}')) {

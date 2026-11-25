@@ -1,7 +1,7 @@
 import { TFile } from 'obsidian';
 import * as path from 'path';
 import CommonplaceNotesPlugin from '../main';
-import { Logger, errorMessage } from '../utils/logging';
+import { Logger, errorMessage, toError } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 
 export async function publishLocalNotes(
@@ -47,7 +47,7 @@ export async function publishLocalNotes(
 		);
 
 		if (!jsonSuccess) {
-			throw jsonError;
+			throw toError(jsonError);
 		}
 
 		// Process template and write HTML
@@ -62,7 +62,7 @@ export async function publishLocalNotes(
 		);
 
 		if (!htmlSuccess) {
-			throw htmlError;
+			throw toError(htmlError);
 		}
 
 		Logger.info(`Successfully published ${Object.keys(combinedNotes).length} notes to ${combinedNotesPath} and ${htmlOutputPath}`);

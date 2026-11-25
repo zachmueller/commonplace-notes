@@ -3,7 +3,7 @@ import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { TFile, parseYaml } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
-import { Logger, errorMessage } from '../utils/logging';
+import { Logger, errorMessage, toError } from '../utils/logging';
 import { NoticeManager } from '../utils/notice';
 import { renderConfigJson, renderSiteAssets } from './siteRenderer';
 import { discoverAssetCustomizations, getAssetsDir } from './assetCustomizations/discovery';
@@ -786,7 +786,7 @@ export async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugi
 		);
 
 		if (!success) {
-			throw error;
+			throw toError(error);
 		}
 
 		return true;

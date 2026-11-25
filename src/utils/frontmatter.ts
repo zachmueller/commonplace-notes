@@ -58,7 +58,7 @@ export class FrontmatterManager {
 		// to hold it.
 		plugin.registerEvent(
 			this.app.metadataCache.on('changed', (file, _data, cache) => {
-				const fm = cache?.frontmatter as Record<string, unknown> | undefined;
+				const fm = cache?.frontmatter;
 				this.resolver.confirm(file, fm?.[UID_KEY]);
 			}),
 		);

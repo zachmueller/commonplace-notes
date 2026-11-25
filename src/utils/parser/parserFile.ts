@@ -12,7 +12,6 @@ import type {
 	ParserExtensionDefinition,
 	ParserExtensionError,
 	ParserSource,
-	ParserStage,
 } from './types';
 
 // Re-export for existing importers (kept stable after the shared extraction).
@@ -85,7 +84,7 @@ export function parseParserExtensionFile(
 			message: `Invalid 'cpn-parser-stage': '${String(frontmatter['cpn-parser-stage'])}'. Must be 'remark' or 'rehype'`,
 		};
 	}
-	const stage = stageRaw as ParserStage;
+	const stage = stageRaw;
 
 	// -- cpn-parser-order --
 	const order = asNumber(frontmatter['cpn-parser-order']);
