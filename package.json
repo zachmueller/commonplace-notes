@@ -52,6 +52,7 @@
 		"test:access-client": "npx tsx e2e/scripts/test-access-client.ts",
 		"test:access-live": "npx tsx e2e/scripts/access-groups-live-e2e.ts",
 		"test:session-length-live": "npx tsx e2e/scripts/session-length-live-e2e.ts",
+		"test:settings-live": "npx tsx e2e/scripts/settings-deploy-destroy-live-e2e.ts",
 		"test:attachments-live": "npx tsx e2e/scripts/attachments-live-e2e.ts",
 		"test:attachment-cleanup-live": "npx tsx e2e/scripts/attachment-cleanup-live-e2e.ts",
 		"test:attachment-change-notice-live": "npx tsx e2e/scripts/attachment-change-notice-live-e2e.ts",

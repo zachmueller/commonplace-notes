@@ -353,7 +353,11 @@ The unused `HomeNoteSuggestModal` is deleted.
   `settingsUiState`.
 - **Regression:** the full tsx suite (see `/plugin-review` Verification) and a
   live sandbox deploy/destroy from the new Infrastructure and Danger Zone
-  pages (`random` account only).
+  pages (`random` account only): `CPN_LIVE_AWS_PROFILE=random npm run
+  test:settings-live` (`--teardown` after a failed run). Passed 13/13 on
+  2026-11-26: wizard deploy from the Infrastructure group, the page updating in
+  place afterwards, Danger Zone destroy with S3 deletion, its live log
+  surviving a forced re-render, and nothing left in AWS.
 
 ## Risks
 
