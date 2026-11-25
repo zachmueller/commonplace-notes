@@ -201,10 +201,12 @@ export async function runTest(
 	let browser: Browser | undefined;
 	let collector: LogCollector | undefined;
 
-	const signalCleanup = async () => {
-		console.log("\n  Signal received — cleaning up...");
-		if (obsidian) await closeObsidian(obsidian).catch(() => {});
-		process.exit(1);
+	const signalCleanup = () => {
+		void (async () => {
+			console.log("\n  Signal received — cleaning up...");
+			if (obsidian) await closeObsidian(obsidian).catch(() => {});
+			process.exit(1);
+		})();
 	};
 	process.on("SIGINT", signalCleanup);
 	process.on("SIGTERM", signalCleanup);

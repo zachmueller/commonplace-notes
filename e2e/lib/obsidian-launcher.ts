@@ -108,7 +108,7 @@ async function waitForCDP(port: number, timeout: number): Promise<string> {
 				});
 			});
 
-			const json = JSON.parse(data);
+			const json = JSON.parse(data) as { webSocketDebuggerUrl?: string };
 			if (json.webSocketDebuggerUrl) {
 				return json.webSocketDebuggerUrl;
 			}
@@ -197,11 +197,11 @@ export async function launchObsidian(options: LaunchOptions): Promise<ObsidianPr
 		},
 	});
 
-	child.stdout?.on("data", (data) => {
+	child.stdout?.on("data", (data: Buffer) => {
 		console.debug(`[obsidian:stdout] ${data.toString().trim()}`);
 	});
 
-	child.stderr?.on("data", (data) => {
+	child.stderr?.on("data", (data: Buffer) => {
 		console.debug(`[obsidian:stderr] ${data.toString().trim()}`);
 	});
 

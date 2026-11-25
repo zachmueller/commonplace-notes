@@ -100,7 +100,7 @@ function ensureTestVault(vaultPath: string): void {
 	let enabledPlugins: string[] = [];
 	if (fs.existsSync(communityPluginsPath)) {
 		try {
-			enabledPlugins = JSON.parse(fs.readFileSync(communityPluginsPath, "utf8"));
+			enabledPlugins = JSON.parse(fs.readFileSync(communityPluginsPath, "utf8")) as string[];
 		} catch {
 			enabledPlugins = [];
 		}
@@ -135,6 +135,7 @@ type InternalFixtures = {
 };
 
 export const test = base.extend<ObsidianFixtures & InternalFixtures>({
+	// eslint-disable-next-line no-empty-pattern -- Playwright requires the first fixture argument to be a destructuring pattern
 	obsidianSession: async ({}, use) => {
 		const vaultPath = getVaultPath();
 		ensureTestVault(vaultPath);

@@ -18,8 +18,15 @@ export const LIVE_REGION = 'us-east-1';
 export const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 export const sha256File = (p: string) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
-/** Run `aws …` and parse its JSON output. */
-export function aws(args: string[], opts: { json?: boolean; allowFail?: boolean } = {}): any {
+interface AwsOpts {
+	json?: boolean;
+	allowFail?: boolean;
+}
+
+/** Run `aws …` and parse its JSON output (`json: false` returns raw stdout). */
+export function aws(args: string[], opts: AwsOpts & { json: false }): string | null;
+export function aws<T = unknown>(args: string[], opts?: AwsOpts): T;
+export function aws(args: string[], opts: AwsOpts = {}): unknown {
 	try {
 		const out = execFileSync('aws', [...args, ...(opts.json === false ? [] : ['--output', 'json'])], {
 			env: { ...process.env, AWS_PROFILE: LIVE_AWS_PROFILE, AWS_REGION: LIVE_REGION, AWS_PAGER: '' },
@@ -27,22 +34,31 @@ export function aws(args: string[], opts: { json?: boolean; allowFail?: boolean 
 			maxBuffer: 64 * 1024 * 1024,
 		});
 		if (opts.json === false) return out;
-		return out.trim() ? JSON.parse(out) : {};
-	} catch (err: any) {
+		return out.trim() ? (JSON.parse(out) as unknown) : {};
+	} catch (err: unknown) {
 		if (opts.allowFail) return null;
-		throw new Error(`aws ${args.slice(0, 3).join(' ')} failed: ${err.stderr || err.message}`);
+		const e = err as { stderr?: unknown; message?: unknown };
+		throw new Error(`aws ${args.slice(0, 3).join(' ')} failed: ${String(e.stderr || e.message || err)}`);
 	}
 }
 
+interface DescribeStacks {
+	Stacks: {
+		StackStatus?: string;
+		Outputs?: { OutputKey: string; OutputValue: string }[];
+		Parameters?: { ParameterKey: string; ParameterValue: string }[];
+	}[];
+}
+
 export function stackOutputs(stackName: string): Record<string, string> {
-	const d = aws(['cloudformation', 'describe-stacks', '--stack-name', stackName]);
+	const d = aws<DescribeStacks>(['cloudformation', 'describe-stacks', '--stack-name', stackName]);
 	const out: Record<string, string> = {};
 	for (const o of d.Stacks[0].Outputs || []) out[o.OutputKey] = o.OutputValue;
 	return out;
 }
 
 export function stackParams(stackName: string): Record<string, string> {
-	const d = aws(['cloudformation', 'describe-stacks', '--stack-name', stackName]);
+	const d = aws<DescribeStacks>(['cloudformation', 'describe-stacks', '--stack-name', stackName]);
 	const out: Record<string, string> = {};
 	for (const p of d.Stacks[0].Parameters || []) out[p.ParameterKey] = p.ParameterValue;
 	return out;
@@ -52,31 +68,34 @@ export function s3Keys(bucket: string, prefix = ''): string[] {
 	const keys: string[] = [];
 	let token: string | undefined;
 	do {
-		const d = aws(['s3api', 'list-objects-v2', '--bucket', bucket, '--prefix', prefix,
-			...(token ? ['--continuation-token', token] : [])], { allowFail: true });
+		const d = aws<{ Contents?: { Key: string }[]; IsTruncated?: boolean; NextContinuationToken?: string } | null>(
+			['s3api', 'list-objects-v2', '--bucket', bucket, '--prefix', prefix, ...(token ? ['--continuation-token', token] : [])],
+			{ allowFail: true },
+		);
 		for (const o of d?.Contents || []) keys.push(o.Key);
 		token = d?.IsTruncated ? d.NextContinuationToken : undefined;
 	} while (token);
 	return keys;
 }
 
-export function s3Json(bucket: string, key: string): any {
+export function s3Json<T = unknown>(bucket: string, key: string): T {
 	const tmp = path.join(os.tmpdir(), `cpn-live-${crypto.randomBytes(4).toString('hex')}.json`);
 	aws(['s3api', 'get-object', '--bucket', bucket, '--key', key, tmp]);
-	const v = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+	const v = JSON.parse(fs.readFileSync(tmp, 'utf8')) as T;
 	fs.unlinkSync(tmp);
 	return v;
 }
 
 /** HeadObject, or null when the key has no current version. */
-export function head(bucket: string, key: string): any {
-	return aws(['s3api', 'head-object', '--bucket', bucket, '--key', key], { allowFail: true });
+export function head<T = unknown>(bucket: string, key: string): T | null {
+	return aws<T | null>(['s3api', 'head-object', '--bucket', bucket, '--key', key], { allowFail: true });
 }
 
 export async function waitInvalidations(distId: string): Promise<void> {
 	for (let i = 0; i < 120; i++) {
-		const list = aws(['cloudfront', 'list-invalidations', '--distribution-id', distId]).InvalidationList?.Items || [];
-		if (!list.some((x: any) => x.Status !== 'Completed')) return;
+		const res = aws<{ InvalidationList?: { Items?: { Status: string }[] } }>(['cloudfront', 'list-invalidations', '--distribution-id', distId]);
+		const list = res.InvalidationList?.Items || [];
+		if (!list.some(x => x.Status !== 'Completed')) return;
 		await sleep(10_000);
 	}
 	throw new Error(`invalidations on ${distId} still in progress`);
@@ -88,8 +107,23 @@ export async function waitInvalidations(distId: string): Promise<void> {
 
 export const LIVE_PASSWORD = 'Cpn-Live-Passw0rd!';
 
-function describeClient(poolId: string, clientId: string): any {
-	return aws(['cognito-idp', 'describe-user-pool-client', '--user-pool-id', poolId, '--client-id', clientId]).UserPoolClient;
+interface UserPoolClient {
+	ClientSecret?: string;
+	SupportedIdentityProviders?: string[];
+	AllowedOAuthFlows: string[];
+	AllowedOAuthScopes: string[];
+	CallbackURLs: string[];
+	LogoutURLs?: string[];
+	IdTokenValidity?: number;
+	AccessTokenValidity?: number;
+	RefreshTokenValidity?: number;
+	TokenValidityUnits?: Record<string, string>;
+}
+
+function describeClient(poolId: string, clientId: string): UserPoolClient {
+	return aws<{ UserPoolClient: UserPoolClient }>(
+		['cognito-idp', 'describe-user-pool-client', '--user-pool-id', poolId, '--client-id', clientId],
+	).UserPoolClient;
 }
 
 /** Native users + admin auth on the stack's own client, keeping its token validity. */
@@ -116,9 +150,9 @@ export function ensureUser(poolId: string, email: string): void {
 
 /** A real id token (the pre-token trigger adds cognito:groups from the membership file). */
 export function idToken(poolId: string, clientId: string, email: string): string {
-	const secret = describeClient(poolId, clientId).ClientSecret as string;
+	const secret = describeClient(poolId, clientId).ClientSecret ?? '';
 	const secretHash = crypto.createHmac('sha256', secret).update(email + clientId).digest('base64');
-	const d = aws(['cognito-idp', 'admin-initiate-auth', '--user-pool-id', poolId, '--client-id', clientId,
+	const d = aws<{ AuthenticationResult: { IdToken: string } }>(['cognito-idp', 'admin-initiate-auth', '--user-pool-id', poolId, '--client-id', clientId,
 		'--auth-flow', 'ADMIN_USER_PASSWORD_AUTH', '--auth-parameters', `USERNAME=${email},PASSWORD=${LIVE_PASSWORD},SECRET_HASH=${secretHash}`]);
 	return d.AuthenticationResult.IdToken;
 }
@@ -145,13 +179,18 @@ export const newUid = () => Array.from(crypto.randomBytes(10), b => CROCKFORD[b 
 
 export function emptyVersionedBucket(bucket: string): void {
 	aws(['s3', 'rm', `s3://${bucket}`, '--recursive', '--quiet'], { json: false, allowFail: true });
-	const uploads = aws(['s3api', 'list-multipart-uploads', '--bucket', bucket], { allowFail: true })?.Uploads || [];
+	const uploads = aws<{ Uploads?: { Key: string; UploadId: string }[] } | null>(
+		['s3api', 'list-multipart-uploads', '--bucket', bucket], { allowFail: true },
+	)?.Uploads || [];
 	for (const u of uploads) {
 		aws(['s3api', 'abort-multipart-upload', '--bucket', bucket, '--key', u.Key, '--upload-id', u.UploadId], { json: false, allowFail: true });
 	}
+	type Version = { Key: string; VersionId: string };
 	for (let round = 0; round < 50; round++) {
-		const versions = aws(['s3api', 'list-object-versions', '--bucket', bucket], { allowFail: true });
-		const objs = [...(versions?.Versions || []), ...(versions?.DeleteMarkers || [])].map((v: any) => ({ Key: v.Key, VersionId: v.VersionId }));
+		const versions = aws<{ Versions?: Version[]; DeleteMarkers?: Version[] } | null>(
+			['s3api', 'list-object-versions', '--bucket', bucket], { allowFail: true },
+		);
+		const objs = [...(versions?.Versions || []), ...(versions?.DeleteMarkers || [])].map(v => ({ Key: v.Key, VersionId: v.VersionId }));
 		if (objs.length === 0) break;
 		for (let i = 0; i < objs.length; i += 500) {
 			aws(['s3api', 'delete-objects', '--bucket', bucket, '--delete', JSON.stringify({ Objects: objs.slice(i, i + 500), Quiet: true })], { allowFail: true });
@@ -160,14 +199,16 @@ export function emptyVersionedBucket(bucket: string): void {
 }
 
 export function deleteStack(stack?: string): void {
-	if (!stack || !aws(['cloudformation', 'describe-stacks', '--stack-name', stack], { allowFail: true })) return;
+	if (!stack || !aws<DescribeStacks | null>(['cloudformation', 'describe-stacks', '--stack-name', stack], { allowFail: true })) return;
 	console.log(`Deleting ${stack}...`);
 	aws(['cloudformation', 'delete-stack', '--stack-name', stack], { json: false });
 	aws(['cloudformation', 'wait', 'stack-delete-complete', '--stack-name', stack], { json: false, allowFail: true });
-	const after = aws(['cloudformation', 'describe-stacks', '--stack-name', stack], { allowFail: true });
+	const after = aws<DescribeStacks | null>(['cloudformation', 'describe-stacks', '--stack-name', stack], { allowFail: true });
 	if (after?.Stacks?.[0]?.StackStatus === 'DELETE_FAILED') {
-		const res = aws(['cloudformation', 'list-stack-resources', '--stack-name', stack]);
-		const stuck = (res.StackResourceSummaries || []).filter((r: any) => r.ResourceStatus !== 'DELETE_COMPLETE').map((r: any) => r.LogicalResourceId);
+		const res = aws<{ StackResourceSummaries?: { ResourceStatus: string; LogicalResourceId: string }[] }>(
+			['cloudformation', 'list-stack-resources', '--stack-name', stack],
+		);
+		const stuck = (res.StackResourceSummaries || []).filter(r => r.ResourceStatus !== 'DELETE_COMPLETE').map(r => r.LogicalResourceId);
 		console.log(`  ${stack} DELETE_FAILED; retaining ${stuck.join(', ')}`);
 		aws(['cloudformation', 'delete-stack', '--stack-name', stack, '--retain-resources', ...stuck], { json: false });
 		aws(['cloudformation', 'wait', 'stack-delete-complete', '--stack-name', stack], { json: false, allowFail: true });
@@ -180,17 +221,23 @@ export function deleteStack(stack?: string): void {
  */
 export function deleteVariantFunctionsAndRoles(variant: string): string[] {
 	const leftovers: string[] = [];
-	for (const f of aws(['lambda', 'list-functions'], { allowFail: true })?.Functions || []) {
-		if (!String(f.FunctionName).includes(variant)) continue;
+	const fns = aws<{ Functions?: { FunctionName: string }[] } | null>(['lambda', 'list-functions'], { allowFail: true })?.Functions || [];
+	for (const f of fns) {
+		if (!f.FunctionName.includes(variant)) continue;
 		if (aws(['lambda', 'delete-function', '--function-name', f.FunctionName], { json: false, allowFail: true }) === null) leftovers.push(f.FunctionName);
 		else console.log(`Deleted function ${f.FunctionName}`);
 	}
-	for (const r of aws(['iam', 'list-roles'], { allowFail: true })?.Roles || []) {
-		if (!String(r.RoleName).includes(variant)) continue;
-		for (const p of aws(['iam', 'list-attached-role-policies', '--role-name', r.RoleName], { allowFail: true })?.AttachedPolicies || []) {
+	const roles = aws<{ Roles?: { RoleName: string }[] } | null>(['iam', 'list-roles'], { allowFail: true })?.Roles || [];
+	for (const r of roles) {
+		if (!r.RoleName.includes(variant)) continue;
+		const attached = aws<{ AttachedPolicies?: { PolicyArn: string }[] } | null>(
+			['iam', 'list-attached-role-policies', '--role-name', r.RoleName], { allowFail: true },
+		)?.AttachedPolicies || [];
+		for (const p of attached) {
 			aws(['iam', 'detach-role-policy', '--role-name', r.RoleName, '--policy-arn', p.PolicyArn], { json: false, allowFail: true });
 		}
-		for (const n of aws(['iam', 'list-role-policies', '--role-name', r.RoleName], { allowFail: true })?.PolicyNames || []) {
+		const inline = aws<{ PolicyNames?: string[] } | null>(['iam', 'list-role-policies', '--role-name', r.RoleName], { allowFail: true })?.PolicyNames || [];
+		for (const n of inline) {
 			aws(['iam', 'delete-role-policy', '--role-name', r.RoleName, '--policy-name', n], { json: false, allowFail: true });
 		}
 		if (aws(['iam', 'delete-role', '--role-name', r.RoleName], { json: false, allowFail: true }) !== null) console.log(`Deleted role ${r.RoleName}`);

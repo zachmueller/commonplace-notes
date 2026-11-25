@@ -362,7 +362,7 @@ async function reuse(ctx: TestContext, step: Step): Promise<Deployed | null> {
 
 async function deploy(ctx: TestContext, step: Step): Promise<Deployed | null> {
 	const { page } = ctx;
-	const accountId = aws(['sts', 'get-caller-identity']).Account as string;
+	const accountId = aws<{ Account: string }>(['sts', 'get-caller-identity']).Account;
 	const variant = `clne2e${crypto.randomBytes(3).toString('hex')}`;
 	const state: LiveState = { variant, accountId };
 	state.bootstrapPreexisting = !!aws(['cloudformation', 'describe-stacks', '--stack-name', 'cpn-bootstrap'], { allowFail: true });
@@ -522,7 +522,7 @@ async function deploy(ctx: TestContext, step: Step): Promise<Deployed | null> {
 // ---------------------------------------------------------------------------
 
 function lifecycleRules(bucket: string): any[] | null {
-	return aws(['s3api', 'get-bucket-lifecycle-configuration', '--bucket', bucket], { allowFail: true })?.Rules ?? null;
+	return aws<{ Rules?: any[] } | null>(['s3api', 'get-bucket-lifecycle-configuration', '--bucket', bucket], { allowFail: true })?.Rules ?? null;
 }
 
 function describeRules(rules: any[] | null): string {
@@ -780,7 +780,7 @@ async function probeRoutes(base: string): Promise<Record<string, RouteProbe>> {
 }
 
 function distributionShape(distId: string): string {
-	const c = aws(['cloudfront', 'get-distribution-config', '--id', distId]).DistributionConfig;
+	const c = aws<{ DistributionConfig: any }>(['cloudfront', 'get-distribution-config', '--id', distId]).DistributionConfig;
 	const lfa = (b: any) => (b.LambdaFunctionAssociations?.Items ?? []).map((a: any) => `${a.EventType}:${a.LambdaFunctionARN}`).sort();
 	return JSON.stringify({
 		origins: (c.Origins?.Items ?? []).map((o: any) => `${o.Id}=${o.DomainName}${o.OriginPath ?? ''}`).sort(),
@@ -938,7 +938,7 @@ function teardown(): void {
 		aws(['s3', 'rm', `s3://cpn-assets-${s.accountId}-us-east-1/access/${s.poolStack}/`, '--recursive', '--quiet'], { json: false, allowFail: true });
 	}
 	if (!leftovers.length && s.bootstrapPreexisting === false && s.accountId) {
-		const others = (aws(['cloudformation', 'list-stacks', '--stack-status-filter', 'CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'CREATE_IN_PROGRESS', 'UPDATE_IN_PROGRESS'])
+		const others = (aws<{ StackSummaries?: { StackName: string }[] }>(['cloudformation', 'list-stacks', '--stack-status-filter', 'CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'CREATE_IN_PROGRESS', 'UPDATE_IN_PROGRESS'])
 			.StackSummaries || []).map((x: any) => x.StackName).filter((n: string) => n.startsWith('cpn-') && n !== 'cpn-bootstrap');
 		if (others.length) {
 			console.log(`Keeping cpn-bootstrap: other cpn- stacks use it (${others.join(', ')})`);

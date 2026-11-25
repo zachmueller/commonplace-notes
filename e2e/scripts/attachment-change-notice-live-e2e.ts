@@ -373,7 +373,7 @@ async function scenarioModeOff(ctx: TestContext, step: Step): Promise<void> {
 async function live(ctx: TestContext): Promise<void> {
 	const step: Step = (name, cond, detail) => (cond ? ctx.pass(name, detail) : ctx.fail(name, detail));
 	await ctx.page.evaluate(INSTALL);
-	const accountId = aws(['sts', 'get-caller-identity']).Account as string;
+	const accountId = aws<{ Account: string }>(['sts', 'get-caller-identity']).Account;
 	const bucket = `cpn-chg-${crypto.randomBytes(3).toString('hex')}-${accountId}`;
 	saveState({ bucket });
 	console.log(`  bucket: ${bucket}`);

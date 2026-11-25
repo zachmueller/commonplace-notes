@@ -130,7 +130,7 @@ async function main() {
 			await page.screenshot({
 				path: path.join(screenshotsDir, "obsidian-startup.png"),
 				fullPage: true,
-			}).catch((e) => console.debug(`[screenshot] startup failed: ${e.message}`));
+			}).catch((e: unknown) => console.debug(`[screenshot] startup failed: ${e instanceof Error ? e.message : String(e)}`));
 		}
 
 		// Wait for the remaining duration
@@ -149,7 +149,7 @@ async function main() {
 			await page.screenshot({
 				path: path.join(screenshotsDir, "obsidian-after-capture.png"),
 				fullPage: true,
-			}).catch((e) => console.debug(`[screenshot] after-capture failed: ${e.message}`));
+			}).catch((e: unknown) => console.debug(`[screenshot] after-capture failed: ${e instanceof Error ? e.message : String(e)}`));
 		}
 
 		// Step 5: Write summary and close

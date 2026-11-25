@@ -74,12 +74,17 @@ export async function waitForSelector(
 // Plugin access helpers
 // ---------------------------------------------------------------------------
 
+/** The slice of Obsidian's renderer globals these helpers read. */
+type ObsidianWindow = {
+	app?: { plugins?: { plugins?: Record<string, { settings?: Record<string, unknown> } | undefined> } };
+};
+
 /**
  * Access the plugin instance from within the Obsidian page context.
  */
 export async function getPluginInstance(page: Page): Promise<boolean> {
 	return page.evaluate(() => {
-		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
+		const plugin = (window as unknown as ObsidianWindow).app?.plugins?.plugins?.["commonplace-notes"];
 		return !!plugin;
 	});
 }
@@ -89,7 +94,7 @@ export async function getPluginInstance(page: Page): Promise<boolean> {
  */
 export async function getPluginSettings(page: Page): Promise<Record<string, unknown> | null> {
 	return page.evaluate(() => {
-		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
+		const plugin = (window as unknown as ObsidianWindow).app?.plugins?.plugins?.["commonplace-notes"];
 		return plugin?.settings ?? null;
 	});
 }
@@ -143,7 +148,7 @@ export function ensureAppConfig(vaultPath: string): void {
 	let config: Record<string, unknown> = {};
 	if (fs.existsSync(appJsonPath)) {
 		try {
-			config = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
+			config = JSON.parse(fs.readFileSync(appJsonPath, "utf8")) as Record<string, unknown>;
 		} catch {
 			// Malformed config — rewrite with just the required keys
 		}
