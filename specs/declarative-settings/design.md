@@ -77,12 +77,23 @@ with a path resolver:
 | Key form | Resolves to |
 |---|---|
 | `general.<field>` | `settings.<field>` (e.g. `general.urlStackWindowSeconds`) |
-| `profile.<profileId>.<path>` | the profile with that **id** (not index), then `<path>` (e.g. `profile.p-123.awsSettings.bucketName`) |
+| `profile.<ref>.<path>` | the profile object with that **session ref** (not index, not `id`), then `<path>` (e.g. `profile.r3.awsSettings.bucketName`) |
 
-- Profiles are addressed by `id` because indexes shift when a profile is
-  deleted, and definitions are rebuilt on `update()`.
-- New module `src/settings/keys.ts`: `parseKey`, `getAtPath`, `setAtPath`, plus
-  `profileKey(profile, path)` for building keys. Pure, so it gets a tsx unit test.
+- Profiles are addressed by a **session ref**: a `RefRegistry` (WeakMap
+  object → ref) hands each profile object a ref that lasts for the settings
+  session. Not by index, because indexes shift when a profile is deleted; and
+  not by `profile.id`, because Profile ID is itself an editable text control
+  that writes on every keystroke (P0), so the first keystroke would orphan the
+  key for the second. The same registry gives access-group and named-style
+  objects refs for their sub-pages; renames re-key the record but keep the
+  object, so refs survive.
+- Path segments are escaped (`%` → `%25`, `.` → `%2E`) since style names and
+  ids may contain dots; numeric segments index arrays (header links).
+- New module `src/settings/keys.ts`: `parseKey`, `buildKey`, `getAtPath`,
+  `setAtPath`, `RefRegistry`. Obsidian-free, so it gets a tsx unit test.
+- `text`/`textarea` controls write per keystroke (P0), so `setControlValue`
+  updates memory immediately and debounces `plugin.saveSettings()`, flushing
+  in `hide()` and on unload.
 - `setControlValue` writes, runs the key's **on-set hook** if one is
   registered, then calls `plugin.saveSettings()`. Hooks hold today's
   side effects that aren't plain assignment:
@@ -106,7 +117,21 @@ with a path resolver:
 
 Profile deletion stays in the Danger Zone with its confirmation. The list does
 **not** set `onDelete`, because a one-key delete of a deployed profile is too
-easy to hit by accident.
+easy to hit by accident. (Page rows in a list get no X button, but a focused
+row's Delete key still calls `onDelete`, per P0.)
+
+**Stable page names (public API only).** Obsidian finds the open sub-page
+again after `update()` by its path of page names (P0); a renamed page renders
+empty, and two sibling pages with the same name both open the first. So page
+names for profiles, access groups and named styles come from a per-session
+**name snapshot** (`src/settings/pageNames.ts`), keyed by session ref:
+
+- Sibling names are de-duplicated with a ` (2)` suffix.
+- A rename updates the data immediately but the page title / list label only
+  when the snapshot clears, in the tab's `hide()` (then `update()`).
+- A removed profile, group or style leaves a **tombstone**: its page stays in
+  the definitions with `visible: false` (still resolvable, P0) and one row
+  saying it was removed, until `hide()`.
 
 ### 5. Retired UI state
 
@@ -175,19 +200,41 @@ Run against Obsidian 1.13.1+ through the e2e harness (see the
 `settingsPopoutWindow` note in `e2e/lib/test-helpers.ts`'s `ensureAppConfig`),
 and record answers here before P1:
 
-- [ ] Does `update()` keep the user on the current sub-page, or does it pop back
-      to the root? (This decides whether hooks may call `update()` freely or must
-      prefer `refreshDomState()`.)
-- [ ] Is there a public or internal way to open the tab **on a given page**?
-      `openProfileSettings(profileId)` (`src/main.ts`) needs it for the
-      "configure profile" notice. Fallback: open the tab and show a `Notice`
-      naming the profile.
-- [ ] How do search results label rows that sit inside a per-profile page?
-      Confirm two profiles' "Base URL" rows are distinguishable.
-- [ ] When does a `text` control call `setControlValue`: per keystroke or on
-      commit? If per keystroke, debounce `saveSettings` in `setControlValue`.
-- [ ] Can a `color` control carry an extra "reset" button, or does reset need a
-      `render` row?
+Answers (Obsidian 1.15.1, read from the bundle and confirmed with a scratch tab
+in the harness, 2026-11-26):
+
+- [x] Does `update()` keep the user on the current sub-page, or does it pop back
+      to the root? **It stays.** `update()` re-displays the top page in place
+      (scroll kept), re-finding it by its path of page `id ?? name`. A renamed
+      page renders empty with its old title; a page with `visible: false` still
+      resolves; duplicate sibling names resolve to the first. Hence session refs
+      (§3) and stable page names (§4). Custom `page: () => SettingPage` pages are
+      not refreshed by `update()` and are not search-indexed.
+- [x] Is there a public or internal way to open the tab **on a given page**?
+      Only internal (`app.setting.openPagePath(tabId, names[])`, untyped).
+      Decision: public API only, so `openProfileSettings` uses the fallback
+      (open the CPN tab and show a `Notice` naming the profile).
+- [x] How do search results label rows that sit inside a per-profile page?
+      Grouped under the innermost page name (`.setting-search-result-tab-label`)
+      with the tab name as sublabel; two profiles' "Base URL" rows appear under
+      their profile names. Clicking navigates into the page and flashes the row
+      (`is-flashing`). Sub-pages (e.g. Danger Zone) are labeled by their own
+      name only.
+- [x] When does a `text` control call `setControlValue`: per keystroke or on
+      commit? **Per keystroke** (also `textarea`); `number` on blur/Enter with
+      `min`/`max` enforced; `color` on `change`. The framework calls
+      `refreshDomState()` after every write. So `saveSettings` is debounced.
+- [x] Can a `color` control carry an extra "reset" button, or does reset need a
+      `render` row? **Built in:** `color` (and `slider`) controls get a "Restore
+      default" button whenever `defaultValue` is set. No other per-control
+      extra-button hook exists.
+
+Harness selectors: settings search `input[type=search]` ("Search settings...");
+results `.setting-search-result-group` / `-tab-label` / `.setting-search-result-item`;
+page title `.setting-page-title`, back `.setting-page-back-button`; navigable
+rows `.setting-item.mod-navigable`; group headings `.setting-item-heading`;
+lists `.setting-group.mod-list`. `app.setting.openTabById(id)` resets to the
+tab root.
 
 ### P1: Version floor, deprecations, shell
 
@@ -227,7 +274,7 @@ rows inside adapter pages.
 
 - [ ] Profile Identity, Content (incl. Attachments (Beta) and Excluded
       directories), Destination, Authentication & Delivery as groups of
-      `control` rows with `profile.<id>.*` keys and the §3 on-set hooks.
+      `control` rows with `profile.<ref>.*` keys and the §3 on-set hooks.
 - [ ] AWS-only `visible` predicates; credential-mode-dependent rows.
 - [ ] Home-note picker: `control: { type: 'file' }` if it filters to Markdown
       acceptably, otherwise keep `HomeNoteSuggestModal` behind an `action` row.
@@ -280,14 +327,12 @@ rows inside adapter pages.
 
 ## Risks
 
-- **`update()` resets navigation** (P0). Mitigation: prefer `refreshDomState()`.
-  Restructure the definitions so visibility predicates, not changes to the
-  definition list, handle most changes.
-- **Save churn.** If `text` controls write per keystroke, a debounce in
-  `setControlValue` keeps `saveSettings` (and its side effects, such as the
-  publish indicators refresh) from running on every character.
-- **Deep link loss** (P0). If no API opens a sub-page, the "configure
-  profile" notice degrades to opening the CPN tab root.
+- **`update()` resets navigation**: resolved in P0, it doesn't. It does
+  re-find pages by name, which the stable-name snapshot (§4) handles.
+- **Save churn.** `text` controls write per keystroke (P0); the debounce in
+  `setControlValue` keeps `saveSettings` from running on every character.
+- **Deep link loss**: confirmed (P0, public API only). The "configure
+  profile" notice opens the CPN tab root and names the profile.
 - **Harness drift.** Obsidian 1.13+ opens settings in a popout window by
   default; the e2e harness already forces `settingsPopoutWindow: false`
   (`ensureAppConfig`), and the new tests must keep relying on that.
