@@ -322,15 +322,17 @@ The unused `HomeNoteSuggestModal` is deleted.
 
 ### P5: Cleanup
 
-- [ ] Remove `SettingsContext.createSection`, `rerenderAll`, `rerenderProfile`,
+- [x] Remove `SettingsContext.createSection`, `rerenderAll`, `rerenderProfile`,
       `updateProfileDropdownLabel` (replace remaining callers with
       `tab.update()` / `tab.refreshDomState()`), and `LegacyPage`.
-- [ ] Drop `SettingsUiState.activeTab` / `collapsedSections` and strip them on
-      load (§5).
-- [ ] Delete the CSS for `.cpn-settings-tabs`, `.cpn-settings-tab*`,
+- [x] Drop `SettingsUiState.activeTab` / `collapsedSections` and strip them on
+      load (§5). *(No other fields remained, so `SettingsUiState`, `SettingsTab`
+      and `settings.settingsUiState` are gone from the types; `migrateSettings`
+      strips the two keys from saved data and drops the object if empty.)*
+- [x] Delete the CSS for `.cpn-settings-tabs`, `.cpn-settings-tab*`,
       `.cpn-settings-section*`, `.cpn-active-profile-container`; keep any rules
       still used by `render` rows.
-- [ ] `docs/settings.md` describes the new page/group layout, with setting
+- [x] `docs/settings.md` describes the new page/group layout, with setting
       names unchanged.
 
 ## Tests

@@ -17,7 +17,7 @@
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
-import { waitForSelector } from "../lib/test-helpers";
+import { closeSettings, openCpnSettings } from "../lib/test-helpers";
 
 // ---------------------------------------------------------------------------
 // Mock data
@@ -40,36 +40,18 @@ const MOCK_AWS_PROFILE = "cpn-dev";
 
 async function openPluginSettings(ctx: TestContext): Promise<boolean> {
 	const { page } = ctx;
-
-	// Open settings via Cmd+,
-	await page.keyboard.press("Meta+,");
-	await page.waitForTimeout(1500);
-
-	// Look for the settings modal
-	const settingsModal = await waitForSelector(page, ".vertical-tab-header", 5000);
-	if (!settingsModal) {
-		ctx.fail("Open plugin settings", "Settings modal did not appear after Cmd+,");
+	// Fresh render from current settings: close, reopen, step into profile 0.
+	await closeSettings(page);
+	const name = await page.evaluate(() =>
+		(window as any).app?.plugins?.plugins?.["commonplace-notes"]?.settings?.publishingProfiles?.[0]?.name as string | undefined);
+	try {
+		if (!name) throw new Error("profile 0 has no name");
+		await openCpnSettings(page, [name]);
+	} catch (err) {
+		ctx.fail("Open plugin settings", `Could not open the profile settings page: ${String(err)}`);
 		return false;
 	}
-
-	// Find and click the "Commonplace Notes" tab in the left sidebar
-	const found = await page.evaluate(() => {
-		const allTabs = document.querySelectorAll(".vertical-tab-nav-item");
-		for (const tab of allTabs) {
-			if (tab.textContent?.includes("Commonplace Notes")) {
-				(tab as HTMLElement).click();
-				return true;
-			}
-		}
-		return false;
-	});
-
-	if (!found) {
-		ctx.fail("Open plugin settings", "Could not find 'Commonplace Notes' tab in settings sidebar");
-		return false;
-	}
-
-	await page.waitForTimeout(800);
+	await page.waitForTimeout(500);
 	return true;
 }
 
@@ -139,27 +121,13 @@ async function testSettingsTabShowsInfraSection(ctx: TestContext): Promise<void>
 	if (!opened) return;
 
 	// Look for the Infrastructure section heading
-	const found = await page.evaluate(() => {
-		const headings = document.querySelectorAll(".cpn-settings-section-heading");
-		for (const h of headings) {
-			if (h.textContent?.includes("Infrastructure")) return true;
-		}
-		// Fallback: check for any h4 containing "Infrastructure"
-		const h4s = document.querySelectorAll("h4");
-		for (const h of h4s) {
-			if (h.textContent?.includes("Infrastructure")) return true;
-		}
-		return false;
-	});
-
-	if (!found) {
-		// Dump what we can see for debugging
-		const visibleSections = await page.evaluate(() => {
-			const headings = document.querySelectorAll("h4");
-			return Array.from(headings).map(h => h.textContent?.trim()).filter(Boolean);
-		});
+	// Group headings on the profile page.
+	const headings = await page.evaluate(() =>
+		Array.from(document.querySelectorAll(".modal.mod-settings .setting-item-heading .setting-item-name"))
+			.map(h => h.textContent?.trim() ?? ""));
+	if (!headings.includes("Infrastructure")) {
 		ctx.fail("Infrastructure section visible",
-			`Could not find 'Infrastructure' heading. Visible h4s: [${visibleSections.join(", ")}]`);
+			`Could not find the 'Infrastructure' group. Headings: [${headings.join(", ")}]`);
 		return;
 	}
 

@@ -15,7 +15,7 @@
  */
 
 import { runTest, type TestContext } from "../lib/test-harness";
-import { waitForSelector } from "../lib/test-helpers";
+import { closeSettings, openCpnSettings } from "../lib/test-helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,33 +23,18 @@ import { waitForSelector } from "../lib/test-helpers";
 
 async function openPluginSettings(ctx: TestContext): Promise<boolean> {
 	const { page } = ctx;
-
-	await page.keyboard.press("Meta+,");
-	await page.waitForTimeout(1500);
-
-	const settingsModal = await waitForSelector(page, ".vertical-tab-header", 5000);
-	if (!settingsModal) {
-		ctx.fail("Open plugin settings", "Settings modal did not appear after Cmd+,");
+	// Fresh render from current settings: close, reopen, step into profile 0.
+	await closeSettings(page);
+	const name = await page.evaluate(() =>
+		(window as any).app?.plugins?.plugins?.["commonplace-notes"]?.settings?.publishingProfiles?.[0]?.name as string | undefined);
+	try {
+		if (!name) throw new Error("profile 0 has no name");
+		await openCpnSettings(page, [name]);
+	} catch (err) {
+		ctx.fail("Open plugin settings", `Could not open the profile settings page: ${String(err)}`);
 		return false;
 	}
-
-	const found = await page.evaluate(() => {
-		const allTabs = document.querySelectorAll(".vertical-tab-nav-item");
-		for (const tab of allTabs) {
-			if (tab.textContent?.includes("Commonplace Notes")) {
-				(tab as HTMLElement).click();
-				return true;
-			}
-		}
-		return false;
-	});
-
-	if (!found) {
-		ctx.fail("Open plugin settings", "Could not find 'Commonplace Notes' tab in settings sidebar");
-		return false;
-	}
-
-	await page.waitForTimeout(800);
+	await page.waitForTimeout(500);
 	return true;
 }
 
@@ -117,8 +102,12 @@ async function testUnlinkButtonVisibleForImported(ctx: TestContext): Promise<voi
 	const opened = await openPluginSettings(ctx);
 	if (!opened) return;
 
+	// Declarative rows hidden by their `visible` predicate stay in the DOM
+	// (display: none), so count only buttons that are shown.
 	const buttons = await page.evaluate(() =>
-		Array.from(document.querySelectorAll("button")).map(b => b.textContent?.trim()).filter(Boolean));
+		Array.from(document.querySelectorAll("button"))
+			.filter(b => b.offsetParent !== null)
+			.map(b => b.textContent?.trim()).filter(Boolean));
 	console.log(`  Visible buttons: [${buttons.join(", ")}]`);
 
 	const hasUnlink = buttons.some(b => b === "Unlink");
@@ -286,8 +275,12 @@ async function testDeployImportReappear(ctx: TestContext): Promise<void> {
 	const { page } = ctx;
 
 	await page.waitForTimeout(500);
+	// Declarative rows hidden by their `visible` predicate stay in the DOM
+	// (display: none), so count only buttons that are shown.
 	const buttons = await page.evaluate(() =>
-		Array.from(document.querySelectorAll("button")).map(b => b.textContent?.trim()).filter(Boolean));
+		Array.from(document.querySelectorAll("button"))
+			.filter(b => b.offsetParent !== null)
+			.map(b => b.textContent?.trim()).filter(Boolean));
 	console.log(`  Visible buttons: [${buttons.join(", ")}]`);
 
 	const hasDeploy = buttons.some(b => b?.includes("Deploy Infrastructure"));

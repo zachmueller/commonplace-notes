@@ -1223,6 +1223,17 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			}
 		}
 
+		// Settings-tab UI state from before the declarative tab (spec §5):
+		// Obsidian's page navigation replaced the custom tab bar and the
+		// collapsible sections whose state this stored.
+		const legacy = this.settings as CommonplaceNotesSettings & { settingsUiState?: Record<string, unknown> };
+		if (legacy.settingsUiState) {
+			delete legacy.settingsUiState.activeTab;
+			delete legacy.settingsUiState.collapsedSections;
+			if (Object.keys(legacy.settingsUiState).length === 0) delete legacy.settingsUiState;
+			needsSave = true;
+		}
+
 		if (needsSave) {
 			await this.saveData(this.settings);
 		}

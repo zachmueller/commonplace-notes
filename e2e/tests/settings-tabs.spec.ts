@@ -377,6 +377,26 @@ test.describe("Declarative settings tab", () => {
 		}
 	});
 
+	test("loading settings strips the retired tab-bar UI state", async ({ obsidianPage }) => {
+		await obsidianPage.waitForTimeout(5000);
+		const result = await obsidianPage.evaluate(async () => {
+			const plugin = (window as any).app.plugins.plugins["commonplace-notes"];
+			const reload = async (uiState: unknown) => {
+				plugin.settings.settingsUiState = uiState;
+				await plugin.saveSettings();
+				await plugin.loadSettings();
+				return (await plugin.loadData()).settingsUiState ?? null;
+			};
+			const onlyLegacy = await reload({ activeTab: "profiles", collapsedSections: { "Danger Zone": true } });
+			const withOther = await reload({ activeTab: "general", keep: 1 });
+			delete plugin.settings.settingsUiState;
+			await plugin.saveSettings();
+			plugin.settingTab.refresh();
+			return { onlyLegacy, withOther };
+		});
+		expect(result).toEqual({ onlyLegacy: null, withOther: { keep: 1 } });
+	});
+
 	test("settings search finds CPN rows", async ({ obsidianPage }) => {
 		await obsidianPage.waitForTimeout(5000);
 		await openCpnSettings(obsidianPage);

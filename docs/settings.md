@@ -3,6 +3,16 @@
 Open **Settings → Commonplace Notes**. This reference mirrors the tab's on-screen
 layout, top to bottom. Defaults are listed at the end.
 
+The tab uses Obsidian's own settings pages (Obsidian 1.13.1 or later). The root
+holds the General rows, links to the **Markdown parser** and **Note routing**
+pages, and the **Publishing profiles** list. Each profile opens as its own page
+of groups, with the less-used areas (**Theme color overrides**, **Named styles**,
+**Deploy hooks**, **Access groups**, **Danger Zone**) as sub-pages. Every row is
+also reachable from Obsidian's settings search (the search box at the top of
+Settings): search "S3 bucket", "Cognito" or "Base URL", and a result opens the
+page and highlights the row. Results are grouped under the page they sit on, so
+each profile's rows appear under that profile's name.
+
 <!-- SCREENSHOT: settings tab, General + Markdown parser sections -->
 
 ## General
@@ -21,11 +31,13 @@ layout, top to bottom. Defaults are listed at the end.
 
 ## Markdown parser
 
+A page under the General rows.
+
 - **CPN directory** — the vault folder for CPN extension files (default `cpn`).
   Parser stages live in `<dir>/parsers/`.
 - **Built-in stages** — one row per built-in parser stage, each with an **Open**
-  button (materialize the stage as an editable vault file, then open it) and, once
-  materialized, a **Reset** button (delete the vault file to restore the
+  icon (materialize the stage as an editable vault file, then open it) and, once
+  materialized, a **Reset** icon (delete the vault file to restore the
   built-in). Overridden stages are marked.
 - **Export all built-in stages** — materialize every stage to the vault at once.
 - A **Parser extension errors** row appears if any stage failed to load on the
@@ -33,10 +45,33 @@ layout, top to bottom. Defaults are listed at the end.
 
 Full guide: [Parser extensions](parser-extensions.md).
 
+## Note routing
+
+A page under the General rows.
+
+- **Title prompt** — when routing prompts to (re)name the note: **Always
+  prompt**, **Only if named "Untitled…"** (default), or **Never prompt**.
+  Options can override it.
+- **Built-in actions** — one row per built-in routing action, with the same
+  **Open** / **Reset** icons as parser stages.
+- **Routing options** — one row per built-in option, likewise, plus **Export
+  all routing files**.
+- A **Routing errors** row appears if any routing file failed to load on the
+  last run.
+
+Actions and options live in `<cpn-dir>/routes/`.
+
 ## Publishing profiles
 
-At the top: an **Active profile** dropdown and an **Add profile** button. The
-rest of this section configures the active profile, in these subsections:
+A list with one row per profile. Each row shows the site's domain (or the
+publish mechanism, if no base URL is set) and a warning icon when an AWS profile
+isn't set up yet (no bucket or region) or its last deploy failed. The **+**
+button in the list header adds a profile. Click a profile to open its page,
+which has the groups and sub-pages below.
+
+A renamed profile keeps its old name in the list and page title until you close
+and reopen Settings. Profiles are deleted from their **Danger Zone** page, not
+from the list.
 
 ### Profile Identity
 - **Profile name** — display name.
@@ -46,8 +81,10 @@ rest of this section configures the active profile, in these subsections:
   title/tab of notes that publish to this profile.
 
 ### Content
-- **Home Page** — the note that serves as the site's home page (with a Browse
-  picker).
+- **Home Page** — the note that serves as the site's home page. The picker
+  suggests Markdown notes outside the excluded directories, and a note this
+  profile doesn't publish (its `cpn-publish-contexts` lacks the profile ID) is
+  rejected with a message.
 - **Include site-wide content search** (`publishContentIndex`) — upload a content
   index so the published site has search.
 - **Obscure wikilinks in published Markdown** (`obscureRawWikilinks`, default on)
@@ -144,14 +181,23 @@ longer excluded, so move them into an excluded folder. It runs once per profile.
 
 ### Destination
 - **Publish mechanism** — **AWS** (primary) or **Local** (minimal/experimental).
-  The four subsections below appear only for **AWS** profiles.
+  Infrastructure, Authentication & Delivery, Site Customization and Deploy
+  hooks appear only for **AWS** profiles; switching to Local hides them at once.
 - **Base URL** — the site's base URL, used to build copied links.
 - *(AWS)* **S3 bucket name**, **S3 prefix** (optional path within the bucket).
 
 ### Infrastructure *(AWS only)*
 Status badge, deployed stack name/region/domain, origin-access method, and
-actions to **Deploy Infrastructure**, **Import existing stack**, or (once
-deployed) view outputs. See [Infrastructure deployment](infrastructure-deployment.md).
+actions to **Deploy Infrastructure**, **Import existing deployment**, or (once
+deployed) **Sync settings from stack**, **Manage DNS**, and **Unlink from AWS
+backend**. Rows that depend on the deployment appear once relevant: **Auth
+Lambda@Edge**, **Bucket cleanup rule**, **Password gate**, **Cognito gate**,
+**Sign-in session length**, **Google authorized JavaScript origin / redirect
+URI** (copyable), **Sync Google sign-in with site domain**, and the
+**Commenting** rows. The Cognito gate, session length and bucket cleanup rows
+show a live log while they run, which stays visible if the page redraws. See
+[Infrastructure deployment](infrastructure-deployment.md) and
+[Authentication & access](auth-and-access.md).
 
 ### Authentication & Delivery *(AWS only)*
 - **AWS account ID**, **AWS profile**, **AWS region**.
@@ -162,11 +208,9 @@ deployed) view outputs. See [Infrastructure deployment](infrastructure-deploymen
 - **CloudFront invalidation scheme** — `individual` / `connected` / `sinceLast` /
   `all` / `manual` (see the [publishing model](publishing-model.md#publish-mechanism-and-cache-invalidation)).
 - **CloudFront Distribution ID**.
-- **Auth Lambda@Edge**, **Google authorized JavaScript origin / redirect URI**
-  (copyable), **Commenting** status, **Sync settings from stack**, and **Manage
-  DNS** appear here once relevant. See [Authentication & access](auth-and-access.md).
-- **AWS CLI Path** — *deprecated*, shown only if a legacy value is present; the
-  plugin uses the AWS SDK directly now. Safe to clear.
+- **AWS CLI path (optional)** — shown in SDK mode: the `aws` binary to fall back
+  on for `aws sso login` when SDK-native renewal can't refresh an expired SSO
+  session.
 
 ### Site Customization *(AWS only)*
 - **Push site assets** — upload `index.html`, styles, scripts, and config to S3
@@ -174,9 +218,12 @@ deployed) view outputs. See [Infrastructure deployment](infrastructure-deploymen
   they've changed since the last push (after a plugin update, a site-look
   change, or an asset snippet edit), so this button is only needed to apply a
   change without publishing.
-- **Site title**, **Font family**, **Panel width** (default **600** px),
-  **Header links**, and collapsible **Theme color overrides** (light/dark).
-- **Named styles (per-note)** — see below.
+- **Site title**, **Font family**, **Panel width** (default **600** px).
+- **Header links** — a list of label + URL rows: **+** adds one, the **×**
+  removes it, and rows can be dragged to reorder.
+- **Theme color overrides** — a sub-page with light and dark color pickers. Each
+  picker's **Restore default** button returns it to the theme color.
+- **Named styles** — a sub-page; see below.
 - For raw HTML/CSS/JS injection beyond these, see
   [Site asset customizations](site-asset-customizations.md).
 
@@ -186,10 +233,11 @@ A **named style** lets an individual note opt into a different look. Set
 `cpn-style: <name>` in the note's frontmatter, and the site applies that style's
 overrides to only that note's panel — everything else keeps the site theme.
 
-Define styles under **Named styles (per-note)** in a profile's Site Customization.
-Each style has:
+Define styles on the **Named styles** sub-page in a profile's Site Customization.
+**+** adds a style; each style opens as its own page with:
 
 - **Style name** — the value a note puts in `cpn-style` (e.g. `cpn-style: ai`).
+  Applied when you leave the field; an empty or duplicate name is refused.
 - **Font family** — optional; overrides the site font for these notes.
 - **Light / Dark** — the same five color overrides as the global theme
   (background, text, link, border), layered on top of it. A style only declares
@@ -216,21 +264,32 @@ Each style has:
     at-rules like `@keyframes` / `@font-face` can't be nested; put those in the
     global `extra-css` slot instead.
 
+**Remove style** at the bottom of the page deletes it.
+
 This pairs with [custom parser stages](parser-extensions.md): a stage can read
 `context.noteStyle` and emit custom classes, which you then style here per group.
 
 A note referencing an undefined style name falls back to default styling. Editing
 a style ships on the next publish (or **Push site assets**).
 
-### Access groups *(AWS only)*
-Groups a note can list in its `cpn-access-groups` frontmatter to restrict who can
+### Deploy hooks *(AWS only)*
+A sub-page for custom code that runs around the profile's full-stack deploy: the
+profile's hooks folder, **Validate hooks** (discover and compile them without
+deploying), and **Export example hook**. See
+[Infrastructure deployment](infrastructure-deployment.md).
+
+### Access groups
+A sub-page. Groups a note can list in its `cpn-access-groups` frontmatter to restrict who can
 read it. See [per-note access groups](auth-and-access.md#per-note-access-groups).
 
 - **Status** — whether this profile can publish gated notes, and why not if it
   can't.
-- **Group name**, **Description**, **Members** (one email per line). Renaming a
-  group doesn't edit notes; notes still listing the old name stop publishing.
-- **Remove** — deletes the group's published files from the site.
+- **Groups** — a list; **+** adds one, and each group opens as its own page with
+  **Group name**, **Description** and **Members** (one email per line; entries
+  that aren't email addresses are flagged). Renaming a group doesn't edit notes;
+  notes still listing the old name stop publishing.
+- **Remove group** (on the group's page) — after a confirmation, deletes the
+  group's published files from the site.
 - **Sync membership now** — upload member lists immediately (also done on every
   publish).
 - **My edge function enforces access groups** — `byo` read gate only.
@@ -241,11 +300,16 @@ read it. See [per-note access groups](auth-and-access.md#per-note-access-groups)
   [access groups on a public site](auth-and-access.md#per-note-access-groups-on-a-public-site).
 
 ### Danger Zone
-- **Destroy infrastructure** — tear down the profile's stacks (bucket retained).
+A sub-page.
+
+- **Destroy infrastructure** — after a confirmation, tear down the profile's
+  stacks (buckets retained unless you tick **Also delete S3 data**).
 - **Force-clean leftover infrastructure** — appears after a failed/interrupted
   teardown to finish removing leftover stacks.
-- **Delete profile** — click-to-confirm; the last remaining profile can't be
-  deleted.
+- **Clean up orphaned edge resources** — appears while a force-clean's orphaned
+  Lambda@Edge resources are waiting for CloudFront to release them.
+- **Delete profile** — click twice to confirm; the last remaining profile can't
+  be deleted.
 
 ## Defaults
 

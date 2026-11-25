@@ -29,7 +29,6 @@ export function attachmentsGroup(ctx: DefinitionContext, profile: PublishingProf
 	return {
 		type: 'group',
 		heading: 'Attachments (Beta)',
-		cls: 'cpn-attachments-group',
 		items: [
 			hintRow('Beta: attachment publishing is new and may change. Publish the images, audio, video and other files your notes link to. '
 				+ 'Each file is readable by exactly the readers who can read a note that references it. Attachments publish on AWS profiles only.'),

@@ -1,13 +1,12 @@
 import { App, Debouncer, Notice, PluginSettingTab, SettingDefinitionItem, SettingDefinitionPage, debounce } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
-import { PublishingProfile, SettingsUiState } from '../types';
+import { PublishingProfile } from '../types';
 import { Logger } from '../utils/logging';
-import { DefinitionContext, SettingsContext } from './context';
+import { DefinitionContext } from './context';
 import { DELETE, GENERAL_CODECS, KeyCodec, PROFILE_CODECS, findCodec } from './codecs';
 import { RefRegistry, buildGeneralKey, buildProfileKey, deleteAtPath, getAtPath, parseKey, setAtPath } from './keys';
 import { PageNameSnapshot } from './pageNames';
 import { guardRenders } from './guard';
-import { LegacyPage } from './legacyPage';
 import { generalDefinitions } from './tabs/generalTab';
 import { parserDefinitions } from './tabs/parserTab';
 import { routingDefinitions } from './tabs/routingTab';
@@ -35,8 +34,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 	private readonly names = new PageNameSnapshot();
 	private readonly codecs: KeyCodec[] = [...GENERAL_CODECS, ...PROFILE_CODECS];
 	private readonly debouncedSave: Debouncer<[], void>;
-	/** The legacy adapter page currently on screen, if any (redrawn by refresh()). */
-	private shownLegacyPage: LegacyPage | null = null;
 
 	constructor(app: App, plugin: CommonplaceNotesPlugin) {
 		super(app, plugin);
@@ -165,12 +162,11 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 	/**
 	 * Rebuild the definitions (structure, page names, displayValue/status) and
-	 * re-render the current page, including a legacy adapter page, which
-	 * `update()` alone does not redraw.
+	 * re-render the current page in place. Plugin code outside the tab (e.g.
+	 * the deployment wizard) calls this after changing a profile.
 	 */
 	refresh(): void {
 		this.update();
-		this.shownLegacyPage?.display();
 	}
 
 	hide(): void {
@@ -180,58 +176,6 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 		// (spec §4). Rebuild after Obsidian has finished switching away.
 		this.names.clear();
 		window.setTimeout(() => this.update(), 0);
-	}
-
-	// --- Legacy adapters (removed as areas are converted) ---------------------
-
-	private legacyPage(render: (el: HTMLElement) => void): LegacyPage {
-		return new LegacyPage(
-			el => render(el),
-			(page, shown) => {
-				if (shown) this.shownLegacyPage = page;
-				else if (this.shownLegacyPage === page) this.shownLegacyPage = null;
-			},
-		);
-	}
-
-	/** Context for the legacy renderers; re-renders target the adapter on screen. */
-	private legacyContext(): SettingsContext {
-		return {
-			app: this.app,
-			plugin: this.plugin,
-			rerenderAll: () => this.refresh(),
-			rerenderProfile: () => this.shownLegacyPage?.display(),
-			createSection: (parent, title, opts) => this.createSection(parent, title, opts),
-			updateProfileDropdownLabel: () => { /* no dropdown; names refresh on hide (spec §4) */ },
-		};
-	}
-
-	/**
-	 * Build a collapsible subsection as a native <details>. Open state is keyed
-	 * by title and persisted, so it survives the re-renders many handlers
-	 * trigger. Content goes directly into the returned <details> (after the
-	 * <summary>).
-	 */
-	private createSection(parent: HTMLElement, title: string, opts?: { defaultCollapsed?: boolean }): HTMLElement {
-		const collapsed = this.ensureUiState().collapsedSections?.[title]
-			?? (opts?.defaultCollapsed ?? false);
-		const details = parent.createEl('details', { cls: 'cpn-settings-section' });
-		details.open = !collapsed;
-		details.createEl('summary', { cls: 'cpn-settings-section-summary', text: title });
-		details.addEventListener('toggle', () => {
-			const ui = this.ensureUiState();
-			(ui.collapsedSections ??= {})[title] = !details.open;
-			this.debouncedSave();
-		});
-		return details;
-	}
-
-	/** Lazily create and return the persisted Settings-tab UI state. */
-	private ensureUiState(): SettingsUiState {
-		if (!this.plugin.settings.settingsUiState) {
-			this.plugin.settings.settingsUiState = {};
-		}
-		return this.plugin.settings.settingsUiState;
 	}
 
 	// --- Profiles -------------------------------------------------------------
