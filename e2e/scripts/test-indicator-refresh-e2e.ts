@@ -96,7 +96,16 @@ async function tests(ctx: TestContext): Promise<void> {
 			ctx.fail("open note change refreshes only that note", `${JSON.stringify(open)}; indicator containers: ${count}`);
 		}
 	} finally {
-		await ctx.page.evaluate(() => (window as any).__cpnIndicatorRestore?.());
+		// Restore the spy and close the tab this test opened, so the workspace
+		// doesn't keep an empty leaf once the note is cleaned up (other tests
+		// rely on the main area's layout).
+		await ctx.page.evaluate((notePath) => {
+			const w = window as any;
+			w.__cpnIndicatorRestore?.();
+			for (const leaf of w.app.workspace.getLeavesOfType("markdown")) {
+				if (leaf.view?.file?.path === notePath) leaf.detach();
+			}
+		}, OPEN);
 	}
 }
 
