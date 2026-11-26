@@ -19,6 +19,7 @@
 		"test:excluded-directories-e2e": "npx tsx e2e/scripts/test-excluded-directories-e2e.ts",
 		"test:profile-init-e2e": "npx tsx e2e/scripts/test-profile-init-e2e.ts",
 		"test:indicator-refresh-e2e": "npx tsx e2e/scripts/test-indicator-refresh-e2e.ts",
+		"test:layout-ready-e2e": "npx tsx e2e/scripts/test-layout-ready-e2e.ts",
 		"test:obscure-wikilinks-e2e": "npx tsx e2e/scripts/test-obscure-wikilinks-e2e.ts",
 		"test:section-anchors": "npx tsx e2e/scripts/test-section-anchors.ts",
 		"test:transclusions-runtime": "npx tsx e2e/scripts/test-transclusions-runtime.ts",

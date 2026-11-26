@@ -76,8 +76,10 @@ export class RecentCommentsView extends ItemView {
 		this.render();
 
 		// Opportunistic auto-refresh: Recent mode only, and only when the active
-		// profile's feed is stale. Active-note mode never auto-fetches.
-		if (this.mode === 'recent' && profile) {
+		// profile's feed is stale. Active-note mode never auto-fetches. A panel
+		// restored during startup leaves this to the plugin's delayed startup
+		// refresh (main.ts), so the fetch doesn't run while Obsidian is loading.
+		if (this.mode === 'recent' && profile && this.plugin.startupSettled) {
 			const stale = Date.now() - (profile.commentsLastRefreshed ?? 0) > STALE_MS;
 			if (stale) await this.refresh();
 		}
@@ -104,7 +106,7 @@ export class RecentCommentsView extends ItemView {
 	}
 
 	/**
-	 * Public entry point for the layout-ready stale check in main.ts: refresh
+	 * Public entry point for the delayed startup stale check in main.ts: refresh
 	 * only if the active profile's feed is >=8h stale. Safe to call repeatedly.
 	 * Recent mode only — active-note mode never auto-fetches (a panel restored in
 	 * active-note mode must not spend a DynamoDB query at startup).

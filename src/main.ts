@@ -44,6 +44,13 @@ import {
 	upgradeExcludedDirectories
 } from './utils/excludedDirectories';
 
+/**
+ * After layout-ready, wait this long before refreshing a restored, stale
+ * Comments panel, so its network fetch and vault lookups run once startup has
+ * settled rather than alongside it.
+ */
+const STARTUP_COMMENTS_REFRESH_DELAY_MS = 5_000;
+
 // defining interfaces to facilitate deregistering commands
 interface Commands {
 	removeCommand(id: string): void;
@@ -116,6 +123,13 @@ export default class CommonplaceNotesPlugin extends Plugin {
 	// Startup timing marks (src/utils/startupTiming.ts), read by the e2e timing
 	// harness via `startupTimings` and logged in one line when debugMode is on.
 	private readonly startupTimer = new StartupTimer();
+
+	/**
+	 * False until the delayed startup refresh of the Comments panel has run.
+	 * Until then a panel opening during startup leaves its stale-feed refresh
+	 * to that delayed pass (RecentCommentsView.onOpen).
+	 */
+	startupSettled = false;
 	get startupTimings(): StartupTimings {
 		return this.startupTimer.timings();
 	}
@@ -256,34 +270,55 @@ export default class CommonplaceNotesPlugin extends Plugin {
 				Logger.error('Could not initialize profile folders:', err),
 			);
 
-			try {
-				// Before anything reads exclusions (indicators, publishing). Needs the
-				// vault's file list, so it runs here rather than in loadSettings.
-				await this.upgradeExcludedDirectoriesOnce();
-				this.startupTimer.mark('layout.upgradeExcludedDirs');
+			// Each step is isolated: one failing logs and the rest still run.
+			// Before anything reads exclusions (indicators, publishing). Needs the
+			// vault's file list, so it runs here rather than in loadSettings.
+			await this.layoutStep('upgradeExcludedDirs', () => this.upgradeExcludedDirectoriesOnce());
 
-				Logger.debug('Layout ready, initializing indicators');
-				await this.indicatorManager.updateAllVisibleIndicators();
-				this.startupTimer.mark('layout.indicators');
+			Logger.debug('Layout ready, initializing indicators');
+			await this.layoutStep('indicators', () => this.indicatorManager.updateAllVisibleIndicators());
 
-				// If the panel was restored open in this workspace, refresh it once when
-				// its data is >=8h stale. The view itself no-ops when the feed is fresh.
-				for (const leaf of this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW)) {
-					const view = leaf.view;
-					if (view instanceof RecentCommentsView) await view.refreshIfStale();
-				}
-				this.startupTimer.mark('layout.comments');
+			// If the panel was restored open in this workspace, refresh it once when
+			// its data is >=8h stale (the view no-ops when the feed is fresh). In the
+			// background, after a short delay, so nothing here waits on the network.
+			await this.layoutStep('comments', () => this.scheduleStartupCommentsRefresh());
 
-				// Opportunistically retry deferred cleanup of orphaned Lambda@Edge
-				// resources from a prior force-clean — hours have likely passed since the
-				// last session, so CloudFront may finally have removed the replicas.
-				// Fire-and-forget so a slow/failed AWS call never blocks startup.
-				this.sweepPendingEdgeCleanup();
-				this.startupTimer.mark('layout.edgeSweep');
-			} finally {
-				Logger.debug(`Startup timing: ${this.startupTimer.summary()}`);
-			}
+			// Opportunistically retry deferred cleanup of orphaned Lambda@Edge
+			// resources from a prior force-clean — hours have likely passed since the
+			// last session, so CloudFront may finally have removed the replicas.
+			// Fire-and-forget so a slow/failed AWS call never blocks startup.
+			await this.layoutStep('edgeSweep', () => this.sweepPendingEdgeCleanup());
+
+			Logger.debug(`Startup timing: ${this.startupTimer.summary()}`);
 		});
+	}
+
+	/** Run one layout-ready startup step; a failure is logged, not propagated. */
+	private async layoutStep(label: string, step: () => void | Promise<void>): Promise<void> {
+		try {
+			await step();
+		} catch (err) {
+			Logger.error(`Startup step "${label}" failed:`, err);
+		}
+		this.startupTimer.mark(`layout.${label}`);
+	}
+
+	/**
+	 * After STARTUP_COMMENTS_REFRESH_DELAY_MS, mark startup settled and refresh
+	 * any restored Comments panel whose feed is stale. Runs in the background;
+	 * failures are logged.
+	 */
+	private scheduleStartupCommentsRefresh(): void {
+		const timer = window.setTimeout(() => {
+			this.startupSettled = true;
+			for (const leaf of this.app.workspace.getLeavesOfType(RECENT_COMMENTS_VIEW)) {
+				const view = leaf.view;
+				if (view instanceof RecentCommentsView) {
+					view.refreshIfStale().catch(err => Logger.warn('Could not refresh the Comments panel:', err));
+				}
+			}
+		}, STARTUP_COMMENTS_REFRESH_DELAY_MS);
+		this.register(() => window.clearTimeout(timer));
 	}
 
 	/** Fire-and-forget retry of deferred Lambda@Edge cleanup for every profile with
