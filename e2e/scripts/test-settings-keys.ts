@@ -117,6 +117,8 @@ same(uniqueName('X', new Set()), 'X', 'unique: free');
 same(uniqueName('X', new Set(['X'])), 'X (2)', 'unique: suffix');
 same(uniqueName('X', new Set(['X', 'X (2)'])), 'X (3)', 'unique: next suffix');
 same(uniqueName('  ', new Set()), 'Untitled', 'unique: blank');
+same(uniqueName(undefined, new Set()), 'Untitled', 'unique: missing name (malformed data.json)');
+same(uniqueName(42, new Set(['Untitled'])), 'Untitled (2)', 'unique: non-string name');
 
 {
 	const snap = new PageNameSnapshot();

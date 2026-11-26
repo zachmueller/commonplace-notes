@@ -5,7 +5,7 @@ import { Logger } from '../utils/logging';
 import { DefinitionContext } from './context';
 import { DELETE, GENERAL_CODECS, KeyCodec, PROFILE_CODECS, findCodec } from './codecs';
 import { RefRegistry, buildGeneralKey, buildProfileKey, deleteAtPath, getAtPath, parseKey, setAtPath } from './keys';
-import { PageNameSnapshot } from './pageNames';
+import { NamedItem, PageNameSnapshot } from './pageNames';
 import { guardRenders } from './guard';
 import { generalDefinitions } from './tabs/generalTab';
 import { parserDefinitions } from './tabs/parserTab';
@@ -72,7 +72,18 @@ export class CommonplaceNotesSettingTab extends PluginSettingTab {
 
 	private profilesList(): SettingDefinitionItem {
 		const profiles = this.plugin.settings.publishingProfiles;
-		const named = this.names.resolve(PROFILES_SCOPE, profiles.map(p => ({ ref: this.refs.refFor(p), name: p.name })));
+		// Each profile on its own: one malformed entry in data.json is logged and
+		// left out rather than throwing out of getSettingDefinitions() (which runs
+		// inside addSettingTab during onload, so it would stop the plugin loading).
+		const items: NamedItem[] = [];
+		for (const p of profiles) {
+			try {
+				items.push({ ref: this.refs.refFor(p), name: p.name });
+			} catch (error) {
+				Logger.error('Leaving a malformed publishing profile out of settings:', error);
+			}
+		}
+		const named = this.names.resolve(PROFILES_SCOPE, items);
 		const ctx = this.definitionContext();
 		const pages: SettingDefinitionPage[] = named.map(({ ref, name }) => {
 			const profile = this.refs.resolve<PublishingProfile>(ref)!;

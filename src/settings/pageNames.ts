@@ -27,9 +27,12 @@ interface Entry {
 	removed: boolean;
 }
 
-/** `base`, or `base (2)`, `base (3)`, ... whichever is not in `taken`. */
-export function uniqueName(base: string, taken: ReadonlySet<string>): string {
-	const name = base.trim() || 'Untitled';
+/**
+ * `base`, or `base (2)`, `base (3)`, ... whichever is not in `taken`. A blank
+ * or non-string `base` (malformed data.json) becomes "Untitled".
+ */
+export function uniqueName(base: unknown, taken: ReadonlySet<string>): string {
+	const name = (typeof base === 'string' ? base.trim() : '') || 'Untitled';
 	if (!taken.has(name)) return name;
 	for (let n = 2; ; n++) {
 		const candidate = `${name} (${n})`;
