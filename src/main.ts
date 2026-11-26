@@ -223,9 +223,6 @@ export default class CommonplaceNotesPlugin extends Plugin {
 
 		this.startupTimer.mark('events');
 
-		await this.profileManager.initialize();
-		this.startupTimer.mark('profileInit');
-
 		this.settingTab = new CommonplaceNotesSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 		this.startupTimer.mark('settingTab');
@@ -247,6 +244,15 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(async () => {
 			// Time between onload returning and layout ready (not CPN's work).
 			this.startupTimer.mark('layoutWait');
+
+			// Ensure each profile's folders exist (profiles/<id>/mapping, staged-*,
+			// publish-history.json). Nothing at startup reads them and publishing
+			// ensures them itself, so this runs in the background instead of
+			// delaying onload, and a failure is logged rather than aborting it.
+			this.profileManager.initialize().catch(err =>
+				Logger.error('Could not initialize profile folders:', err),
+			);
+
 			try {
 				// Before anything reads exclusions (indicators, publishing). Needs the
 				// vault's file list, so it runs here rather than in loadSettings.

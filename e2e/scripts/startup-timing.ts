@@ -332,6 +332,7 @@ function stat(values: number[]): Stat {
 
 /** onload's own steps: everything from `evaluate` through `registration`. */
 const ONLOAD_STEPS = ["loadSettings", "managers", "events", "profileInit", "settingTab", "commands", "registration"];
+// (profileInit: before item 2 moved profile-folder setup to onLayoutReady; absent now, counted as 0.)
 
 interface ProfileCountReport {
 	profiles: number;
