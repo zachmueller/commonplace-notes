@@ -93,7 +93,10 @@ export class AttachmentManager {
 		return statFile(this.fullPath(vaultPath));
 	}
 
-	/** The per-machine hash cache, loaded on first use. */
+	/**
+	 * The per-machine hash cache, loaded on first use. Callers always get it
+	 * fully loaded: concurrent first calls share the one load.
+	 */
 	async hashCache(): Promise<AttachmentHashCache> {
 		if (!this.cache) {
 			const app = this.plugin.app;
@@ -103,8 +106,8 @@ export class AttachmentManager {
 				() => crypto.randomUUID(),
 			);
 			this.cache = new AttachmentHashCache(this.store, hashCachePath(this.plugin.profileManager.getPluginDir(), machineId));
-			await this.cache.load();
 		}
+		await this.cache.load();
 		return this.cache;
 	}
 

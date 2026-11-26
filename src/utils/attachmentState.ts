@@ -103,16 +103,20 @@ export interface HashedFile {
  */
 export class AttachmentHashCache {
 	private entries: Record<string, HashCacheEntry> = {};
-	private loaded = false;
+	/** The first load, shared by every caller so none runs ahead of it. */
+	private loading: Promise<void> | null = null;
 	private dirty = false;
 	/** Concurrent lookups of one path share one hash. */
 	private inflight = new Map<string, Promise<HashedFile | null>>();
 
 	constructor(private store: TextStore, private path: string) {}
 
-	async load(): Promise<void> {
-		if (this.loaded) return;
-		this.loaded = true;
+	load(): Promise<void> {
+		this.loading ??= this.read();
+		return this.loading;
+	}
+
+	private async read(): Promise<void> {
 		try {
 			const text = await this.store.read(this.path);
 			const parsed: unknown = text ? JSON.parse(text) : {};

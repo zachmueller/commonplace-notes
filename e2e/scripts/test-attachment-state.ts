@@ -15,6 +15,8 @@
  *      next lookup re-hashes.
  *   5. The streamed hash matches crypto.subtle.digest on the same bytes.
  *   6. Two machine IDs use two cache files, and neither reads the other's.
+ *  6b. Concurrent first load: the file is read once, and a lookup made while
+ *      it loads waits for it, so its entry isn't overwritten by the load.
  *   7. Machine ID: reused when stored, created and saved otherwise.
  *   8. staged-attachments.json round-trip, ignoring malformed entries.
  *   9. Rebuild (P3 §3): `refs` is a union with the local file; `uploaded`
@@ -193,6 +195,21 @@ async function main(): Promise<void> {
 			const m1again = new st.AttachmentHashCache(shared, st.hashCachePath('plugin', 'm1'));
 			await m1again.load();
 			check('…and machine 1 doesn\'t read machine 2\'s', m1again.has('Media/song.mp3') && !m1again.has('Media/other.mp3'));
+		}
+
+		// 6b. Concurrent first load ---------------------------------------------------
+		{
+			const slow = memoryStore();
+			const slowPath = 'plugin/attachment-hash-cache.slow.json';
+			slow.files.set(slowPath, JSON.stringify({ 'Media/known.mp3': { size: 1, mtime: 1, ctime: 1, sha256: 'k' } }));
+			let reads = 0;
+			const read = slow.read;
+			slow.read = async p => { reads++; await sleep(50); return read(p); };
+			const c = new st.AttachmentHashCache(slow, slowPath);
+			const [, hashed] = await Promise.all([c.load(), c.hashOf('Media/song.mp3', file), c.load()]);
+			check('concurrent first load reads the file once', reads === 1, reads);
+			check('a lookup during the first load keeps its entry', !!hashed && c.has('Media/song.mp3'));
+			check('…and the loaded entries are there too', c.has('Media/known.mp3'));
 		}
 
 		// 7. Machine ID -----------------------------------------------------------------
