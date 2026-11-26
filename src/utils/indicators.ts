@@ -24,6 +24,13 @@ export class IndicatorManager {
 		}
 	}
 
+	/** Whether the file is open in a markdown leaf (and so shows indicators). */
+	isOpen(file: TFile): boolean {
+		return this.plugin.app.workspace.getLeavesOfType('markdown').some(
+			(leaf) => leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path,
+		);
+	}
+
 	async updateIndicators(file: TFile | null) {
 		try {
 			Logger.debug(`Starting indicator update for file: ${file?.path}`);

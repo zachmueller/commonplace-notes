@@ -179,13 +179,16 @@ export default class CommonplaceNotesPlugin extends Plugin {
 			})
 		);
 
-		// Refresh indicators upon frontmatter changes
+		// Refresh indicators upon frontmatter changes. Only the changed note's own
+		// indicators can change, and only an open note shows them, so a sync burst
+		// re-indexing many published notes does no indicator work for closed ones.
 		this.registerEvent(
 			this.app.metadataCache.on('changed', async (file) => {
 				const cache = this.app.metadataCache.getFileCache(file);
-				if (cache?.frontmatter && 'cpn-publish-contexts' in cache.frontmatter) {
-					Logger.debug('Publish contexts changed, updating indicators');
-					await this.indicatorManager.updateAllVisibleIndicators();
+				if (cache?.frontmatter && 'cpn-publish-contexts' in cache.frontmatter
+					&& this.indicatorManager.isOpen(file)) {
+					Logger.debug(`Publish contexts changed in ${file.path}, updating its indicators`);
+					await this.indicatorManager.updateIndicators(file);
 				}
 			})
 		);
