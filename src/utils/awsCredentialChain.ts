@@ -1,5 +1,5 @@
-import { fromEnv, fromIni, fromSSO } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
+import { awsSdk } from './awsModules';
 
 /**
  * Build a credential provider that walks the standard chain for a named AWS
@@ -16,15 +16,21 @@ import type { AwsCredentialIdentityProvider } from '@smithy/types';
  * sessions on the same Identity Center invalidates the other's token).
  */
 export function buildProfileCredentialProvider(awsProfile: string): AwsCredentialIdentityProvider {
-	const providers: AwsCredentialIdentityProvider[] = [
-		fromEnv(),
-		fromIni({ profile: awsProfile }),
-		fromSSO({ profile: awsProfile }),
-	];
+	// Built on first resolve, so the credential-providers module loads lazily
+	// (src/utils/awsModules.ts); once built, the same providers are reused.
+	let providers: Promise<AwsCredentialIdentityProvider[]> | undefined;
+	const chain = (): Promise<AwsCredentialIdentityProvider[]> => {
+		providers ??= awsSdk.credentialProviders().then(({ fromEnv, fromIni, fromSSO }) => [
+			fromEnv(),
+			fromIni({ profile: awsProfile }),
+			fromSSO({ profile: awsProfile }),
+		]);
+		return providers;
+	};
 
 	return async (identityProperties?: Record<string, unknown>) => {
 		let lastError: unknown;
-		for (const provider of providers) {
+		for (const provider of await chain()) {
 			try {
 				return await provider(identityProperties);
 			} catch (err) {

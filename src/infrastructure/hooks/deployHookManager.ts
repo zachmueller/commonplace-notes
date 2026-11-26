@@ -136,7 +136,7 @@ export class DeployHookManager {
 			const matching = (this.hooks ?? []).filter((h) => h.phase === phase);
 			if (matching.length === 0) return;
 
-			const aws = buildDeployHookAws(this.plugin, profile);
+			const aws = await buildDeployHookAws(this.plugin, profile);
 			const utils: DeployHookUtils = { logger: Logger };
 			const awsProfile = profile.awsSettings!.awsProfile;
 			const region = profile.awsSettings!.region;

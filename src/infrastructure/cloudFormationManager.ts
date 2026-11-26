@@ -1,42 +1,12 @@
-import {
-	CloudFormationClient,
-	Capability,
-	CreateStackCommand,
-	UpdateStackCommand,
-	UpdateStackCommandInput,
-	DeleteStackCommand,
-	DeletionMode,
-	DescribeStacksCommand,
-	DescribeStackEventsCommand,
-	ListStackResourcesCommand,
-	GetTemplateCommand,
-	Stack,
-} from '@aws-sdk/client-cloudformation';
-import {
-	ListObjectVersionsCommand,
-	DeleteObjectsCommand,
-	DeleteBucketCommand,
-	PutObjectCommand,
-	HeadObjectCommand,
-} from '@aws-sdk/client-s3';
-import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
-import { StartIngestionJobCommand } from '@aws-sdk/client-bedrock-agent';
-import {
-	ACMClient,
-	DescribeCertificateCommand,
-	ListCertificatesCommand,
-	KeyAlgorithm,
-} from '@aws-sdk/client-acm';
-import {
-	Route53Client,
-	ListHostedZonesCommand,
-	CreateHostedZoneCommand,
-} from '@aws-sdk/client-route-53';
-import { CloudFrontClient, GetDistributionConfigCommand } from '@aws-sdk/client-cloudfront';
+import type { Capability, CloudFormationClient, Stack, UpdateStackCommandInput } from '@aws-sdk/client-cloudformation';
+import type { ACMClient, KeyAlgorithm } from '@aws-sdk/client-acm';
+import type { Route53Client } from '@aws-sdk/client-route-53';
+import type { CloudFrontClient } from '@aws-sdk/client-cloudfront';
 import type { AwsCredentialIdentityProvider } from '@smithy/types';
 import type { OrphanedEdgeResource, PublishingProfile } from '../types';
 import type CommonplaceNotesPlugin from '../main';
 import { buildProfileCredentialProvider } from '../utils/awsCredentialChain';
+import { awsSdk } from '../utils/awsModules';
 import {
 	BOOTSTRAP_TEMPLATE,
 	CERTIFICATE_TEMPLATE,
@@ -286,6 +256,7 @@ export class CloudFormationManager {
 	 * deployment.
 	 */
 	private async recoverFailedStackBeforeCreate(client: CloudFormationClient, stackName: string): Promise<void> {
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
 		let status: string | undefined;
 		try {
 			const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
@@ -312,6 +283,7 @@ export class CloudFormationManager {
 	 *  the stack doesn't exist). Used to decide UsePreviousValue vs an explicit
 	 *  default for a param the current template introduces but the live stack lacks. */
 	private async getDeployedParameterKeys(client: CloudFormationClient, stackName: string): Promise<Set<string>> {
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
 		try {
 			const resp = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 			const params = resp.Stacks?.[0]?.Parameters || [];
@@ -325,6 +297,7 @@ export class CloudFormationManager {
 	/** Send an UpdateStack, swallowing the "No updates are to be performed" no-op
 	 *  so an idempotent re-run (same template + params) is treated as success. */
 	private async sendUpdateToleratingNoop(client: CloudFormationClient, input: UpdateStackCommandInput): Promise<void> {
+		const { UpdateStackCommand } = await awsSdk.cloudFormation();
 		try {
 			await client.send(new UpdateStackCommand(input));
 		} catch (err) {
@@ -372,6 +345,7 @@ export class CloudFormationManager {
 			profileId: string;
 		},
 	): Promise<string> {
+		const { CreateStackCommand, UpdateStackCommand, DescribeStacksCommand } = await awsSdk.cloudFormation();
 		// Probe the current status.
 		let status: string | undefined;
 		try {
@@ -428,7 +402,7 @@ export class CloudFormationManager {
 
 	async deployCertificateStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cert');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 
 		return this.createOrUpdateStack(client, stackName, {
 			templateBody: CERTIFICATE_TEMPLATE,
@@ -457,7 +431,7 @@ export class CloudFormationManager {
 	 */
 	async deployCognitoAuthStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cognito');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 
 		// On a re-run against a live pool, update via UsePreviousValue so the
 		// never-persisted Google client secret survives — only re-pass it when the
@@ -496,7 +470,7 @@ export class CloudFormationManager {
 	 */
 	async updateCognitoAuthStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'cognito');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 
 		await this.sendUpdateToleratingNoop(client, {
 			StackName: stackName,
@@ -513,7 +487,8 @@ export class CloudFormationManager {
 	}
 
 	async getCognitoAuthOutputs(stackName: string, profile: PublishingProfile): Promise<CognitoAuthOutputs> {
-		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, 'us-east-1');
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Cognito auth stack ${stackName} not found`);
@@ -529,9 +504,10 @@ export class CloudFormationManager {
 	 * GetCallerIdentity (cached on the profile after the first deploy).
 	 */
 	private async resolveAssetsBucketName(profile: PublishingProfile): Promise<string> {
+		const { GetCallerIdentityCommand } = await awsSdk.sts();
 		let accountId = profile.awsSettings?.awsAccountId;
 		if (!accountId) {
-			const sts = this.plugin.awsSdkManager.getSTSClient(profile);
+			const sts = await this.plugin.awsSdkManager.getSTSClient(profile);
 			const identity = await sts.send(new GetCallerIdentityCommand({}));
 			accountId = identity.Account;
 		}
@@ -550,8 +526,9 @@ export class CloudFormationManager {
 		profile: PublishingProfile,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<string> {
+		const { CreateStackCommand, DescribeStacksCommand } = await awsSdk.cloudFormation();
 		const stackName = this.getStackName('', 'bootstrap');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 		const bucketName = await this.resolveAssetsBucketName(profile);
 
 		// Already live? Nothing to do — return the existing bucket name.
@@ -598,12 +575,13 @@ export class CloudFormationManager {
 		keyPrefix: string,
 		source: string,
 	): Promise<{ bucket: string; key: string; codeSha256: string }> {
+		const { PutObjectCommand, HeadObjectCommand } = await awsSdk.s3();
 		const zip = buildLambdaZip(source);
 		const hash = await sha256HexBytes(zip);
 		const codeSha256 = await sha256Base64Bytes(zip);
 		const key = `${keyPrefix}/${hash}.zip`;
 
-		const s3 = this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
+		const s3 = await this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
 		let exists = false;
 		try {
 			await s3.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
@@ -696,7 +674,7 @@ export class CloudFormationManager {
 		opts: { publicReads?: boolean } = {},
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'authedge');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 
 		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
 		const { bucket, key, codeSha256 } = await this.packageCognitoEdge(profile, bucketName, pool, opts);
@@ -718,7 +696,8 @@ export class CloudFormationManager {
 
 	/** Versioned edge fn ARN (and Cognito public-reads mode) from any S3-asset edge stack. */
 	async getEdgeStackOutputs(stackName: string, profile: PublishingProfile): Promise<{ edgeFunctionVersionArn: string; publicReads: boolean }> {
-		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, 'us-east-1');
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Edge stack ${stackName} not found`);
@@ -738,7 +717,7 @@ export class CloudFormationManager {
 		onEvent?: (event: StackEvent) => void,
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'password');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 
 		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
 		const { bucket, key, codeSha256 } = await this.packagePasswordEdge(
@@ -770,7 +749,7 @@ export class CloudFormationManager {
 		onEvent?: (event: StackEvent) => void,
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'password');
-		const client = this.getCloudFormationClient(config, 'us-east-1');
+		const client = await this.getCloudFormationClient(config, 'us-east-1');
 
 		const bucketName = await this.ensureBootstrapStack(config, profile, onEvent);
 		const { bucket, key, codeSha256 } = await this.packagePasswordEdge(
@@ -796,7 +775,8 @@ export class CloudFormationManager {
 	}
 
 	async getPasswordAuthOutputs(stackName: string, profile: PublishingProfile): Promise<{ edgeFunctionVersionArn: string }> {
-		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, 'us-east-1');
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Password auth stack ${stackName} not found`);
@@ -839,6 +819,8 @@ export class CloudFormationManager {
 		profileId: string,
 		overrides: Partial<Record<string, string>>,
 	): Promise<Partial<Record<string, string>>> {
+		const { GetDistributionConfigCommand } = await awsSdk.cloudFront();
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
 		let stack: Stack | undefined;
 		try {
 			stack = (await client.send(new DescribeStacksCommand({ StackName: stackName }))).Stacks?.[0];
@@ -851,7 +833,7 @@ export class CloudFormationManager {
 
 		let live: LiveDomainConfig;
 		try {
-			const resp = await this.getCloudFrontClient(awsProfile).send(new GetDistributionConfigCommand({ Id: distributionId }));
+			const resp = await (await this.getCloudFrontClient(awsProfile)).send(new GetDistributionConfigCommand({ Id: distributionId }));
 			const viewer = resp.DistributionConfig?.ViewerCertificate;
 			live = {
 				aliases: resp.DistributionConfig?.Aliases?.Items || [],
@@ -947,7 +929,7 @@ export class CloudFormationManager {
 	 */
 	async deployCommentStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'comment');
-		const client = this.getCloudFormationClient(config, config.region);
+		const client = await this.getCloudFormationClient(config, config.region);
 
 		return this.createOrUpdateStack(client, stackName, {
 			templateBody: COMMENT_STACK_TEMPLATE,
@@ -966,7 +948,8 @@ export class CloudFormationManager {
 	}
 
 	async getCommentStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<CommentStackOutputs> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Comment stack ${stackName} not found`);
@@ -987,6 +970,7 @@ export class CloudFormationManager {
 		bucketName: string,
 		cfg: { knowledgeBaseId: string; modelArn: string },
 	): Promise<{ bucket: string; key: string }> {
+		const { PutObjectCommand, HeadObjectCommand } = await awsSdk.s3();
 		const cfgLine = `const CFG = ${JSON.stringify(cfg)};\n`;
 		const source = cfgLine + CHAT_HANDLER_BODY;
 		const zip = buildLambdaZip(source);
@@ -996,7 +980,7 @@ export class CloudFormationManager {
 		// The chat stack deploys in the SITE region (not us-east-1), so the code zip
 		// must live in a bucket the site-region Lambda can read. Reuse the site-region
 		// S3 client + the same bootstrap bucket, uploading under the site region.
-		const s3 = this.plugin.awsSdkManager.getS3Client(profile);
+		const s3 = await this.plugin.awsSdkManager.getS3Client(profile);
 		let exists = false;
 		try {
 			await s3.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
@@ -1032,7 +1016,7 @@ export class CloudFormationManager {
 		siteDistributionId: string,
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'chat');
-		const client = this.getCloudFormationClient(config, config.region);
+		const client = await this.getCloudFormationClient(config, config.region);
 
 		const { key } = await this.packageChatLambda(profile, bucketName, {
 			knowledgeBaseId: 'PLACEHOLDER', // KB id isn't known until the stack creates it.
@@ -1073,7 +1057,7 @@ export class CloudFormationManager {
 		knowledgeBaseId: string,
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'chat');
-		const client = this.getCloudFormationClient(config, config.region);
+		const client = await this.getCloudFormationClient(config, config.region);
 
 		const { key } = await this.packageChatLambda(profile, bucketName, {
 			knowledgeBaseId,
@@ -1111,7 +1095,8 @@ export class CloudFormationManager {
 	}
 
 	async getChatStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<ChatStackOutputs> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Chat stack ${stackName} not found`);
@@ -1127,12 +1112,13 @@ export class CloudFormationManager {
 	 * lag is expected, so callers don't block on completion.
 	 */
 	async startChatIngestion(profile: PublishingProfile): Promise<string | null> {
+		const { StartIngestionJobCommand } = await awsSdk.bedrockAgent();
 		const chat = profile.infrastructureState?.chat;
 		if (!chat?.enabled || !chat.knowledgeBaseId || !chat.dataSourceId) {
 			Logger.debug('startChatIngestion: chat not deployed for this profile, skipping');
 			return null;
 		}
-		const client = this.plugin.awsSdkManager.getBedrockAgentClient(profile);
+		const client = await this.plugin.awsSdkManager.getBedrockAgentClient(profile);
 		const resp = await client.send(new StartIngestionJobCommand({
 			knowledgeBaseId: chat.knowledgeBaseId,
 			dataSourceId: chat.dataSourceId,
@@ -1144,7 +1130,7 @@ export class CloudFormationManager {
 
 	async deployFullStack(config: DeploymentConfig): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'full');
-		const client = this.getCloudFormationClient(config, config.region);
+		const client = await this.getCloudFormationClient(config, config.region);
 		const template = config.originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
@@ -1193,7 +1179,7 @@ export class CloudFormationManager {
 		overrides: Partial<Record<string, string>>,
 	): Promise<string> {
 		const stackName = this.getStackName(config.variantName, 'full');
-		const client = this.getCloudFormationClient(config, config.region);
+		const client = await this.getCloudFormationClient(config, config.region);
 		const template = config.originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
@@ -1232,7 +1218,7 @@ export class CloudFormationManager {
 		region?: string,
 		extraOverrides: Partial<Record<string, string>> = {},
 	): Promise<string> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const template = originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
@@ -1259,7 +1245,8 @@ export class CloudFormationManager {
 	 * predates the bucket cleanup rule. The wizard persists it after a deploy.
 	 */
 	async getBucketLifecycleDays(stackName: string, profile: PublishingProfile, region?: string): Promise<number | undefined> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		return deployedNoncurrentDays(response.Stacks?.[0]?.Parameters);
 	}
@@ -1279,6 +1266,7 @@ export class CloudFormationManager {
 		days: number,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<void> {
+		const { UpdateStackCommand } = await awsSdk.cloudFormation();
 		if (!isValidNoncurrentDays(days)) {
 			throw new Error(`Days must be a whole number from ${MIN_NONCURRENT_VERSION_DAYS} to ${MAX_NONCURRENT_VERSION_DAYS}.`);
 		}
@@ -1288,7 +1276,7 @@ export class CloudFormationManager {
 
 		const config = this.configForProfile(profile);
 		const stackName = state.fullStackName;
-		const client = this.getCfClient(config.awsProfile, config.region);
+		const client = await this.getCfClient(config.awsProfile, config.region);
 		const template = config.originAccessMethod === 'oac'
 			? FULL_STACK_OAC_TEMPLATE
 			: FULL_STACK_OAI_TEMPLATE;
@@ -1337,7 +1325,7 @@ export class CloudFormationManager {
 		callbackUrl: string,
 		profile: PublishingProfile,
 	): Promise<string> {
-		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const client = await this.getCloudFormationClientForProfile(profile, 'us-east-1');
 		const deployedKeys = await this.getDeployedParameterKeys(client, stackName);
 
 		await this.sendUpdateToleratingNoop(client, {
@@ -1398,13 +1386,14 @@ export class CloudFormationManager {
 		profile: PublishingProfile,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<{ edgeFunctionVersionArn: string; legacyOrphaned: boolean }> {
+		const { UpdateStackCommand, GetTemplateCommand } = await awsSdk.cloudFormation();
 		const state = profile.infrastructureState;
 		const cognito = state?.cognitoAuth;
 		if (!state || !cognito?.stackName) throw new Error('This profile has no deployed Cognito stack.');
 		if (state.imported) throw new Error('Imported stacks are managed externally; upgrade them via CDK.');
 
 		const config = this.configForProfile(profile);
-		const client = this.getCfClient(config.awsProfile, 'us-east-1');
+		const client = await this.getCfClient(config.awsProfile, 'us-east-1');
 		const poolStack = cognito.stackName;
 		const expectComplete = async (stackName: string, region: string, what: string) => {
 			const status = await this.pollStackUntilComplete(stackName, profile, onEvent || (() => {}), region);
@@ -1545,6 +1534,7 @@ export class CloudFormationManager {
 		hours: number,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<void> {
+		const { UpdateStackCommand, GetTemplateCommand } = await awsSdk.cloudFormation();
 		if (!isValidSessionHours(hours)) {
 			throw new Error(`Session length must be a whole number of hours from ${MIN_SESSION_HOURS} to ${MAX_SESSION_HOURS}.`);
 		}
@@ -1554,7 +1544,7 @@ export class CloudFormationManager {
 		if (state.imported) throw new Error('Imported stacks are managed externally; change them via CDK.');
 
 		const config = this.configForProfile(profile);
-		const client = this.getCfClient(config.awsProfile, 'us-east-1');
+		const client = await this.getCfClient(config.awsProfile, 'us-east-1');
 		const poolStack = cognito.stackName;
 
 		const deployedTpl = await client.send(new GetTemplateCommand({ StackName: poolStack, TemplateStage: 'Original' }));
@@ -1600,11 +1590,12 @@ export class CloudFormationManager {
 	 * was deployed without access-group support (run the Cognito upgrade first).
 	 */
 	async putAccessGroups(profile: PublishingProfile, body: string): Promise<void> {
+		const { PutObjectCommand } = await awsSdk.s3();
 		const cognito = profile.infrastructureState?.cognitoAuth;
 		if (!cognito?.accessGroupsBucket || !cognito.accessGroupsKey) {
 			throw new Error('This profile\'s Cognito pool has no access-group support yet. Run "Upgrade Cognito gate" first.');
 		}
-		const s3 = this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
+		const s3 = await this.plugin.awsSdkManager.getS3ClientForRegion(profile, 'us-east-1');
 		await s3.send(new PutObjectCommand({
 			Bucket: cognito.accessGroupsBucket,
 			Key: cognito.accessGroupsKey,
@@ -1627,7 +1618,8 @@ export class CloudFormationManager {
 		region?: string,
 		retainResources?: string[],
 	): Promise<void> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const { DeleteStackCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		await client.send(new DeleteStackCommand({
 			StackName: stackName,
 			...(retainResources && retainResources.length ? { RetainResources: retainResources } : {}),
@@ -1635,7 +1627,8 @@ export class CloudFormationManager {
 	}
 
 	async getStackStatus(stackName: string, profile: PublishingProfile, region?: string): Promise<string> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Stack ${stackName} not found`);
@@ -1668,6 +1661,7 @@ export class CloudFormationManager {
 		client: CloudFormationClient,
 		stackName: string,
 	): Promise<Array<{ logicalId: string; physicalId?: string; resourceType?: string; resourceStatus?: string }>> {
+		const { ListStackResourcesCommand } = await awsSdk.cloudFormation();
 		const resources: Array<{ logicalId: string; physicalId?: string; resourceType?: string; resourceStatus?: string }> = [];
 		let nextToken: string | undefined;
 
@@ -1697,7 +1691,8 @@ export class CloudFormationManager {
 	 * so ListObjectsV2 alone is insufficient. Tolerates a missing bucket.
 	 */
 	async emptyBucket(bucketName: string, profile: PublishingProfile): Promise<void> {
-		const client = this.plugin.awsSdkManager.getS3Client(profile);
+		const { ListObjectVersionsCommand, DeleteObjectsCommand } = await awsSdk.s3();
+		const client = await this.plugin.awsSdkManager.getS3Client(profile);
 		let keyMarker: string | undefined;
 		let versionIdMarker: string | undefined;
 
@@ -1749,8 +1744,9 @@ export class CloudFormationManager {
 	 * would otherwise collide with a redeploy. Tolerates a missing bucket.
 	 */
 	async deleteBucket(bucketName: string, profile: PublishingProfile): Promise<void> {
+		const { DeleteBucketCommand } = await awsSdk.s3();
 		await this.emptyBucket(bucketName, profile);
-		const client = this.plugin.awsSdkManager.getS3Client(profile);
+		const client = await this.plugin.awsSdkManager.getS3Client(profile);
 		try {
 			await client.send(new DeleteBucketCommand({ Bucket: bucketName }));
 		} catch (err: unknown) {
@@ -1780,7 +1776,7 @@ export class CloudFormationManager {
 		region: string | undefined,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<{ status: string; orphaned: OrphanedEdgeResource[] }> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const { status, orphanedFunctionName, orphanedRoleName } =
 			await this.forceDeleteStackByClient(client, stackName, onEvent);
 
@@ -1809,6 +1805,7 @@ export class CloudFormationManager {
 		stackName: string,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<{ status: string; orphanedFunctionName?: string; orphanedRoleName?: string }> {
+		const { DeleteStackCommand, DeletionMode } = await awsSdk.cloudFormation();
 		const pollGone = async (): Promise<string> => {
 			try {
 				return await this.pollStackUntilCompleteByClient(client, stackName, onEvent);
@@ -1839,7 +1836,8 @@ export class CloudFormationManager {
 	}
 
 	async getStackOutputs(stackName: string, profile: PublishingProfile, region?: string): Promise<StackOutputs> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Stack ${stackName} not found`);
@@ -1848,7 +1846,8 @@ export class CloudFormationManager {
 	}
 
 	async getCertificateArn(stackName: string, profile: PublishingProfile): Promise<string> {
-		const client = this.getCloudFormationClientForProfile(profile, 'us-east-1');
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
+		const client = await this.getCloudFormationClientForProfile(profile, 'us-east-1');
 		const response = await client.send(new DescribeStacksCommand({ StackName: stackName }));
 		const stack = response.Stacks?.[0];
 		if (!stack) throw new Error(`Certificate stack ${stackName} not found`);
@@ -1858,7 +1857,8 @@ export class CloudFormationManager {
 	}
 
 	async getCertificateValidationRecords(certArn: string, profile: PublishingProfile): Promise<DnsValidationRecord[]> {
-		const client = this.getAcmClient(profile);
+		const { DescribeCertificateCommand } = await awsSdk.acm();
+		const client = await this.getAcmClient(profile);
 		const response = await client.send(new DescribeCertificateCommand({
 			CertificateArn: certArn,
 		}));
@@ -1874,7 +1874,8 @@ export class CloudFormationManager {
 	}
 
 	async checkCertificateStatus(certArn: string, profile: PublishingProfile): Promise<string> {
-		const client = this.getAcmClient(profile);
+		const { DescribeCertificateCommand } = await awsSdk.acm();
+		const client = await this.getAcmClient(profile);
 		const response = await client.send(new DescribeCertificateCommand({
 			CertificateArn: certArn,
 		}));
@@ -1889,7 +1890,8 @@ export class CloudFormationManager {
 	 * back to DescribeCertificate.
 	 */
 	async listIssuedCertificates(profile: PublishingProfile): Promise<CertSummaryLite[]> {
-		const client = this.getAcmClient(profile);
+		const { ListCertificatesCommand } = await awsSdk.acm();
+		const client = await this.getAcmClient(profile);
 		const summaries: CertSummaryLite[] = [];
 		let nextToken: string | undefined;
 
@@ -1988,7 +1990,8 @@ export class CloudFormationManager {
 	 * ISSUED, and cover the requested domain. Throws a descriptive Error otherwise.
 	 */
 	async describeCertificateForReuse(arn: string, domain: string, profile: PublishingProfile): Promise<CertificateMatch> {
-		const client = this.getAcmClient(profile);
+		const { DescribeCertificateCommand } = await awsSdk.acm();
+		const client = await this.getAcmClient(profile);
 		const response = await client.send(new DescribeCertificateCommand({ CertificateArn: arn }));
 		const cert = response.Certificate;
 		if (!cert) throw new Error(`Certificate ${arn} not found.`);
@@ -2017,7 +2020,8 @@ export class CloudFormationManager {
 
 	/** DescribeCertificate helper returning just the primary name + full SAN list. */
 	private async describeCertificateFullNames(arn: string, profile: PublishingProfile): Promise<{ domainName: string; sans: string[] }> {
-		const client = this.getAcmClient(profile);
+		const { DescribeCertificateCommand } = await awsSdk.acm();
+		const client = await this.getAcmClient(profile);
 		const response = await client.send(new DescribeCertificateCommand({ CertificateArn: arn }));
 		return {
 			domainName: response.Certificate?.DomainName || '',
@@ -2031,7 +2035,7 @@ export class CloudFormationManager {
 		onEvent: (event: StackEvent) => void,
 		region?: string,
 	): Promise<string> {
-		const client = this.getCloudFormationClientForProfile(profile, region);
+		const client = await this.getCloudFormationClientForProfile(profile, region);
 		return this.pollStackUntilCompleteByClient(client, stackName, onEvent);
 	}
 
@@ -2042,6 +2046,7 @@ export class CloudFormationManager {
 		stackName: string,
 		onEvent?: (event: StackEvent) => void,
 	): Promise<string> {
+		const { DescribeStacksCommand, DescribeStackEventsCommand } = await awsSdk.cloudFormation();
 		const seenEventIds = new Set<string>();
 		const startTime = new Date();
 
@@ -2094,7 +2099,7 @@ export class CloudFormationManager {
 		const discovered: DiscoveredStack[] = [];
 
 		for (const region of uniqueRegions) {
-			const client = this.getCfClient(awsProfile, region);
+			const client = await this.getCfClient(awsProfile, region);
 			const stacks = await this.describeAllStacks(client);
 
 			for (const stack of stacks) {
@@ -2135,6 +2140,7 @@ export class CloudFormationManager {
 
 	/** Page through every stack in the client's region via DescribeStacks + NextToken. */
 	private async describeAllStacks(client: CloudFormationClient): Promise<Stack[]> {
+		const { DescribeStacksCommand } = await awsSdk.cloudFormation();
 		const stacks: Stack[] = [];
 		let nextToken: string | undefined;
 
@@ -2148,7 +2154,8 @@ export class CloudFormationManager {
 	}
 
 	async listHostedZones(profile: PublishingProfile): Promise<HostedZoneInfo[]> {
-		const client = this.getRoute53Client(profile);
+		const { ListHostedZonesCommand } = await awsSdk.route53();
+		const client = await this.getRoute53Client(profile);
 		const zones: HostedZoneInfo[] = [];
 		let marker: string | undefined;
 
@@ -2181,7 +2188,8 @@ export class CloudFormationManager {
 	}
 
 	async createHostedZone(profile: PublishingProfile, domain: string): Promise<HostedZoneInfo> {
-		const client = this.getRoute53Client(profile);
+		const { CreateHostedZoneCommand } = await awsSdk.route53();
+		const client = await this.getRoute53Client(profile);
 		const response = await client.send(new CreateHostedZoneCommand({
 			Name: domain,
 			CallerReference: `cpn-${Date.now()}`,
@@ -2252,11 +2260,12 @@ export class CloudFormationManager {
 	 * delegate here, and discovery uses it directly with an explicitly-passed
 	 * awsProfile (so scanning never reads or mutates profile.awsSettings).
 	 */
-	private getCfClient(awsProfile: string, region: string): CloudFormationClient {
+	private async getCfClient(awsProfile: string, region: string): Promise<CloudFormationClient> {
 		const key = `${awsProfile}:${region}`;
 		const existing = this.cfClients.get(key);
 		if (existing) return existing;
 
+		const { CloudFormationClient } = await awsSdk.cloudFormation();
 		const client = new CloudFormationClient({
 			region,
 			credentials: this.buildCredentialProvider(awsProfile),
@@ -2265,20 +2274,21 @@ export class CloudFormationManager {
 		return client;
 	}
 
-	private getCloudFormationClient(config: DeploymentConfig, region: string): CloudFormationClient {
+	private getCloudFormationClient(config: DeploymentConfig, region: string): Promise<CloudFormationClient> {
 		return this.getCfClient(config.awsProfile, region);
 	}
 
-	private getCloudFormationClientForProfile(profile: PublishingProfile, region?: string): CloudFormationClient {
+	private getCloudFormationClientForProfile(profile: PublishingProfile, region?: string): Promise<CloudFormationClient> {
 		const resolvedRegion = region || profile.awsSettings!.region;
 		return this.getCfClient(profile.awsSettings!.awsProfile, resolvedRegion);
 	}
 
 	/** Cache-keyed (by awsProfile) CloudFront client; CloudFront is global. */
-	private getCloudFrontClient(awsProfile: string): CloudFrontClient {
+	private async getCloudFrontClient(awsProfile: string): Promise<CloudFrontClient> {
 		const existing = this.cloudFrontClients.get(awsProfile);
 		if (existing) return existing;
 
+		const { CloudFrontClient } = await awsSdk.cloudFront();
 		const client = new CloudFrontClient({
 			region: 'us-east-1',
 			credentials: this.buildCredentialProvider(awsProfile),
@@ -2287,12 +2297,13 @@ export class CloudFormationManager {
 		return client;
 	}
 
-	private getRoute53Client(profile: PublishingProfile): Route53Client {
+	private async getRoute53Client(profile: PublishingProfile): Promise<Route53Client> {
 		const awsProfile = profile.awsSettings!.awsProfile;
 		const key = awsProfile;
 		const existing = this.route53Clients.get(key);
 		if (existing) return existing;
 
+		const { Route53Client } = await awsSdk.route53();
 		const client = new Route53Client({
 			region: 'us-east-1',
 			credentials: this.buildCredentialProvider(awsProfile),
@@ -2301,12 +2312,13 @@ export class CloudFormationManager {
 		return client;
 	}
 
-	private getAcmClient(profile: PublishingProfile): ACMClient {
+	private async getAcmClient(profile: PublishingProfile): Promise<ACMClient> {
 		const awsProfile = profile.awsSettings!.awsProfile;
 		const key = awsProfile;
 		const existing = this.acmClients.get(key);
 		if (existing) return existing;
 
+		const { ACMClient } = await awsSdk.acm();
 		const client = new ACMClient({
 			region: 'us-east-1',
 			credentials: this.buildCredentialProvider(awsProfile),

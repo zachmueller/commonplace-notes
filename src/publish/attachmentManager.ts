@@ -1,5 +1,5 @@
 import { FileSystemAdapter, TFile, getLinkpath } from 'obsidian';
-import { ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { awsSdk } from '../utils/awsModules';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { Logger } from '../utils/logging';
@@ -336,7 +336,8 @@ export class AttachmentManager {
 	 */
 	async probeBucket(profile: PublishingProfile): Promise<boolean> {
 		if (!profile.awsSettings) throw new Error('No AWS settings');
-		const s3 = this.plugin.awsSdkManager.getS3Client(profile);
+		const s3 = await this.plugin.awsSdkManager.getS3Client(profile);
+		const { ListObjectsV2Command } = await awsSdk.s3();
 		const Bucket = profile.awsSettings.bucketName;
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 		const any = async (Prefix: string) => {

@@ -53,10 +53,10 @@ import {
 /** Note JSON reads during a rebuild (§3, step 2). */
 const REBUILD_CONCURRENCY = 5;
 
-function s3Of(plugin: CommonplaceNotesPlugin, profile: PublishingProfile) {
+async function s3Of(plugin: CommonplaceNotesPlugin, profile: PublishingProfile) {
 	if (!profile.awsSettings) throw new Error('Selected profile is not configured for AWS publishing');
 	return {
-		s3: plugin.awsSdkManager.getS3Client(profile),
+		s3: await plugin.awsSdkManager.getS3Client(profile),
 		bucket: profile.awsSettings.bucketName,
 		s3Prefix: profile.awsSettings.s3Prefix || '',
 	};
@@ -89,7 +89,7 @@ export async function readBucketAttachmentState(
 	profile: PublishingProfile,
 	local: AttachmentStateFile | null,
 ): Promise<BucketAttachmentState> {
-	const { s3, bucket, s3Prefix } = s3Of(plugin, profile);
+	const { s3, bucket, s3Prefix } = await s3Of(plugin, profile);
 	const { notes, uploaded } = await listForRebuild(s3, bucket, s3Prefix, new Set(Object.keys(local?.refs ?? {})));
 	const refs: Record<string, string[]> = {};
 	const limit = createLimiter(REBUILD_CONCURRENCY);
@@ -168,7 +168,7 @@ export async function sweepRemovedRevisions(
 	try {
 		const plan = planSweep(removed, await requiredInputs(plugin, profile.id, state));
 		if (plan.size === 0) return;
-		const { s3, bucket, s3Prefix } = s3Of(plugin, profile);
+		const { s3, bucket, s3Prefix } = await s3Of(plugin, profile);
 		for (const [area, orphans] of plan) {
 			const result = await deleteAttachmentObjects(s3, bucket, s3Prefix, area, orphans);
 			forgetUploaded(state, area, result.deleted);
@@ -238,7 +238,7 @@ export async function auditAttachmentObjects(plugin: CommonplaceNotesPlugin, pro
 	await plugin.mappingManager.loadProfileMappings(profile.id);
 	await plugin.accessManager.load(profile.id);
 	const state = await am.stateForCleanup(profile);
-	const { s3, bucket, s3Prefix } = s3Of(plugin, profile);
+	const { s3, bucket, s3Prefix } = await s3Of(plugin, profile);
 	const listing = await listAttachmentObjects(s3, bucket, s3Prefix, await listAreas(s3, bucket, s3Prefix));
 	const inputs = await requiredInputs(plugin, profile.id, state);
 	const { unreferenced, missing } = compareWithBucket(listing, requiredByArea(inputs));
@@ -316,7 +316,7 @@ export async function deleteUnreferencedAttachments(
 	await plugin.mappingManager.loadProfileMappings(profile.id);
 	await plugin.accessManager.load(profile.id);
 	const state = await completeState(plugin, profile);
-	const { s3, bucket, s3Prefix } = s3Of(plugin, profile);
+	const { s3, bucket, s3Prefix } = await s3Of(plugin, profile);
 	const listing = await listAttachmentObjects(s3, bucket, s3Prefix, await listAreas(s3, bucket, s3Prefix));
 	const { unreferenced } = compareWithBucket(listing, requiredByArea(await requiredInputs(plugin, profile.id, state)));
 

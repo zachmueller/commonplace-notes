@@ -9,32 +9,41 @@
  * `.md` sandbox cannot `import`.
  */
 
-import * as cloudfront from '@aws-sdk/client-cloudfront';
-import * as s3 from '@aws-sdk/client-s3';
-import * as sts from '@aws-sdk/client-sts';
-import * as lambda from '@aws-sdk/client-lambda';
-import * as iam from '@aws-sdk/client-iam';
 import { buildProfileCredentialProvider } from '../../utils/awsCredentialChain';
+import { awsSdk } from '../../utils/awsModules';
 import type CommonplaceNotesPlugin from '../../main';
 import type { PublishingProfile } from '../../types';
 import type { DeployHookAws } from './types';
 
-/** Build the injected `aws` handle, pre-bound to the deploy's profile. */
-export function buildDeployHookAws(
+/**
+ * Build the injected `aws` handle, pre-bound to the deploy's profile.
+ *
+ * Async because it loads the SDK modules first (src/utils/awsModules.ts):
+ * the handle's client factories and `sdk` namespaces stay synchronous for
+ * hooks, which is the contract hook files are written against.
+ */
+export async function buildDeployHookAws(
 	plugin: CommonplaceNotesPlugin,
 	profile: PublishingProfile,
-): DeployHookAws {
+): Promise<DeployHookAws> {
 	const m = plugin.awsSdkManager;
+	await m.preloadClientModules();
 	return {
-		cloudFront: () => m.getCloudFrontClient(profile),
-		s3: () => m.getS3Client(profile),
-		s3ForRegion: (region) => m.getS3ClientForRegion(profile, region),
-		sts: () => m.getSTSClient(profile),
-		dynamoDB: () => m.getDynamoDBClient(profile),
-		lambda: (region) => m.getLambdaClient(profile, region),
-		iam: (region) => m.getIamClient(profile, region),
-		bedrockAgent: () => m.getBedrockAgentClient(profile),
+		cloudFront: () => m.getCloudFrontClientSync(profile),
+		s3: () => m.getS3ClientSync(profile),
+		s3ForRegion: (region) => m.getS3ClientForRegionSync(profile, region),
+		sts: () => m.getSTSClientSync(profile),
+		dynamoDB: () => m.getDynamoDBClientSync(profile),
+		lambda: (region) => m.getLambdaClientSync(profile, region),
+		iam: (region) => m.getIamClientSync(profile, region),
+		bedrockAgent: () => m.getBedrockAgentClientSync(profile),
 		credentials: buildProfileCredentialProvider(profile.awsSettings!.awsProfile),
-		sdk: { cloudfront, s3, sts, lambda, iam },
+		sdk: {
+			cloudfront: awsSdk.cloudFront.loaded(),
+			s3: awsSdk.s3.loaded(),
+			sts: awsSdk.sts.loaded(),
+			lambda: awsSdk.lambda.loaded(),
+			iam: awsSdk.iam.loaded(),
+		},
 	};
 }

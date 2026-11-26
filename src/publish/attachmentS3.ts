@@ -8,22 +8,11 @@
  * that match its key.
  */
 
-import {
-	AbortMultipartUploadCommand,
-	CompleteMultipartUploadCommand,
-	CreateMultipartUploadCommand,
-	DeleteObjectsCommand,
-	GetObjectCommand,
-	HeadObjectCommand,
-	ListObjectsV2Command,
-	PutObjectCommand,
-	UploadPartCommand,
-	type CompletedPart,
-	type S3Client,
-} from '@aws-sdk/client-s3';
+import type { CompletedPart, S3Client } from '@aws-sdk/client-s3';
 import { promises as fsp } from 'fs';
 import { createHash } from 'crypto';
 import { Logger, toError } from '../utils/logging';
+import { awsSdk } from '../utils/awsModules';
 import {
 	MULTIPART_PARTS_IN_FLIGHT,
 	MULTIPART_PART_BYTES,
@@ -48,6 +37,7 @@ export class AttachmentChangedError extends Error {
  * 403. Anything else throws.
  */
 export async function objectExists(s3: S3Sender, Bucket: string, Key: string): Promise<boolean> {
+	const { HeadObjectCommand } = await awsSdk.s3();
 	try {
 		await s3.send(new HeadObjectCommand({ Bucket, Key }));
 		return true;
@@ -67,6 +57,7 @@ export interface UploadHeaders {
 
 /** Up to 16 MB: read, hash, compare, then one PutObject (the SDK adds CRC32). */
 export async function putSingle(s3: S3Sender, Bucket: string, Key: string, fullPath: string, entry: StagedAttachment, headers: UploadHeaders): Promise<void> {
+	const { PutObjectCommand } = await awsSdk.s3();
 	const body = await fsp.readFile(fullPath);
 	const digest = createHash('sha256').update(body).digest('hex');
 	if (digest !== entry.sha256) throw new AttachmentChangedError(entry);
@@ -89,6 +80,7 @@ export async function putMultipart(
 	headers: UploadHeaders,
 	partBytes: number = MULTIPART_PART_BYTES,
 ): Promise<void> {
+	const { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, UploadPartCommand } = await awsSdk.s3();
 	const create = await s3.send(new CreateMultipartUploadCommand({ Bucket, Key, ChecksumAlgorithm: 'CRC32', ...headers }));
 	const UploadId = create.UploadId;
 	if (!UploadId) throw new Error(`CreateMultipartUpload returned no UploadId for ${Key}`);
@@ -144,6 +136,7 @@ export async function putMultipart(
 
 /** Every key under `Prefix`, paged. */
 export async function listKeys(s3: S3Sender, Bucket: string, Prefix: string): Promise<string[]> {
+	const { ListObjectsV2Command } = await awsSdk.s3();
 	const out: string[] = [];
 	let token: string | undefined;
 	do {
@@ -156,6 +149,7 @@ export async function listKeys(s3: S3Sender, Bucket: string, Prefix: string): Pr
 
 /** The bucket's areas: '' plus each `restricted/<g>/` that holds any object. */
 export async function listAreas(s3: S3Sender, Bucket: string, s3Prefix: string): Promise<string[]> {
+	const { ListObjectsV2Command } = await awsSdk.s3();
 	const areas = [''];
 	const base = `${s3Prefix}restricted/`;
 	let token: string | undefined;
@@ -222,6 +216,7 @@ export async function listForRebuild(
 
 /** Rebuild step 2 for one note JSON: its hash and `attachments` keys, or null when it is gone. */
 export async function readNoteAttachments(s3: S3Sender, Bucket: string, note: NoteObject): Promise<{ hash: string; keys: string[] } | null> {
+	const { GetObjectCommand } = await awsSdk.s3();
 	let text: string;
 	try {
 		const res = await s3.send(new GetObjectCommand({ Bucket, Key: note.key }));
@@ -273,6 +268,7 @@ export async function deleteAttachmentObjects(
 	area: string,
 	keys: readonly string[],
 ): Promise<DeleteResult> {
+	const { DeleteObjectsCommand } = await awsSdk.s3();
 	const result: DeleteResult = { deleted: [], failed: [] };
 	const prefix = attachmentObjectKey(s3Prefix, area, '');
 	for (let i = 0; i < keys.length; i += DELETE_BATCH) {

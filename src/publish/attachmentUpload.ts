@@ -1,4 +1,4 @@
-import { S3ServiceException } from '@aws-sdk/client-s3';
+import { awsSdk } from '../utils/awsModules';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { Logger, toError } from '../utils/logging';
@@ -92,7 +92,7 @@ export async function uploadStagedAttachments(plugin: CommonplaceNotesPlugin, pr
 	}
 
 	// --- Per (area, key) ------------------------------------------------------
-	const s3 = plugin.awsSdkManager.getS3Client(profile);
+	const s3 = await plugin.awsSdkManager.getS3Client(profile);
 	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
 	const readGate: SiteReadGate = profile.infrastructureState?.readGateMode ?? 'none';
@@ -185,6 +185,8 @@ async function runPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
 }
 
 function isCredentialError(error: unknown): boolean {
-	return error instanceof S3ServiceException
+	// An S3ServiceException can only exist once the S3 module has loaded.
+	const s3 = awsSdk.s3.peek();
+	return !!s3 && error instanceof s3.S3ServiceException
 		&& ['AccessDenied', 'ExpiredToken', 'ExpiredTokenException', 'InvalidAccessKeyId', 'AuthFailure'].includes(error.name);
 }

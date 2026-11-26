@@ -6,7 +6,7 @@ import {
 	MAX_SESSION_HOURS,
 	MIN_SESSION_HOURS,
 } from './cognitoParams';
-import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
+import { awsSdk } from '../utils/awsModules';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import type { CloudFormationManager } from './cloudFormationManager';
@@ -1650,7 +1650,8 @@ export class DeploymentWizardModal extends Modal {
 
 		// Fetch the AWS account ID via STS
 		try {
-			const stsClient = this.plugin.awsSdkManager.getSTSClient(this.activeProfile);
+			const stsClient = await this.plugin.awsSdkManager.getSTSClient(this.activeProfile);
+			const { GetCallerIdentityCommand } = await awsSdk.sts();
 			const identity = await stsClient.send(new GetCallerIdentityCommand({}));
 			if (identity.Account) {
 				profile.awsSettings.awsAccountId = identity.Account;

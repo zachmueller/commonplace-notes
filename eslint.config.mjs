@@ -63,6 +63,22 @@ export default defineConfig([
 		},
 	},
 	{
+		// The AWS SDK loads on first use: value imports go through
+		// src/utils/awsModules.ts so the SDK is never evaluated at plugin load
+		// (`npm run test:aws-lazy` checks the built bundle). Types are fine.
+		files: ['src/**/*.ts'],
+		ignores: ['src/utils/awsModules.ts'],
+		rules: {
+			'@typescript-eslint/no-restricted-imports': ['error', {
+				patterns: [{
+					group: ['@aws-sdk/*', '@smithy/*', '@aws-crypto/*'],
+					allowTypeImports: true,
+					message: 'Load AWS SDK values through awsSdk in src/utils/awsModules.ts (`import type` is fine).',
+				}],
+			}],
+		},
+	},
+	{
 		// The community scanner doesn't report these (none of the 0.8.0 review's
 		// findings came from them). src/ deliberately uses `String(value)` /
 		// template interpolation on untyped frontmatter values, so leave them off

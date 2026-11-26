@@ -15,9 +15,12 @@
  * `aws-external` variant records every @aws-sdk / @smithy require made while
  * the top-level code runs. `--assert-no-aws-at-load` exits 1 if there are any.
  *
+ * `--aws-probe-only` builds and runs just that probe once. With
+ * `--assert-no-aws-at-load`, that's `npm run test:aws-lazy`.
+ *
  * Output: a table on stdout and e2e/results/perf/bundle-eval-latest.json.
  *
- * Run: npx tsx e2e/scripts/bundle-eval-timing.ts [--runs 5] [--assert-no-aws-at-load]
+ * Run: npx tsx e2e/scripts/bundle-eval-timing.ts [--runs 5] [--assert-no-aws-at-load] [--aws-probe-only]
  */
 
 import { execFileSync } from "node:child_process";
@@ -35,7 +38,8 @@ const RESULTS_DIR = path.join(PROJECT_ROOT, "e2e", "results", "perf");
 
 const args = process.argv.slice(2);
 const runsArg = args.indexOf("--runs");
-const RUNS = runsArg !== -1 ? Math.max(1, parseInt(args[runsArg + 1], 10) || 5) : 5;
+const PROBE_ONLY = args.includes("--aws-probe-only");
+const RUNS = PROBE_ONLY ? 1 : runsArg !== -1 ? Math.max(1, parseInt(args[runsArg + 1], 10) || 5) : 5;
 const ASSERT_NO_AWS = args.includes("--assert-no-aws-at-load");
 
 /** Package groups that can be left out of a variant. */
@@ -147,7 +151,7 @@ async function main(): Promise<void> {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cpn-bundle-timing-"));
 	const results: VariantResult[] = [];
 	try {
-		for (const variant of VARIANTS) {
+		for (const variant of PROBE_ONLY ? VARIANTS.filter((v) => v.name === "aws-external") : VARIANTS) {
 			const code = await buildVariant(variant);
 			const file = path.join(tmp, `${variant.name}.js`);
 			fs.writeFileSync(file, code);
@@ -192,13 +196,16 @@ async function main(): Promise<void> {
 
 	fs.mkdirSync(RESULTS_DIR, { recursive: true });
 	const report = { runs: RUNS, node: process.version, at: new Date().toISOString(), variants: results, awsAtLoad };
-	const reportPath = path.join(RESULTS_DIR, "bundle-eval-latest.json");
+	const reportPath = path.join(RESULTS_DIR, PROBE_ONLY ? "bundle-aws-probe-latest.json" : "bundle-eval-latest.json");
 	fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
 	console.log(`\nWritten to ${path.relative(PROJECT_ROOT, reportPath)}`);
 
-	if (ASSERT_NO_AWS && awsAtLoad.length) {
-		console.log("FAIL  AWS SDK modules are evaluated at load (--assert-no-aws-at-load)");
-		process.exit(1);
+	if (ASSERT_NO_AWS) {
+		if (awsAtLoad.length) {
+			console.log("FAIL  AWS SDK modules are evaluated at load (--assert-no-aws-at-load)");
+			process.exit(1);
+		}
+		console.log("PASS  no AWS SDK module is evaluated at load");
 	}
 }
 

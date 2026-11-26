@@ -115,7 +115,7 @@ async function testSdkClientCreation(ctx: TestContext): Promise<void> {
 	console.log("\nTest 3: AwsSdkManager can create SDK clients");
 	const { page } = ctx;
 
-	const result = await page.evaluate(() => {
+	const result = await page.evaluate(async () => {
 		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
 		if (!plugin?.awsSdkManager) return { error: "awsSdkManager not available" };
 
@@ -123,9 +123,9 @@ async function testSdkClientCreation(ctx: TestContext): Promise<void> {
 		if (!profile) return { error: "no profile available" };
 
 		try {
-			const s3 = plugin.awsSdkManager.getS3Client(profile);
-			const sts = plugin.awsSdkManager.getSTSClient(profile);
-			const cf = plugin.awsSdkManager.getCloudFrontClient(profile);
+			const s3 = await plugin.awsSdkManager.getS3Client(profile);
+			const sts = await plugin.awsSdkManager.getSTSClient(profile);
+			const cf = await plugin.awsSdkManager.getCloudFrontClient(profile);
 
 			return {
 				s3Created: !!s3,
@@ -163,15 +163,15 @@ async function testClientCaching(ctx: TestContext): Promise<void> {
 	console.log("\nTest 4: SDK clients are cached per profile");
 	const { page } = ctx;
 
-	const result = await page.evaluate(() => {
+	const result = await page.evaluate(async () => {
 		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
 		if (!plugin?.awsSdkManager) return { error: "awsSdkManager not available" };
 
 		const profile = plugin.settings?.publishingProfiles?.[0];
 		if (!profile) return { error: "no profile available" };
 
-		const s3First = plugin.awsSdkManager.getS3Client(profile);
-		const s3Second = plugin.awsSdkManager.getS3Client(profile);
+		const s3First = await plugin.awsSdkManager.getS3Client(profile);
+		const s3Second = await plugin.awsSdkManager.getS3Client(profile);
 		return { same: s3First === s3Second };
 	});
 
@@ -192,16 +192,16 @@ async function testClientInvalidation(ctx: TestContext): Promise<void> {
 	console.log("\nTest 5: invalidateClients clears cached clients");
 	const { page } = ctx;
 
-	const result = await page.evaluate(() => {
+	const result = await page.evaluate(async () => {
 		const plugin = (window as any).app?.plugins?.plugins?.["commonplace-notes"];
 		if (!plugin?.awsSdkManager) return { error: "awsSdkManager not available" };
 
 		const profile = plugin.settings?.publishingProfiles?.[0];
 		if (!profile) return { error: "no profile available" };
 
-		const s3Before = plugin.awsSdkManager.getS3Client(profile);
+		const s3Before = await plugin.awsSdkManager.getS3Client(profile);
 		plugin.awsSdkManager.invalidateClients(profile.id);
-		const s3After = plugin.awsSdkManager.getS3Client(profile);
+		const s3After = await plugin.awsSdkManager.getS3Client(profile);
 		return { different: s3Before !== s3After };
 	});
 

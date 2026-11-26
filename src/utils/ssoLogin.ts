@@ -1,15 +1,5 @@
 import { promises as fs } from 'fs';
-import {
-	SSOOIDCClient,
-	RegisterClientCommand,
-	StartDeviceAuthorizationCommand,
-	CreateTokenCommand,
-} from '@aws-sdk/client-sso-oidc';
-import {
-	parseKnownFiles,
-	loadSsoSessionData,
-	getSSOTokenFilepath,
-} from '@smithy/shared-ini-file-loader';
+import { awsSdk } from './awsModules';
 import { Logger } from './logging';
 import { NoticeManager } from './notice';
 
@@ -33,6 +23,7 @@ interface ResolvedSsoConfig {
  * the exact cache slot `fromSSO` reads.
  */
 async function resolveSsoConfig(awsProfile: string): Promise<ResolvedSsoConfig> {
+	const { parseKnownFiles, loadSsoSessionData } = await awsSdk.sharedIniFileLoader();
 	const profiles = await parseKnownFiles({});
 	const profile = profiles[awsProfile];
 	if (!profile) {
@@ -79,6 +70,8 @@ function sleep(ms: number): Promise<void> {
 export async function ssoLogin(awsProfile: string): Promise<void> {
 	const { ssoSessionName, startUrl, region } = await resolveSsoConfig(awsProfile);
 
+	const { SSOOIDCClient, RegisterClientCommand, StartDeviceAuthorizationCommand, CreateTokenCommand } =
+		await awsSdk.ssoOidc();
 	const client = new SSOOIDCClient({ region });
 	try {
 		const registered = await client.send(
@@ -176,6 +169,7 @@ interface SsoTokenCacheFile {
  * so the sha1-of-session-name filename never drifts from what `fromSso` reads.
  */
 async function writeTokenCache(ssoSessionName: string, token: SsoTokenCacheFile): Promise<void> {
+	const { getSSOTokenFilepath } = await awsSdk.sharedIniFileLoader();
 	const filepath = getSSOTokenFilepath(ssoSessionName);
 	await fs.writeFile(filepath, JSON.stringify(token, null, 2));
 }

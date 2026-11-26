@@ -1,5 +1,4 @@
-import { PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3ServiceException } from '@aws-sdk/client-s3';
-import { CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
+import { awsSdk } from '../utils/awsModules';
 import { TFile, parseYaml } from 'obsidian';
 import CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
@@ -35,7 +34,9 @@ async function runWithConcurrency<T>(
 }
 
 function isCredentialError(error: unknown): boolean {
-	if (error instanceof S3ServiceException) {
+	// An S3ServiceException can only exist once the S3 module has loaded.
+	const s3 = awsSdk.s3.peek();
+	if (s3 && error instanceof s3.S3ServiceException) {
 		return ['AccessDenied', 'ExpiredToken', 'ExpiredTokenException', 'InvalidAccessKeyId', 'AuthFailure'].includes(error.name);
 	}
 	return false;
@@ -62,7 +63,8 @@ function resolveHomeNoteUid(plugin: CommonplaceNotesPlugin, profile: PublishingP
  * manually re-pushed site assets.
  */
 async function uploadConfigJson(plugin: CommonplaceNotesPlugin, profile: PublishingProfile): Promise<void> {
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { PutObjectCommand } = await awsSdk.s3();
 	const bucket = profile.awsSettings!.bucketName;
 	const s3Prefix = profile.awsSettings!.s3Prefix || '';
 	const homeNoteUid = resolveHomeNoteUid(plugin, profile);
@@ -110,7 +112,8 @@ export async function pushLocalJsonsToS3(
 			throw new Error('Selected profile is not configured for AWS publishing');
 		}
 
-		const s3Client = plugin.awsSdkManager.getS3Client(profile);
+		const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+		const { PutObjectCommand } = await awsSdk.s3();
 		const bucket = profile.awsSettings.bucketName;
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
@@ -221,7 +224,8 @@ export async function pushMappingAndIndexToS3(
 		throw new Error('Selected profile is not configured for AWS publishing');
 	}
 
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { PutObjectCommand } = await awsSdk.s3();
 	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
 
@@ -355,7 +359,8 @@ export async function pushKbCorpusToS3(
 		return;
 	}
 
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { PutObjectCommand } = await awsSdk.s3();
 	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
 
@@ -406,7 +411,8 @@ export async function deleteKbCorpusFromS3(
 		throw new Error('Selected profile is not configured for AWS publishing');
 	}
 
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { DeleteObjectCommand } = await awsSdk.s3();
 	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
 	const key = `${s3Prefix}kb/${uid}.md`;
@@ -441,7 +447,8 @@ export async function deleteNoteHashesFromS3(
 		throw new Error('Selected profile is not configured for AWS publishing');
 	}
 
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { DeleteObjectCommand, DeleteObjectsCommand } = await awsSdk.s3();
 	const bucket = profile.awsSettings.bucketName;
 	const s3Prefix = profile.awsSettings.s3Prefix || '';
 
@@ -585,7 +592,8 @@ export async function applyAccessTransitions(
 	}
 
 	if (homeRemoved) {
-		const s3Client = plugin.awsSdkManager.getS3Client(profile);
+		const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+		const { DeleteObjectCommand } = await awsSdk.s3();
 		await s3Client.send(new DeleteObjectCommand({
 			Bucket: profile.awsSettings.bucketName,
 			Key: `${profile.awsSettings.s3Prefix || ''}notes/index.json`,
@@ -624,7 +632,8 @@ export async function hasRestrictedObjects(
 	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 	const bucketName = bucket || profile?.awsSettings?.bucketName;
 	if (!profile?.awsSettings || !bucketName) return false;
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { ListObjectsV2Command } = await awsSdk.s3();
 	const page = await s3Client.send(new ListObjectsV2Command({
 		Bucket: bucketName,
 		Prefix: `${profile.awsSettings.s3Prefix || ''}restricted/`,
@@ -644,7 +653,8 @@ export async function purgeRestrictedPartition(
 ): Promise<number> {
 	const profile = plugin.settings.publishingProfiles.find(p => p.id === profileId);
 	if (!profile?.awsSettings) return 0;
-	const s3Client = plugin.awsSdkManager.getS3Client(profile);
+	const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+	const { DeleteObjectsCommand, ListObjectsV2Command } = await awsSdk.s3();
 	const bucket = profile.awsSettings.bucketName;
 	const prefix = `${profile.awsSettings.s3Prefix || ''}${restrictedPrefix(group)}`;
 	let deleted = 0;
@@ -702,7 +712,8 @@ export async function pushSiteAssetsToS3(
 			throw new Error('Selected profile is not configured for AWS publishing');
 		}
 
-		const s3Client = plugin.awsSdkManager.getS3Client(profile);
+		const s3Client = await plugin.awsSdkManager.getS3Client(profile);
+		const { PutObjectCommand } = await awsSdk.s3();
 		const bucket = profile.awsSettings.bucketName;
 		const s3Prefix = profile.awsSettings.s3Prefix || '';
 
@@ -770,7 +781,8 @@ export async function createCloudFrontInvalidation(plugin: CommonplaceNotesPlugi
 			return false;
 		}
 
-		const cfClient = plugin.awsSdkManager.getCloudFrontClient(profile);
+		const cfClient = await plugin.awsSdkManager.getCloudFrontClient(profile);
+		const { CreateInvalidationCommand } = await awsSdk.cloudFront();
 
 		const { success, error } = await NoticeManager.showProgress(
 			`Creating CloudFront invalidation`,

@@ -61,6 +61,7 @@
 		"test:publish-lock": "npx tsx e2e/scripts/test-publish-lock.ts",
 		"test:startup-timing": "npx tsx e2e/scripts/test-startup-timing.ts",
 		"perf:bundle": "npx tsx e2e/scripts/bundle-eval-timing.ts",
+		"test:aws-lazy": "npx tsx e2e/scripts/bundle-eval-timing.ts --aws-probe-only --assert-no-aws-at-load",
 		"perf:startup": "npx tsx e2e/scripts/startup-timing.ts",
 		"test:attachments": "npx tsx e2e/scripts/test-attachments.ts",
 		"test:attachment-state": "npx tsx e2e/scripts/test-attachment-state.ts",

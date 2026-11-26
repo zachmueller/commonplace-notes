@@ -1,5 +1,5 @@
 import { TFile, requestUrl } from 'obsidian';
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { awsSdk } from './awsModules';
 import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { refreshCredentials } from '../publish/awsCredentials';
@@ -112,7 +112,8 @@ async function queryRecent(
 	if (!tableName) throw new Error('Commenting is not deployed for this profile');
 
 	const run = async (): Promise<CommentItem[]> => {
-		const doc = plugin.awsSdkManager.getDynamoDBClient(profile);
+		const doc = await plugin.awsSdkManager.getDynamoDBClient(profile);
+		const { QueryCommand } = await awsSdk.dynamoDBDocument();
 		const res = await doc.send(new QueryCommand({
 			TableName: tableName,
 			IndexName: ACTIVITY_INDEX,

@@ -8,12 +8,6 @@ import {
 	OrphanedEdgeResource
 } from './types';
 import { StackEvent } from './infrastructure/types';
-import { DeleteFunctionCommand } from '@aws-sdk/client-lambda';
-import {
-	ListAttachedRolePoliciesCommand,
-	DetachRolePolicyCommand,
-	DeleteRoleCommand,
-} from '@aws-sdk/client-iam';
 import { refreshCredentials } from './publish/awsCredentials';
 import { ProfileManager } from './utils/profiles';
 import { IndicatorManager } from './utils/indicators';
@@ -32,6 +26,7 @@ import { confirmDestructive } from './utils/confirm';
 import { busyMessage, withProfileLock } from './utils/publishLock';
 import { TemplateManager } from './utils/templateManager';
 import { AwsSdkManager } from './utils/awsSdk';
+import { awsSdk } from './utils/awsModules';
 import { Publisher } from './publish/publisher';
 import { AttachmentManager } from './publish/attachmentManager';
 import { AttachmentChangeNotifier } from './publish/attachmentChangeNotifier';
@@ -1174,7 +1169,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		region: string,
 		functionName: string,
 	): Promise<'deleted' | 'gone' | 'replicating'> {
-		const client = this.awsSdkManager.getLambdaClient(profile, region);
+		const client = await this.awsSdkManager.getLambdaClient(profile, region);
+		const { DeleteFunctionCommand } = await awsSdk.lambda();
 		try {
 			await client.send(new DeleteFunctionCommand({ FunctionName: functionName }));
 			Logger.info(`Deleted orphaned Lambda@Edge function ${functionName}`);
@@ -1200,7 +1196,8 @@ export default class CommonplaceNotesPlugin extends Plugin {
 		region: string,
 		roleName: string,
 	): Promise<'deleted' | 'gone' | 'failed'> {
-		const client = this.awsSdkManager.getIamClient(profile, region);
+		const client = await this.awsSdkManager.getIamClient(profile, region);
+		const { ListAttachedRolePoliciesCommand, DetachRolePolicyCommand, DeleteRoleCommand } = await awsSdk.iam();
 		try {
 			const attached = await client.send(new ListAttachedRolePoliciesCommand({ RoleName: roleName }));
 			for (const policy of attached.AttachedPolicies || []) {

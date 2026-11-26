@@ -1,4 +1,4 @@
-import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
+import { awsSdk } from '../utils/awsModules';
 import { execWithAwsEnv } from '../utils/shell';
 import { resolveProfileCredentials } from '../utils/awsCredentialChain';
 import { ssoLogin, SsoLoginUnavailableError } from '../utils/ssoLogin';
@@ -129,7 +129,8 @@ export async function checkAwsCredentials(plugin: CommonplaceNotesPlugin, profil
 			throw new Error('No valid publishing profile found');
 		}
 
-		const stsClient = plugin.awsSdkManager.getSTSClient(profile);
+		const stsClient = await plugin.awsSdkManager.getSTSClient(profile);
+		const { GetCallerIdentityCommand } = await awsSdk.sts();
 		const response = await stsClient.send(new GetCallerIdentityCommand({}));
 		Logger.debug(`AWS identity verified: ${response.Arn}`);
 		return {
