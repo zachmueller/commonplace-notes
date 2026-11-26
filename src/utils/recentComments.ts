@@ -4,6 +4,7 @@ import type CommonplaceNotesPlugin from '../main';
 import type { PublishingProfile } from '../types';
 import { refreshCredentials } from '../publish/awsCredentials';
 import { Logger, errorCode } from './logging';
+import { normalizeUID } from './uidResolver';
 
 /**
  * Recent Comments panel data layer (author-facing Phase 2). Two-tier sourcing:
@@ -192,11 +193,15 @@ export async function getThread(
 	return items;
 }
 
-/** Read-only reverse lookup: comment noteUid -> local vault file (if published here). */
-function resolveLocalNote(plugin: CommonplaceNotesPlugin, noteUid: string): TFile | null {
-	// Canonical UID->file lookup lives on FrontmatterManager (pure metadataCache read;
-	// never getNoteUID, which mints/queues a cpn-uid as a side effect). First match wins.
-	return plugin.frontmatterManager.getFilesByUID(noteUid)[0] ?? null;
+/**
+ * Read-only reverse lookup: comment noteUid -> local vault file (if published
+ * here), from a map built once per feed by FrontmatterManager.buildUidToFileMap
+ * (pure metadataCache read; never getNoteUID, which mints/queues a cpn-uid as a
+ * side effect). Normalized keys, first match wins — same result as
+ * getFilesByUID(noteUid)[0], without a full vault scan per note.
+ */
+function resolveLocalNote(uidToFile: Map<string, TFile>, noteUid: string): TFile | null {
+	return uidToFile.get(normalizeUID(noteUid)) ?? null;
 }
 
 /**
@@ -253,6 +258,8 @@ export async function buildRecentFeed(
 		}),
 	);
 	const threadByNote = new Map(threads.map((t) => [t.noteUid, t.thread]));
+	// One vault pass resolves every note's local file.
+	const uidToFile = order.length > 0 ? plugin.frontmatterManager.buildUidToFileMap() : new Map<string, TFile>();
 
 	const groups: RecentActivityGroup[] = order.map((noteUid) => {
 		const recentForNote = byNote.get(noteUid)!;
@@ -260,7 +267,7 @@ export async function buildRecentFeed(
 		// comments still show (just without older context).
 		const fetched = threadByNote.get(noteUid) ?? [];
 		const thread = mergeThread(fetched, recentForNote);
-		const file = resolveLocalNote(plugin, noteUid);
+		const file = resolveLocalNote(uidToFile, noteUid);
 		return {
 			noteUid,
 			noteTitle: file
